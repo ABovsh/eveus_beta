@@ -716,7 +716,19 @@ class EVSocPercentSensor(BaseEveusSensor):
         self._attr_unique_id = f"{updater._host}_soc_percent"
 
     @property
-    def native_value(self) -> float |
+    def native_value(self) -> float | None:
+        """Return the state of charge percentage with validation."""
+        try:
+            soc_kwh = float(self.hass.states.get(f"sensor.{self._updater._host}_soc_energy").state)
+            max_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
+            
+            if soc_kwh >= 0 and max_capacity > 0:
+                percentage = round((soc_kwh / max_capacity * 100), 0)
+                return max(0, min(percentage, 100))
+            return None
+        except (TypeError, ValueError, AttributeError) as err:
+            _LOGGER.debug("Error calculating SOC percentage: %s", str(err))
+            return None
 
 class EveusCurrentSetSensor(EveusNumericSensor):
     """Current set sensor."""
