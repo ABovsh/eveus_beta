@@ -894,10 +894,6 @@ class TimeToTargetSocSensor(BaseEveusSensor):
             correction = float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state)
 
             # Calculate remaining time
-            remaining_kwh
-            @property
-    def native_value(self) -> str:
-        """Calculate and return time to target SOC with enhanced status reporting."""
             remaining_kwh = (target_soc - current_soc) * battery_capacity / 100
             efficiency = (1 - correction / 100)
             power_kw = power_meas * efficiency / 1000
