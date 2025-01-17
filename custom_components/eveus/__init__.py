@@ -19,11 +19,6 @@ PLATFORMS: Final = [
     Platform.NUMBER,
 ]
 
-async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Set up the Eveus component from YAML configuration (not supported)."""
-    hass.data.setdefault(DOMAIN, {})
-    return True
-
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Eveus from a config entry."""
     hass.data.setdefault(DOMAIN, {})
