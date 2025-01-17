@@ -10,7 +10,7 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import aiohttp_client
@@ -54,7 +54,6 @@ async def _validate_helper_entities(hass: HomeAssistant) -> bool:
         if not state:
             _LOGGER.error("Required helper entity missing: %s", entity_id)
             return False
-        # Validate entity attributes based on type
         try:
             if 'battery_capacity' in entity_id:
                 if not 10 <= float(state.state) <= 160:
@@ -95,10 +94,6 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
             if not isinstance(result, dict) or "state" not in result:
                 raise CannotConnect
             
-            # Validate basic device info
-            if "verFWMain" not in result or "verHW" not in result:
-                _LOGGER.warning("Device firmware or hardware version info missing")
-            
             return {
                 "title": f"Eveus Charger ({data[CONF_HOST]})",
                 "firmware_version": result.get("verFWMain", "Unknown"),
@@ -113,10 +108,10 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
         _LOGGER.error("Connection error: %s", str(err))
         raise CannotConnect from err
     except Exception as err:
-        _LOGGER.exception("Unexpected error: %s", str(err))
+        _LOGGER.error("Unexpected error: %s", str(err))
         raise CannotConnect from err
 
-class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class EveusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Eveus."""
 
     VERSION = 1
@@ -129,7 +124,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             try:
-                # Check if device is already configured
                 await self.async_set_unique_id(f"eveus_{user_input[CONF_HOST]}")
                 self._abort_if_unique_id_configured()
                 
@@ -171,9 +165,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         config_entry: config_entries.ConfigEntry,
     ) -> config_entries.OptionsFlow:
         """Create the options flow."""
-        return OptionsFlowHandler(config_entry)
+        return EveusOptionsFlowHandler(config_entry)
 
-class OptionsFlowHandler(config_entries.OptionsFlow):
+class EveusOptionsFlowHandler(config_entries.OptionsFlow):
     """Handle options flow for Eveus integration."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
