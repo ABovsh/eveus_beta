@@ -201,7 +201,7 @@ class EveusCurrentNumber(RestoreNumber):
             self._available = self._error_count < 3
             _LOGGER.error("Error updating current value: %s", str(err))
 
-async def async_added_to_hass(self) -> None:
+    async def async_added_to_hass(self) -> None:
         """Handle entity which will be added."""
         await super().async_added_to_hass()
         state = await self.async_get_last_state()
