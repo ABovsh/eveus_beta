@@ -843,16 +843,46 @@ class EVSocPercentSensor(BaseEveusSensor):
     def native_value(self) -> float | None:
         """Return the state of charge percentage with validation."""
         try:
-            soc_kwh = float(self.hass.states.get(f"sensor.{self._updater._host}_soc_energy").state)
+            soc_kwh = float(self._updater.data.get(ATTR_COUNTER_A_ENERGY, 0))
             max_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
+            initial_soc = float(self.hass.states.get(HELPER_EV_INITIAL_SOC).state)
+            correction = float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state)
             
-            if soc_kwh >= 0 and max_capacity > 0:
-                percentage = round((soc_kwh / max_capacity * 100), 0)
-                return max(0, min(percentage, 100))
-            return None
+            if not (0 <= initial_soc <= 100 and max_capacity > 0 and 0 <= correction <= 10):
+                _LOGGER.warning("Invalid input parameters for SOC calculation")
+                return None
+
+            initial_kwh = (initial_soc / 100) * max_capacity
+            efficiency = (1 - correction / 100)
+            charged_kwh = soc_kwh * efficiency
+            total_kwh = initial_kwh + charged_kwh
+            percentage = (total_kwh / max_capacity * 100)
+            
+            return max(0, min(round(percentage, 0), 100))
+            
         except (TypeError, ValueError, AttributeError) as err:
             _LOGGER.debug("Error calculating SOC percentage: %s", str(err))
             return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return additional state attributes."""
+        attrs = super().extra_state_attributes
+        try:
+            soc_kwh = float(self._updater.data.get(ATTR_COUNTER_A_ENERGY, 0))
+            max_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
+            initial_soc = float(self.hass.states.get(HELPER_EV_INITIAL_SOC).state)
+            correction = float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state)
+            
+            attrs.update({
+                "max_capacity": max_capacity,
+                "initial_soc": initial_soc,
+                "charged_energy": soc_kwh,
+                "efficiency": 1 - correction / 100,
+            })
+        except (TypeError, ValueError, AttributeError):
+            pass
+        return attrs
 
 class TimeToTargetSocSensor(BaseEveusSensor):
     """Time to target SOC sensor."""
@@ -876,8 +906,19 @@ class TimeToTargetSocSensor(BaseEveusSensor):
                 )
                 return f"Not charging ({charging_state})"
 
-            current_soc = float(self.hass.states.get(f"sensor.{self._updater._host}_soc_percent").state)
+            # Get current SOC calculation components
+            soc_kwh = float(self._updater.data.get(ATTR_COUNTER_A_ENERGY, 0))
+            max_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
+            initial_soc = float(self.hass.states.get(HELPER_EV_INITIAL_SOC).state)
+            correction = float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state)
             target_soc = float(self.hass.states.get(HELPER_EV_TARGET_SOC).state)
+            
+            # Calculate current SOC 
+            initial_kwh = (initial_soc / 100) * max_capacity
+            efficiency = (1 - correction / 100)
+            charged_kwh = soc_kwh * efficiency
+            total_kwh = initial_kwh + charged_kwh
+            current_soc = (total_kwh / max_capacity * 100)
             
             if current_soc >= target_soc:
                 return "Target reached"
@@ -886,12 +927,8 @@ class TimeToTargetSocSensor(BaseEveusSensor):
             if power_meas < 100:
                 return f"Insufficient power ({power_meas:.0f}W)"
 
-            battery_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
-            correction = float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state)
-
             # Calculate remaining time
-            remaining_kwh = (target_soc - current_soc) * battery_capacity / 100
-            efficiency = (1 - correction / 100)
+            remaining_kwh = (target_soc - current_soc) * max_capacity / 100
             power_kw = power_meas * efficiency / 1000
             total_minutes = round((remaining_kwh / power_kw * 60), 0)
 
@@ -917,11 +954,25 @@ class TimeToTargetSocSensor(BaseEveusSensor):
         """Return additional state attributes."""
         attrs = super().extra_state_attributes
         try:
+            soc_kwh = float(self._updater.data.get(ATTR_COUNTER_A_ENERGY, 0))
+            max_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
+            initial_soc = float(self.hass.states.get(HELPER_EV_INITIAL_SOC).state)
+            correction = float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state)
+            target_soc = float(self.hass.states.get(HELPER_EV_TARGET_SOC).state)
+            
+            initial_kwh = (initial_soc / 100) * max_capacity
+            efficiency = (1 - correction / 100)
+            charged_kwh = soc_kwh * efficiency 
+            total_kwh = initial_kwh + charged_kwh
+            current_soc = (total_kwh / max_capacity * 100)
+            
             attrs.update({
-                "current_soc": float(self.hass.states.get(f"sensor.{self._updater._host}_soc_percent").state),
-                "target_soc": float(self.hass.states.get(HELPER_EV_TARGET_SOC).state),
+                "current_soc": current_soc,
+                "target_soc": target_soc,
                 "charging_power": float(self._updater.data.get(ATTR_POWER, 0)),
-                "efficiency": 1 - float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state) / 100,
+                "efficiency": efficiency,
+                "max_capacity": max_capacity,
+                "remaining_kwh": (target_soc - current_soc) * max_capacity / 100  
             })
         except (TypeError, ValueError, AttributeError):
             pass
