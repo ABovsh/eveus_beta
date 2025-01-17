@@ -1,6 +1,7 @@
 {
     "name": "Eveus EV Charger",
-    "content_in_root": false,
-    "render_readme": false,
-    "homeassistant": "2024.1.0"
+    "render_readme": true,
+    "domains": ["sensor", "switch", "number"],
+    "homeassistant": "2024.1.0",
+    "iot_class": "Local Polling"
 }
