@@ -1,25 +1,122 @@
 {
     "config": {
+        "title": "Eveus EV Charger",
         "step": {
             "user": {
-                "title": "Connect to Eveus Charger",
-                "description": "Enter your Eveus charger connection details.",
+                "title": "Configure Eveus Connection",
+                "description": "Set up your Eveus charger connection.\n\nRequired helper entities:\n- {battery_capacity_helper}\n- {initial_soc_helper}\n- {soc_correction_helper}\n- {target_soc_helper}",
                 "data": {
                     "host": "IP Address",
                     "username": "Username",
                     "password": "Password",
-                    "model": "Charger Model (16A or 32A)"
+                    "model": "Model"
                 }
             }
         },
         "error": {
-            "cannot_connect": "Failed to connect to charger, please verify the IP address",
-            "invalid_auth": "Invalid username or password",
-            "input_missing": "Required input_number entities missing. Please create them first.",
-            "unknown": "Unexpected error occurred"
+            "cannot_connect": "Failed to connect",
+            "invalid_auth": "Invalid authentication",
+            "input_missing": "Required helper entities are missing or incorrectly configured",
+            "unknown": "Unexpected error"
         },
         "abort": {
             "already_configured": "Device is already configured"
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Eveus Options",
+                "data": {
+                    "model": "Model"
+                }
+            }
+        }
+    },
+    "entity": {
+        "sensor": {
+            "charging_current": {
+                "name": "Charging Current"
+            },
+            "voltage": {
+                "name": "Voltage"
+            },
+            "current": {
+                "name": "Current"
+            },
+            "power": {
+                "name": "Power"
+            },
+            "session_energy": {
+                "name": "Session Energy"
+            },
+            "total_energy": {
+                "name": "Total Energy"
+            },
+            "state": {
+                "name": "State"
+            },
+            "substate": {
+                "name": "Substate"
+            },
+            "enabled": {
+                "name": "Enabled"
+            },
+            "ground": {
+                "name": "Ground",
+                "state": {
+                    "connected": "Connected",
+                    "not_connected": "Not Connected",
+                    "unknown": "Unknown"
+                }
+            },
+            "box_temperature": {
+                "name": "Box Temperature"
+            },
+            "plug_temperature": {
+                "name": "Plug Temperature"
+            },
+            "system_time": {
+                "name": "System Time"
+            },
+            "session_time": {
+                "name": "Session Time"
+            },
+            "counter_a_energy": {
+                "name": "Counter A Energy"
+            },
+            "counter_b_energy": {
+                "name": "Counter B Energy"
+            },
+            "counter_a_cost": {
+                "name": "Counter A Cost"
+            },
+            "counter_b_cost": {
+                "name": "Counter B Cost"
+            },
+            "battery_voltage": {
+                "name": "Battery Voltage"
+            },
+            "soc_energy": {
+                "name": "SOC Energy"
+            },
+            "soc_percent": {
+                "name": "SOC Percent"
+            },
+            "time_to_target": {
+                "name": "Time to Target"
+            }
+        },
+        "switch": {
+            "stop_charging": {
+                "name": "Stop Charging"
+            },
+            "one_charge": {
+                "name": "One Charge"
+            },
+            "reset_counter_a": {
+                "name": "Reset Counter A"
+            }
         }
     }
 }
