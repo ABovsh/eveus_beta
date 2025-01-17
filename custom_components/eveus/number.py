@@ -201,6 +201,20 @@ class EveusCurrentNumber(RestoreNumber):
             self._available = self._error_count < 3
             _LOGGER.error("Error updating current value: %s", str(err))
 
-    async def async_added_to_hass(self) -> None:
+async def async_added_to_hass(self) -> None:
         """Handle entity which will be added."""
         await super().async_added_to_hass()
+        state = await self.async_get_last_state()
+        if state and state.state not in ('unknown', 'unavailable'):
+            try:
+                restored_value = float(state.state)
+                if self._attr_native_min_value <= restored_value <= self._attr_native_max_value:
+                    self._value = restored_value
+            except (TypeError, ValueError):
+                _LOGGER.warning("Could not restore previous state for %s", self.entity_id)
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Clean up resources when entity is removed."""
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
