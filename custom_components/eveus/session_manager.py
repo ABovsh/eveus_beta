@@ -112,17 +112,11 @@ class SessionManager:
             self._error_count = 0
             self._current_retry_delay = RETRY_DELAY
             self._available = True
-            
+
         except Exception as err:
             _LOGGER.error("Failed to initialize session: %s", str(err))
             self._available = False
             raise
-        finally:
-            # Ensure cleanup even if an exception occurs
-            if self._session and not self._session.closed:
-                await self._session.close()
-            if self._connection_pool and not self._connection_pool.closed:
-                await self._connection_pool.close()
 
     @asynccontextmanager
     async def get_session(self) -> ClientSession:
@@ -131,14 +125,16 @@ class SessionManager:
             try:
                 if not self._session or self._session.closed:
                     await self._init_session()
-                yield self._session
+                if not self._session.closed:
+                    yield self._session
+                else:
+                    _LOGGER.warning("Session is closed, reinitializing...")
+                    await self._init_session()
+                    yield self._session
             except Exception as err:
                 _LOGGER.error("Session error: %s", str(err))
                 await self._init_session()
                 raise
-            finally:
-                # Ensure the session lock is always released
-                pass
 
     async def send_command(
         self,
