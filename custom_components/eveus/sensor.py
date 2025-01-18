@@ -948,17 +948,17 @@ class TimeToTargetSocSensor(BaseEveusSensor):
         self._attr_name = "Time to Target"
         self._attr_unique_id = f"{updater._host}_ev_charger_time_to_target"
 
-    def _get_helper_value(self, entity_id: str, name: str) -> float | None:
+    def _get_helper_value(self, entity_id: str, name: str, default: float = None) -> float | None:
         """Get helper value safely."""
         state = self.hass.states.get(entity_id)
         if state is None:
             _LOGGER.debug("Missing helper: %s (%s)", name, entity_id)
-            return None
+            return default  # Use the default value if provided
         try:
             return float(state.state)
         except (TypeError, ValueError) as err:
             _LOGGER.debug("Invalid value for %s: %s", name, err)
-            return None
+            return default  # Use the default value in case of error
 
     @property
     def native_value(self) -> str:
