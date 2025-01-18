@@ -10,9 +10,9 @@ from contextlib import asynccontextmanager
 
 import aiohttp
 from aiohttp import (
-    ClientSession, 
-    ClientTimeout, 
-    TCPConnector, 
+    ClientSession,
+    ClientTimeout,
+    TCPConnector,
     ClientResponse,
     ClientError
 )
@@ -117,20 +117,28 @@ class SessionManager:
             _LOGGER.error("Failed to initialize session: %s", str(err))
             self._available = False
             raise
+        finally:
+            # Ensure cleanup even if an exception occurs
+            if self._session and not self._session.closed:
+                await self._session.close()
+            if self._connection_pool and not self._connection_pool.closed:
+                await self._connection_pool.close()
 
     @asynccontextmanager
     async def get_session(self) -> ClientSession:
         """Get an active session with automatic retry and error handling."""
         async with self._session_lock:
-            if not self._session or self._session.closed:
-                await self._init_session()
-
             try:
+                if not self._session or self._session.closed:
+                    await self._init_session()
                 yield self._session
             except Exception as err:
                 _LOGGER.error("Session error: %s", str(err))
                 await self._init_session()
                 raise
+            finally:
+                # Ensure the session lock is always released
+                pass
 
     async def send_command(
         self,
@@ -306,10 +314,8 @@ class SessionManager:
         try:
             if self._session and not self._session.closed:
                 await self._session.close()
-
             if self._connection_pool and not self._connection_pool.closed:
                 await self._connection_pool.close()
-
         except Exception as err:
             _LOGGER.error("Error closing session manager: %s", str(err))
         finally:
