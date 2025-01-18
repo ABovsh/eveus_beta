@@ -195,28 +195,34 @@ class EveusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def _create_helper_entities(self, user_input: dict[str, Any]) -> None:
         """Create helper entities if they don't exist."""
-        ent_reg: EntityRegistry = entity_registry.async_get(self.hass)
+        from homeassistant.components.input_number import DOMAIN as INPUT_NUMBER_DOMAIN
+        from homeassistant.components.input_number import async_setup_entry
+        from homeassistant.helpers import entity_registry as er
+    
+        ent_reg = er.async_get(self.hass)
         created_helpers = []
-
+    
         for entity_id, config in HELPER_ENTITIES.items():
             if not ent_reg.async_get(entity_id):
                 _LOGGER.debug("Creating helper entity: %s", entity_id)
                 try:
-                    await self.hass.services.async_call(
-                        "input_number",
-                        "create",
-                        {
-                            "name": config["name"],
-                            "initial": user_input[config["conf_key"]],
-                            "min": config["min"],
-                            "max": config["max"],
-                            "step": config["step"],
-                            "mode": config["mode"],
-                            "icon": config["icon"],
-                            "unit_of_measurement": config["unit"],
-                            "id": entity_id.split(".")[-1],
-                        },
-                        blocking=True,
+                    await self.hass.config_entries.async_add_entry(
+                        config_entry=ConfigEntry(
+                            version=1,
+                            domain=INPUT_NUMBER_DOMAIN,
+                            title=config["name"],
+                            data={
+                                "name": config["name"],
+                                "min": config["min"],
+                                "max": config["max"],
+                                "step": config["step"],
+                                "mode": config["mode"],
+                                "icon": config["icon"],
+                                "unit_of_measurement": config["unit"],
+                                "initial": user_input[config["conf_key"]],
+                            },
+                            source=config_entries.SOURCE_USER,
+                        )
                     )
                     created_helpers.append(entity_id)
                 except Exception as err:
@@ -224,12 +230,7 @@ class EveusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     # Cleanup any created helpers on failure
                     for helper in created_helpers:
                         try:
-                            await self.hass.services.async_call(
-                                "input_number",
-                                "delete",
-                                {"id": helper.split(".")[-1]},
-                                blocking=True,
-                            )
+                            await ent_reg.async_remove(helper)
                         except Exception:
                             pass
                     raise
