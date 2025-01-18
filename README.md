@@ -34,49 +34,53 @@ A comprehensive Home Assistant integration for Eveus EV chargers, providing adva
 ## Prerequisites
 
 ### Required Helper Entities
-Create these helper entities before installation:
+Before installing the integration, create these helper entities:
 
-1. Go to `Settings` → `Devices & Services` → `Helpers`
-2. Create each helper with exact name:
+1. Navigate to: **Settings** → **Devices & Services** → **Helpers**
+2. Click "+ CREATE HELPER"
+3. Select "Number"
+4. Create each helper with the exact names:
 
 ```yaml
-input_number.ev_battery_capacity:  # EV Battery Capacity
-  name: "EV Battery Capacity"
-  min: 10
-  max: 160
-  step: 1
-  unit_of_measurement: "kWh"
-  mode: slider
-  icon: mdi:car-battery
+- Name: `EV Battery Capacity`
+- Minimum: 10
+- Maximum: 160
+- Step Size: 1
+- Unit: kWh
+- Mode: slider
 
-input_number.ev_initial_soc:  # Initial State of Charge
-  name: "Initial EV State of Charge"
-  min: 0
-  max: 100
-  step: 1
-  unit_of_measurement: "%"
-  mode: slider
-  icon: mdi:battery-charging-40
+- Name: `Initial EV State of Charge`
+- Minimum: 0
+- Maximum: 100
+- Step Size: 1
+- Unit: %
+- Mode: slider
 
-input_number.ev_soc_correction:  # Charging Efficiency Loss
-  name: "Charging Efficiency Loss"
-  min: 0
-  max: 10
-  step: 0.1
-  initial: 7.5
-  unit_of_measurement: "%"
-  mode: slider
-  icon: mdi:chart-bell-curve
+- Name: `SOC Correction Factor`
+- Minimum: 0
+- Maximum: 10
+- Step Size: 0.1
+- Initial: 7.5
+- Unit: %
+- Mode: slider
 
-input_number.ev_target_soc:  # Target State of Charge
-  name: "Target SOC"
-  min: 80
-  max: 100
-  step: 10
-  initial: 80
-  unit_of_measurement: "%"
-  mode: slider
-  icon: mdi:battery-charging-high
+- Name: `Target SOC`
+- Minimum: 80
+- Maximum: 100
+- Step Size: 10
+- Initial: 80
+- Unit: %
+- Mode: slider
+
+### Integration Setup
+1. Go to **Settings** → **Devices & Services**
+2. Click "+ ADD INTEGRATION"
+3. Search for "Eveus"
+4. Enter required information:
+   - IP Address: Your charger's IP
+   - Username: Your login
+   - Password: Your password
+   - Model: 16A or 32A
 ```
 
 ## Installation
