@@ -39,6 +39,24 @@ ATTR_COUNTER_B_COST: Final = "IEM2_money"
 ATTR_GROUND: Final = "ground"
 ATTR_BATTERY_VOLTAGE: Final = "vBat"
 
+# Helper configuration defaults and ranges
+CONF_BATTERY_CAPACITY = "battery_capacity"
+CONF_INITIAL_SOC = "initial_soc"
+CONF_SOC_CORRECTION = "soc_correction"
+CONF_TARGET_SOC = "target_soc"
+
+DEFAULT_BATTERY_CAPACITY = 80
+DEFAULT_INITIAL_SOC = 20
+DEFAULT_SOC_CORRECTION = 7.5
+DEFAULT_TARGET_SOC = 80
+
+MIN_BATTERY_CAPACITY = 10
+MAX_BATTERY_CAPACITY = 160
+MIN_SOC = 0
+MAX_SOC = 100
+MIN_CORRECTION = 0
+MAX_CORRECTION = 10
+
 # API Endpoints
 API_ENDPOINT_MAIN: Final = "/main"
 API_ENDPOINT_EVENT: Final = "/pageEvent"
