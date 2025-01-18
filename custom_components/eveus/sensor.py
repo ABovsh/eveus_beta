@@ -969,7 +969,7 @@ class TimeToTargetSocSensor(BaseEveusSensor):
             if charging_state != CHARGING_STATE:
                 return f"Not charging ({CHARGING_STATES.get(charging_state, 'Unknown')})"
 
-            # Check charging power
+            # Check charging power  
             power_meas = float(self._updater.data.get(ATTR_POWER, 0))
             if power_meas < MIN_CHARGING_POWER:
                 return f"Insufficient power ({power_meas:.0f}W)"
@@ -977,44 +977,49 @@ class TimeToTargetSocSensor(BaseEveusSensor):
             # Get all required values safely
             helpers = {
                 "Current SOC": self._get_helper_value(
-                    f"sensor.{self._updater._host}_ev_charger_soc_percent",
+                    f"sensor.{self._updater._host}_ev_charger_soc_percent", 
                     "Current SOC"
                 ),
                 "Target SOC": self._get_helper_value(HELPER_EV_TARGET_SOC, "Target SOC"),
                 "Battery Capacity": self._get_helper_value(
-                    HELPER_EV_BATTERY_CAPACITY,
-                    "Battery Capacity"
+                    HELPER_EV_BATTERY_CAPACITY, 
+                    "Battery Capacity",
+                    default=0  
                 ),
                 "Correction": self._get_helper_value(
                     HELPER_EV_SOC_CORRECTION,
-                    "Efficiency Correction"
+                    "Efficiency Correction"  
                 ),
             }
 
             # Check if any values are missing
-            missing = [name for name, value in helpers.items() if value is None]
+            missing = [
+                f"{name} ({entity})"
+                for name, entity in helpers.items()
+                if entity is None  
+            ]
             if missing:
                 return f"Missing data: {', '.join(missing)}"
 
-            current_soc = helpers["Current SOC"]
+            current_soc = helpers["Current SOC"] 
             target_soc = helpers["Target SOC"]
             battery_capacity = helpers["Battery Capacity"]
             correction = helpers["Correction"]
 
-            # Additional validations
+            # Additional validations  
             if not _validate_soc_percentage(target_soc):
-                return "Invalid target SOC"
+                return f"Invalid target SOC ({target_soc:.0f}%)" 
             if not _validate_power_capacity(battery_capacity):
-                return "Invalid battery capacity"
-            if not _validate_soc_correction(correction):
-                return "Invalid correction factor"
+                return f"Invalid battery capacity ({battery_capacity:.0f} kWh)"
+            if not _validate_soc_correction(correction):  
+                return f"Invalid correction factor ({correction:.1f}%)"
             if current_soc >= target_soc:
-                return "Target reached"
+                return f"Target reached ({target_soc:.0f}%)"
 
             # Calculate remaining time
             remaining_kwh = (target_soc - current_soc) * battery_capacity / 100
             if remaining_kwh <= 0:
-                return "No charge needed"
+                return f"No additional charge needed ({remaining_kwh:.1f} kWh)" 
 
             efficiency = (1 - correction / 100)
             power_kw = power_meas * efficiency / 1000
@@ -1022,7 +1027,7 @@ class TimeToTargetSocSensor(BaseEveusSensor):
                 return "No charging power"
 
             total_minutes = round((remaining_kwh / power_kw * 60), 0)
-            if total_minutes < 1:
+            if total_minutes < 1:  
                 return "Less than 1m"
 
             days = int(total_minutes // 1440)
@@ -1032,11 +1037,11 @@ class TimeToTargetSocSensor(BaseEveusSensor):
             if days > 0:
                 return f"{days}d {hours}h {minutes}m"
             elif hours > 0:
-                return f"{hours}h {minutes}m"
+                return f"{hours}h {minutes}m"  
             return f"{minutes}m"
 
         except Exception as err:
-            _LOGGER.debug("Error calculating time to target: %s", str(err))
+            _LOGGER.error("Error calculating time to target: %s", str(err))
             return f"Calculation error: {str(err)}"
 
     @property
@@ -1052,32 +1057,33 @@ class TimeToTargetSocSensor(BaseEveusSensor):
                 "target_soc": self._get_helper_value(HELPER_EV_TARGET_SOC, "Target SOC"),
                 "battery_capacity": self._get_helper_value(
                     HELPER_EV_BATTERY_CAPACITY,
-                    "Battery Capacity"
+                    "Battery Capacity",
+                    default=0
                 ),
                 "correction": self._get_helper_value(
                     HELPER_EV_SOC_CORRECTION,
                     "Efficiency Correction"
                 ),
             }
-            
+
             power_meas = float(self._updater.data.get(ATTR_POWER, 0))
-            
+
             # Only add values that are not None
             attrs.update({
                 key: value for key, value in helpers.items() if value is not None
             })
-            
+
             if all(value is not None for value in helpers.values()):
                 attrs["remaining_kwh"] = (
                     helpers["target_soc"] - helpers["current_soc"]
                 ) * helpers["battery_capacity"] / 100
                 attrs["efficiency"] = 1 - helpers["correction"] / 100
-                
+
             attrs["charging_power"] = power_meas
-            
+
         except Exception as err:
             _LOGGER.debug("Error calculating attributes: %s", str(err))
-            
+
         return attrs
 
 async def async_setup_entry(
