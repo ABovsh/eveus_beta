@@ -17,12 +17,8 @@ from homeassistant.helpers import aiohttp_client
 
 from .const import (
     DOMAIN,
-    MODEL_16A,
-    MODEL_32A,
-    CONF_MODEL,
-    MODELS,
-    API_ENDPOINT_MAIN,
     COMMAND_TIMEOUT,
+    API_ENDPOINT_MAIN,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -67,7 +63,7 @@ async def check_helper_values(hass: HomeAssistant, helper_id: str) -> tuple[bool
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     """Validate the user input allows us to connect."""
     
-    # First check if all required helpers exist
+    # First check if all required helpers exist and are valid
     missing_helpers = []
     invalid_helpers = []
     
@@ -105,11 +101,16 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
             if not isinstance(result, dict) or "state" not in result:
                 raise CannotConnect("Invalid response from device")
             
-            return {
-                "title": f"Eveus Charger ({data[CONF_HOST]})",
-                "firmware_version": result.get("verFWMain", "Unknown"),
-                "hardware_version": result.get("verHW", "Unknown"),
+            # Get device info
+            device_info = {
+                "title": f"Eveus ({data[CONF_HOST]})",
+                "firmware_version": result.get("verFWMain", "Unknown").strip(),
+                "station_id": result.get("stationId", "Unknown").strip(),
+                "min_current": result.get("minCurrent", 8),
+                "max_current": result.get("curDesign", 16),
             }
+            
+            return device_info
 
     except aiohttp.ClientResponseError as err:
         if err.status == 401:
@@ -145,7 +146,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     data={
                         **user_input,
                         "firmware_version": info["firmware_version"],
-                        "hardware_version": info["hardware_version"],
+                        "station_id": info["station_id"],
+                        "min_current": info["min_current"],
+                        "max_current": info["max_current"],
                     }
                 )
 
@@ -185,40 +188,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "error_detail": "\n".join(error_details) if error_details else None,
                 "helper_list": "\n".join(REQUIRED_HELPERS),
             }
-        )
-
-    @staticmethod
-    @callback
-    def async_get_options_flow(
-        config_entry: config_entries.ConfigEntry,
-    ) -> config_entries.OptionsFlow:
-        """Create the options flow."""
-        return OptionsFlowHandler(config_entry)
-
-class OptionsFlowHandler(config_entries.OptionsFlow):
-    """Handle options flow for Eveus integration."""
-
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        """Initialize options flow."""
-        self.config_entry = config_entry
-
-    async def async_step_init(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Manage options."""
-        if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
-
-        return self.async_show_form(
-            step_id="init",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_MODEL,
-                        default=self.config_entry.data.get(CONF_MODEL, MODEL_16A),
-                    ): vol.In(MODELS),
-                }
-            ),
         )
 
 class MissingHelpers(HomeAssistantError):
