@@ -51,6 +51,8 @@ class SessionManager:
         self._username = username
         self._password = password
         self._entry_id = entry_id
+        self._firmware_version = None
+        self._station_id = None
         
         # Session management
         self._session: Optional[ClientSession] = None
@@ -238,7 +240,12 @@ class SessionManager:
                 self._current_retry_delay = RETRY_DELAY
                 self._last_successful_connection = dt_util.utcnow()
                 self._available = True
-                
+
+                # Update firmware and station ID if available
+                if "verFWMain" in data:
+                    self._firmware_version = data["verFWMain"].strip()
+                if "stationId" in data:
+                    self._station_id = data["stationId"].strip()
                 return data
 
         except Exception as err:
@@ -313,6 +320,17 @@ class SessionManager:
     def last_state(self) -> Optional[dict[str, Any]]:
         """Return the last known state."""
         return self._last_state
+
+    @property
+    def firmware_version(self) -> str | None:
+        """Return the firmware version."""
+        return self._firmware_version
+
+    @property
+    def station_id(self) -> str | None:
+        """Return the station ID."""
+        return self._station_id
+    
     
     async def close(self) -> None:
         """Close all sessions and cleanup resources."""
