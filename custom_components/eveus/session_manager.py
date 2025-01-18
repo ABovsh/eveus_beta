@@ -73,7 +73,6 @@ class SessionManager:
         # Pool configuration
         self._pool_size = 5
         self._keepalive_timeout = 60
-        self._pool_usage = {}
 
     async def _init_session(self) -> None:
         """Initialize or reinitialize the session with proper configuration."""
@@ -88,7 +87,6 @@ class SessionManager:
             self._connection_pool = TCPConnector(
                 limit=self._pool_size,
                 enable_cleanup_closed=True,
-                force_close=True,
                 keepalive_timeout=self._keepalive_timeout,
                 ssl=False,
             )
@@ -96,11 +94,11 @@ class SessionManager:
             # Configure timeouts
             timeout = ClientTimeout(
                 total=COMMAND_TIMEOUT,
-                connect=COMMAND_TIMEOUT/3,
-                sock_read=COMMAND_TIMEOUT/2
+                connect=COMMAND_TIMEOUT / 3,
+                sock_read=COMMAND_TIMEOUT / 2,
             )
 
-            # Create session with optimized settings
+            # Create session
             self._session = aiohttp.ClientSession(
                 timeout=timeout,
                 connector=self._connection_pool,
@@ -108,42 +106,22 @@ class SessionManager:
                 auth=aiohttp.BasicAuth(self._username, self._password),
             )
 
-            # Reset error tracking
+            # Reset state
             self._error_count = 0
             self._current_retry_delay = RETRY_DELAY
             self._available = True
-
         except Exception as err:
-            _LOGGER.error("Failed to initialize session: %s", str(err))
+            _LOGGER.error("Failed to initialize session: %s", err)
             self._available = False
             raise
-        finally:
-            # Ensure cleanup even if an exception occurs
-            if self._session and not self._session.closed:
-                await self._session.close()
-            if self._connection_pool and not self._connection_pool.closed:
-                await self._connection_pool.close()
 
     @asynccontextmanager
     async def get_session(self) -> ClientSession:
         """Get an active session with automatic retry and error handling."""
         async with self._session_lock:
-            try:
-                if not self._session or self._session.closed:
-                    await self._init_session()
-                if not self._session.closed:
-                    yield self._session
-                else:
-                    _LOGGER.warning("Session is closed, reinitializing...")
-                    await self._init_session()
-                    yield self._session
-            except Exception as err:
-                _LOGGER.error("Session error: %s", str(err))
+            if not self._session or self._session.closed:
                 await self._init_session()
-                raise
-            finally:
-                # Ensure the session lock is always released
-                pass
+            yield self._session
 
     async def send_command(
         self,
@@ -153,12 +131,12 @@ class SessionManager:
         retry_count: int = MAX_RETRIES,
     ) -> tuple[bool, dict[str, Any]]:
         """Send command with comprehensive error handling and verification."""
-        # Rate limiting
-        current_time = time.time()
-        if current_time - self._last_command_time < MIN_COMMAND_INTERVAL:
-            await asyncio.sleep(MIN_COMMAND_INTERVAL)
-
         async with self._command_lock:
+            # Rate limiting
+            current_time = time.time()
+            if current_time - self._last_command_time < MIN_COMMAND_INTERVAL:
+                await asyncio.sleep(MIN_COMMAND_INTERVAL)
+
             for attempt in range(retry_count):
                 try:
                     async with self.get_session() as session:
@@ -226,7 +204,7 @@ class SessionManager:
                 else:
                     self._error_count += 1
                     self._available = self._error_count < 3
-                    return False, {"error": f"Command failed after {retry_count} attempts"}
+                    raise CommandError(f"Command failed after {retry_count} attempts")
 
     async def get_state(self) -> dict[str, Any]:
         """Get current state with error handling."""
@@ -306,8 +284,8 @@ class SessionManager:
 
     @property
     def available(self) -> bool:
-    """Return if the device is available."""
-    return self._available
+        """Return if the device is available."""
+        return self._available
 
     @property
     def last_successful_connection(self) -> Optional[datetime]:
@@ -330,4 +308,3 @@ class SessionManager:
 
 class CommandError(HomeAssistantError):
     """Error to indicate command failure."""
-
