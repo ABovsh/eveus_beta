@@ -342,7 +342,8 @@ class EveusSystemTimeSensor(BaseEveusSensor):
     """System time sensor implementation."""
 
     _attribute = ATTR_SYSTEM_TIME
-    _attr_native_unit_of_measurement = "HH:mm"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def _handle_state_update(self, state: dict) -> None:
         """Handle system time update."""
@@ -351,14 +352,16 @@ class EveusSystemTimeSensor(BaseEveusSensor):
             if timestamp == 0:
                 raise ValueError("Invalid timestamp")
 
-            # Convert timestamp to datetime in local timezone
+            # Convert timestamp to datetime
             local_time = datetime.fromtimestamp(timestamp)
-            formatted_time = local_time.strftime("%H:%M")
             
-            self._attr_native_value = formatted_time
+            # Set native value as datetime for timestamp device class
+            self._attr_native_value = local_time
+            
+            # Add formatted time as attribute
             self._attr_extra_state_attributes = {
                 **self.extra_state_attributes,
-                "timestamp": timestamp,
+                "formatted_time": local_time.strftime("%H:%M"),
                 "full_datetime": local_time.strftime("%Y-%m-%d %H:%M:%S")
             }
             
