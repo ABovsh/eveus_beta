@@ -21,15 +21,19 @@ from .const import (
     MODEL_32A,
     CONF_MODEL,
     MODELS,
-    HELPER_EV_BATTERY_CAPACITY,
-    HELPER_EV_INITIAL_SOC,
-    HELPER_EV_SOC_CORRECTION,
-    HELPER_EV_TARGET_SOC,
     API_ENDPOINT_MAIN,
     COMMAND_TIMEOUT,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Required helper entities
+REQUIRED_HELPERS = [
+    "input_number.ev_battery_capacity",
+    "input_number.ev_initial_soc",
+    "input_number.ev_soc_correction",
+    "input_number.ev_target_soc",
+]
 
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
@@ -40,43 +44,50 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
     }
 )
 
-REQUIRED_HELPERS: Final = [
-    HELPER_EV_BATTERY_CAPACITY,
-    HELPER_EV_INITIAL_SOC,
-    HELPER_EV_SOC_CORRECTION,
-    HELPER_EV_TARGET_SOC,
-]
-
-async def _validate_helper_entities(hass: HomeAssistant) -> bool:
-    """Validate that required helper entities exist and are properly configured."""
-    for entity_id in REQUIRED_HELPERS:
-        state = hass.states.get(entity_id)
-        if not state:
-            _LOGGER.error("Required helper entity missing: %s", entity_id)
-            return False
-        try:
-            if 'battery_capacity' in entity_id:
-                if not 10 <= float(state.state) <= 160:
-                    _LOGGER.error("Battery capacity must be between 10 and 160 kWh")
-                    return False
-            elif 'initial_soc' in entity_id or 'target_soc' in entity_id:
-                if not 0 <= float(state.state) <= 100:
-                    _LOGGER.error("SOC values must be between 0 and 100%")
-                    return False
-            elif 'correction' in entity_id:
-                if not 0 <= float(state.state) <= 10:
-                    _LOGGER.error("Correction factor must be between 0 and 10%")
-                    return False
-        except (ValueError, TypeError):
-            _LOGGER.error("Invalid value for helper entity: %s", entity_id)
-            return False
-    return True
+async def check_helper_values(hass: HomeAssistant, helper_id: str) -> tuple[bool, str]:
+    """Validate helper entity values are within expected ranges."""
+    state = hass.states.get(helper_id)
+    if not state:
+        return False, f"Helper {helper_id} not found"
+    
+    try:
+        value = float(state.state)
+        if "battery_capacity" in helper_id:
+            if not 10 <= value <= 160:
+                return False, f"Battery capacity must be between 10 and 160 kWh, got {value}"
+        elif "initial_soc" in helper_id or "target_soc" in helper_id:
+            if not 0 <= value <= 100:
+                return False, f"SOC value must be between 0 and 100%, got {value}"
+        elif "correction" in helper_id:
+            if not 0 <= value <= 10:
+                return False, f"Correction factor must be between 0 and 10%, got {value}"
+        return True, ""
+    except (ValueError, TypeError):
+        return False, f"Invalid value for {helper_id}: {state.state}"
 
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     """Validate the user input allows us to connect."""
-    if not await _validate_helper_entities(hass):
-        raise InvalidInput
+    
+    # First check if all required helpers exist
+    missing_helpers = []
+    invalid_helpers = []
+    
+    for helper in REQUIRED_HELPERS:
+        if not hass.states.get(helper):
+            missing_helpers.append(helper)
+            continue
+            
+        is_valid, error_msg = await check_helper_values(hass, helper)
+        if not is_valid:
+            invalid_helpers.append(error_msg)
 
+    if missing_helpers:
+        raise MissingHelpers(missing_helpers)
+    
+    if invalid_helpers:
+        raise InvalidHelperValues(invalid_helpers)
+
+    # Then validate connection
     try:
         session = aiohttp_client.async_get_clientsession(hass)
         timeout = aiohttp.ClientTimeout(total=COMMAND_TIMEOUT)
@@ -85,6 +96,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
             f"http://{data[CONF_HOST]}{API_ENDPOINT_MAIN}",
             auth=aiohttp.BasicAuth(data[CONF_USERNAME], data[CONF_PASSWORD]),
             timeout=timeout,
+            ssl=False,
         ) as response:
             if response.status == 401:
                 raise InvalidAuth
@@ -92,7 +104,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
             
             result = await response.json()
             if not isinstance(result, dict) or "state" not in result:
-                raise CannotConnect
+                raise CannotConnect("Invalid response from device")
             
             return {
                 "title": f"Eveus Charger ({data[CONF_HOST]})",
@@ -103,15 +115,14 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     except aiohttp.ClientResponseError as err:
         if err.status == 401:
             raise InvalidAuth from err
-        raise CannotConnect from err
+        raise CannotConnect(f"Connection error: {err}") from err
     except (asyncio.TimeoutError, aiohttp.ClientError) as err:
-        _LOGGER.error("Connection error: %s", str(err))
-        raise CannotConnect from err
+        raise CannotConnect(f"Connection failed: {err}") from err
     except Exception as err:
         _LOGGER.error("Unexpected error: %s", str(err))
-        raise CannotConnect from err
+        raise CannotConnect(f"Unexpected error: {err}") from err
 
-class EveusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Eveus."""
 
     VERSION = 1
@@ -121,6 +132,7 @@ class EveusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> FlowResult:
         """Handle the initial step."""
         errors = {}
+        error_details = []
 
         if user_input is not None:
             try:
@@ -137,25 +149,42 @@ class EveusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         "hardware_version": info["hardware_version"],
                     }
                 )
-            except CannotConnect:
+
+            except MissingHelpers as err:
+                errors["base"] = "missing_helpers"
+                error_details = [
+                    f"Missing required helper: {helper}" 
+                    for helper in err.missing_helpers
+                ]
+                
+            except InvalidHelperValues as err:
+                errors["base"] = "invalid_helpers"
+                error_details = err.invalid_values
+                
+            except CannotConnect as err:
                 errors["base"] = "cannot_connect"
+                error_details = [str(err)]
+                
             except InvalidAuth:
                 errors["base"] = "invalid_auth"
-            except InvalidInput:
-                errors["base"] = "input_missing"
+                
             except Exception:
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
+                error_details = ["An unexpected error occurred"]
 
+        # Show form with any errors
+        schema = self.add_suggested_values_to_schema(
+            STEP_USER_DATA_SCHEMA, user_input or {}
+        )
+        
         return self.async_show_form(
             step_id="user",
-            data_schema=STEP_USER_DATA_SCHEMA,
+            data_schema=schema,
             errors=errors,
             description_placeholders={
-                "battery_capacity_helper": HELPER_EV_BATTERY_CAPACITY,
-                "initial_soc_helper": HELPER_EV_INITIAL_SOC,
-                "soc_correction_helper": HELPER_EV_SOC_CORRECTION,
-                "target_soc_helper": HELPER_EV_TARGET_SOC,
+                "error_detail": "\n".join(error_details) if error_details else None,
+                "helper_list": "\n".join(REQUIRED_HELPERS),
             }
         )
 
@@ -165,9 +194,9 @@ class EveusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         config_entry: config_entries.ConfigEntry,
     ) -> config_entries.OptionsFlow:
         """Create the options flow."""
-        return EveusOptionsFlowHandler(config_entry)
+        return OptionsFlowHandler(config_entry)
 
-class EveusOptionsFlowHandler(config_entries.OptionsFlow):
+class OptionsFlowHandler(config_entries.OptionsFlow):
     """Handle options flow for Eveus integration."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
@@ -177,7 +206,7 @@ class EveusOptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Manage basic options."""
+        """Manage options."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
@@ -185,7 +214,7 @@ class EveusOptionsFlowHandler(config_entries.OptionsFlow):
             step_id="init",
             data_schema=vol.Schema(
                 {
-                    vol.Optional(
+                    vol.Required(
                         CONF_MODEL,
                         default=self.config_entry.data.get(CONF_MODEL, MODEL_16A),
                     ): vol.In(MODELS),
@@ -193,11 +222,25 @@ class EveusOptionsFlowHandler(config_entries.OptionsFlow):
             ),
         )
 
+class MissingHelpers(HomeAssistantError):
+    """Error to indicate missing required helpers."""
+    def __init__(self, missing_helpers: list[str]) -> None:
+        """Initialize with list of missing helpers."""
+        super().__init__("Required helpers not found")
+        self.missing_helpers = missing_helpers
+
+class InvalidHelperValues(HomeAssistantError):
+    """Error to indicate invalid helper values."""
+    def __init__(self, invalid_values: list[str]) -> None:
+        """Initialize with list of invalid values."""
+        super().__init__("Invalid helper values")
+        self.invalid_values = invalid_values
+
 class CannotConnect(HomeAssistantError):
     """Error to indicate we cannot connect."""
+    def __init__(self, msg: str) -> None:
+        """Initialize with error message."""
+        super().__init__(msg)
 
 class InvalidAuth(HomeAssistantError):
     """Error to indicate there is invalid auth."""
-
-class InvalidInput(HomeAssistantError):
-    """Error to indicate missing or invalid input_number entities."""
