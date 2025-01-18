@@ -42,9 +42,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             entry_id=entry.entry_id,
         )
 
-        # Test connection
+        # Test connection and get initial state
         try:
-            await session_manager.get_state()
+            initial_state = await session_manager.get_state()
+            
+            # Update entry data with firmware and station ID if needed
+            data_update = {}
+            if "verFWMain" in initial_state:
+                data_update["firmware_version"] = initial_state["verFWMain"].strip()
+            if "stationId" in initial_state:
+                data_update["station_id"] = initial_state["stationId"].strip()
+                
+            if data_update:
+                hass.config_entries.async_update_entry(
+                    entry, 
+                    data={**entry.data, **data_update}
+                )
+                
         except Exception as err:
             await session_manager.close()
             _LOGGER.error("Connection failed: %s", str(err))
@@ -69,6 +83,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
         return True
+
     except Exception as err:
         _LOGGER.error("Error setting up Eveus integration: %s", str(err))
         raise ConfigEntryNotReady from err
