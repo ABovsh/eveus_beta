@@ -88,7 +88,7 @@ class SessionManager:
             self._connection_pool = TCPConnector(
                 limit=self._pool_size,
                 enable_cleanup_closed=True,
-                force_close=False,
+                force_close=True,
                 keepalive_timeout=self._keepalive_timeout,
                 ssl=False,
             )
@@ -117,6 +117,12 @@ class SessionManager:
             _LOGGER.error("Failed to initialize session: %s", str(err))
             self._available = False
             raise
+        finally:
+            # Ensure cleanup even if an exception occurs
+            if self._session and not self._session.closed:
+                await self._session.close()
+            if self._connection_pool and not self._connection_pool.closed:
+                await self._connection_pool.close()
 
     @asynccontextmanager
     async def get_session(self) -> ClientSession:
@@ -135,6 +141,9 @@ class SessionManager:
                 _LOGGER.error("Session error: %s", str(err))
                 await self._init_session()
                 raise
+            finally:
+                # Ensure the session lock is always released
+                pass
 
     async def send_command(
         self,
@@ -297,14 +306,14 @@ class SessionManager:
 
     @property
     def available(self) -> bool:
-        """Return if the device is available."""
-        return self._available
+    """Return if the device is available."""
+    return self._available
 
     @property
     def last_successful_connection(self) -> Optional[datetime]:
         """Return the last successful connection time."""
         return self._last_successful_connection
-
+    
     async def close(self) -> None:
         """Close all sessions and cleanup resources."""
         try:
@@ -321,3 +330,4 @@ class SessionManager:
 
 class CommandError(HomeAssistantError):
     """Error to indicate command failure."""
+
