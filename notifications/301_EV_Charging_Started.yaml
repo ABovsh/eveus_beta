@@ -57,7 +57,7 @@ actions:
 
         ⚡ Energy: {{ actual_kwh }} → {{ target_energy }}kWh (+{{ (target_energy
         - actual_kwh)|round(1) }})
-    action: <NOTIFICATION SERVICE>
+    action: notify.<NOTIFICATION SERVICE NAME>
 variables:
   current_amps: "{{ states('number.eveus_ev_charger_charging_current')|float(0) }}"
   current_soc: "{{ states('sensor.eveus_ev_charger_soc_percent')|float(0) }}"
