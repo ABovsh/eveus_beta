@@ -930,6 +930,106 @@ class EVSocPercentSensor(BaseEveusSensor):
             pass
         return attrs
 
+class TimeToTargetSocSensor(BaseEveusSensor):
+    """Time to target SOC sensor."""
+    _attr_icon = "mdi:timer"
+    _attr_translation_key = "time_to_target"
+
+    def __init__(self, updater: EveusUpdater) -> None:
+        """Initialize the sensor."""
+        super().__init__(updater)
+        self._attr_name = "Time to Target"
+        self._attr_unique_id = f"{updater._host}_ev_charger_time_to_target"
+
+    def _get_state_value(self, entity_id: str) -> float:
+        """Get state value with validation."""
+        state = self.hass.states.get(entity_id)
+        if not state:
+            raise ValueError(f"Missing required helper: {entity_id}")
+        try:
+            return float(state.state)
+        except (TypeError, ValueError) as err:
+            raise ValueError(f"Invalid value for {entity_id}: {state.state}") from err
+
+    @property
+    def native_value(self) -> str:
+        """Calculate and return time to target SOC with enhanced status reporting."""
+        try:
+            charging_state = int(self._updater.data.get(ATTR_STATE, 0))
+            if charging_state != CHARGING_STATE:
+                return f"Not charging ({CHARGING_STATES.get(charging_state, 'Unknown')})"
+
+            power_meas = float(self._updater.data.get(ATTR_POWER, 0))
+            if power_meas < MIN_CHARGING_POWER:
+                return f"Insufficient power ({power_meas:.0f}W)"
+
+            # Get and validate all required values
+            current_soc = float(self.hass.states.get(f"sensor.{self._updater._host}_ev_charger_soc_percent").state)
+            target_soc = self._get_state_value(HELPER_EV_TARGET_SOC)
+            battery_capacity = self._get_state_value(HELPER_EV_BATTERY_CAPACITY)
+            correction = self._get_state_value(HELPER_EV_SOC_CORRECTION)
+
+            # Additional validations
+            if not _validate_soc_percentage(target_soc):
+                return "Invalid target SOC"
+            if not _validate_power_capacity(battery_capacity):
+                return "Invalid battery capacity"
+            if not _validate_soc_correction(correction):
+                return "Invalid correction factor"
+            if current_soc >= target_soc:
+                return "Target reached"
+
+            # Calculate remaining time
+            remaining_kwh = (target_soc - current_soc) * battery_capacity / 100
+            if remaining_kwh <= 0:
+                return "No charge needed"
+
+            efficiency = (1 - correction / 100)
+            power_kw = power_meas * efficiency / 1000
+            if power_kw <= 0:
+                return "No charging power"
+
+            total_minutes = round((remaining_kwh / power_kw * 60), 0)
+            if total_minutes < 1:
+                return "Less than 1m"
+
+            days = int(total_minutes // 1440)
+            hours = int((total_minutes % 1440) // 60)
+            minutes = int(total_minutes % 60)
+
+            if days > 0:
+                return f"{days}d {hours}h {minutes}m"
+            elif hours > 0:
+                return f"{hours}h {minutes}m"
+            return f"{minutes}m"
+
+        except (TypeError, ValueError, AttributeError) as err:
+            _LOGGER.error("Error calculating time to target: %s", str(err))
+            return str(err)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return additional state attributes."""
+        attrs = super().extra_state_attributes
+        try:
+            current_soc = float(self.hass.states.get(f"sensor.{self._updater._host}_ev_charger_soc_percent").state)
+            target_soc = float(self.hass.states.get(HELPER_EV_TARGET_SOC).state)
+            battery_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
+            correction = float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state)
+            power_meas = float(self._updater.data.get(ATTR_POWER, 0))
+            
+            attrs.update({
+                "current_soc": current_soc,
+                "target_soc": target_soc,
+                "remaining_kwh": (target_soc - current_soc) * battery_capacity / 100,
+                "charging_power": power_meas,
+                "efficiency": 1 - correction / 100,
+                "max_capacity": battery_capacity,
+            })
+        except (TypeError, ValueError, AttributeError):
+            pass
+        return attrs
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
