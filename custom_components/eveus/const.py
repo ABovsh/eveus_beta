@@ -44,12 +44,10 @@ CONF_BATTERY_CAPACITY = "battery_capacity"
 CONF_INITIAL_SOC = "initial_soc"
 CONF_SOC_CORRECTION = "soc_correction"
 CONF_TARGET_SOC = "target_soc"
-
 DEFAULT_BATTERY_CAPACITY = 80
 DEFAULT_INITIAL_SOC = 20
 DEFAULT_SOC_CORRECTION = 7.5
 DEFAULT_TARGET_SOC = 80
-
 MIN_BATTERY_CAPACITY = 10
 MAX_BATTERY_CAPACITY = 160
 MIN_SOC = 0
@@ -91,7 +89,6 @@ CHARGING_STATES: Final = {
     6: "Paused",
     7: "Error"
 }
-
 ERROR_STATES: Final = {
     0: "No Error",
     1: "Grounding Error",
@@ -109,7 +106,6 @@ ERROR_STATES: Final = {
     13: "GFCI Test Failure",
     14: "High Voltage"
 }
-
 NORMAL_SUBSTATES: Final = {
     0: "No Limits",
     1: "Limited by User",
