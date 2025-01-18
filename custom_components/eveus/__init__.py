@@ -14,7 +14,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .const import DOMAIN
+from .const import DOMAIN, UPDATE_INTERVAL
 from .session_manager import SessionManager
 
 _LOGGER = logging.getLogger(__name__)
