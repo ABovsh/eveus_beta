@@ -173,28 +173,28 @@ class EveusUpdater:
                     MAX_RETRY_DELAY
                 )
 
-async def _get_session(self) -> aiohttp.ClientSession:
-    """Get or create client session with retry logic."""
-    if self._session is None or self._session.closed:
-        for attempt in range(3):  # Try 3 times
-            try:
-                timeout = aiohttp.ClientTimeout(total=COMMAND_TIMEOUT)
-                connector = aiohttp.TCPConnector(
-                    limit=1,
-                    force_close=True,
-                    enable_cleanup_closed=True
-                )
-                self._session = aiohttp.ClientSession(
-                    timeout=timeout,
-                    connector=connector,
-                    raise_for_status=True
-                )
-                return self._session
-            except Exception as err:
-                if attempt == 2:  # Last attempt
-                    raise
-                await asyncio.sleep(1)  # Wait before retry
-    return self._session
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create client session with retry logic."""
+        if self._session is None or self._session.closed:
+            for attempt in range(3):  # Try 3 times
+                try:
+                    timeout = aiohttp.ClientTimeout(total=COMMAND_TIMEOUT)
+                    connector = aiohttp.TCPConnector(
+                        limit=1,
+                        force_close=True,
+                        enable_cleanup_closed=True
+                    )
+                    self._session = aiohttp.ClientSession(
+                        timeout=timeout,
+                        connector=connector,
+                        raise_for_status=True
+                    )
+                    return self._session
+                except Exception as err:
+                    if attempt == 2:  # Last attempt
+                        raise
+                    await asyncio.sleep(1)  # Wait before retry
+        return self._session
 
     async def _update(self) -> None:
         """Update the data with comprehensive error handling."""
