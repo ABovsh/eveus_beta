@@ -92,7 +92,7 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
                 except (TypeError, ValueError):
                     self._previous_value = state.state
 
-    @property
+@property
     def device_info(self) -> dict[str, Any]:
         """Return device information."""
         return {
@@ -100,6 +100,8 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
             "name": "Eveus EV Charger",
             "manufacturer": "Eveus",
             "model": f"Eveus ({self._session_manager._host})",
+            "serial_number": self._session_manager.station_id,
+            "sw_version": self._session_manager.firmware_version,
             "configuration_url": f"http://{self._session_manager._host}",
             "suggested_area": "Garage",
         }
@@ -342,27 +344,31 @@ class EveusSystemTimeSensor(BaseEveusSensor):
     """System time sensor implementation."""
 
     _attribute = ATTR_SYSTEM_TIME
-    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_device_class = None  # Remove timestamp device class to use custom formatting
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:clock"
 
     def _handle_state_update(self, state: dict) -> None:
         """Handle system time update."""
         try:
             timestamp = int(state.get(self._attribute, 0))
+            timezone_offset = int(state.get("timeZone", 2))
+            
             if timestamp == 0:
                 raise ValueError("Invalid timestamp")
 
             # Convert timestamp to datetime
             local_time = datetime.fromtimestamp(timestamp)
             
-            # Set native value as datetime for timestamp device class
-            self._attr_native_value = local_time
+            # Set 24h format time as native value
+            self._attr_native_value = local_time.strftime("%H:%M")
             
-            # Add formatted time as attribute
+            # Store additional time formats in attributes
             self._attr_extra_state_attributes = {
                 **self.extra_state_attributes,
-                "formatted_time": local_time.strftime("%H:%M"),
-                "full_datetime": local_time.strftime("%Y-%m-%d %H:%M:%S")
+                "timezone_offset": timezone_offset,
+                "full_datetime": local_time.strftime("%Y-%m-%d %H:%M:%S"),
+                "date": local_time.strftime("%Y-%m-%d"),
             }
             
         except (TypeError, ValueError, OSError) as err:
