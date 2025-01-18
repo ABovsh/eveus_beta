@@ -74,8 +74,9 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
         self._attr_name = name
         self._attr_unique_id = f"{session_manager._host}_{name}"
         self._previous_value = None
-        self._attr_translation_key = self.entity_id.split(".")[-1]
         self._restored = False
+        # Set the translation key based on the name instead of entity_id
+        self._attr_translation_key = name.lower().replace(" ", "_")
 
     async def async_added_to_hass(self) -> None:
         """Handle entity which will be added."""
@@ -99,8 +100,6 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
             "name": "Eveus EV Charger",
             "manufacturer": "Eveus",
             "model": f"Eveus ({self._session_manager._host})",
-            "sw_version": self._session_manager.firmware_version,
-            "hw_version": self._session_manager.hardware_version,
             "configuration_url": f"http://{self._session_manager._host}",
             "suggested_area": "Garage",
         }
