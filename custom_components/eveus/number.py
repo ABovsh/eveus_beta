@@ -16,14 +16,12 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.const import UnitOfElectricCurrent
 
-from .const import (
-    DOMAIN,
-    MODEL_MAX_CURRENT,
-    MIN_CURRENT,
-    CONF_MODEL,
-)
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
+
+DEFAULT_MIN_CURRENT = 8.0
+DEFAULT_MAX_CURRENT = 16.0
 
 class EveusCurrentNumber(RestoreNumber):
     """Representation of Eveus current control."""
@@ -38,18 +36,75 @@ class EveusCurrentNumber(RestoreNumber):
     _attr_entity_category = EntityCategory.CONFIG
     _attr_translation_key = "charging_current"
 
-    def __init__(self, session_manager, entry_id: str, model: str) -> None:
+    def __init__(self, session_manager, entry_id: str) -> None:
         """Initialize current control."""
         super().__init__()
         self._session_manager = session_manager
         self._entry_id = entry_id
-        self._model = model
         self._attr_unique_id = f"{session_manager._host}_charging_current"
+        self._value = None
         
-        # Set min/max values based on model
-        self._attr_native_min_value = float(MIN_CURRENT)
-        self._attr_native_max_value = float(MODEL_MAX_CURRENT[model])
-        self._value = min(self._attr_native_max_value, 16.0)  # Default to 16A
+        # Set default limits until we get real values from device
+        self._attr_native_min_value = DEFAULT_MIN_CURRENT
+        self._attr_native_max_value = DEFAULT_MAX_CURRENT
+
+    async def _init_current_limits(self) -> None:
+        """Initialize current limits from device state."""
+        try:
+            state = await self._session_manager.get_state()
+            
+            # Get minimum current
+            min_current = float(state.get("minCurrent", DEFAULT_MIN_CURRENT))
+            if not 6 <= min_current <= 32:
+                _LOGGER.warning(
+                    "Invalid minimum current from device: %s, using default",
+                    min_current
+                )
+                min_current = DEFAULT_MIN_CURRENT
+                
+            # Get maximum current
+            max_current = float(state.get("curDesign", DEFAULT_MAX_CURRENT))
+            if not 16 <= max_current <= 32:
+                _LOGGER.warning(
+                    "Invalid maximum current from device: %s, using default",
+                    max_current
+                )
+                max_current = DEFAULT_MAX_CURRENT
+                
+            # Validate min is less than max
+            if min_current >= max_current:
+                _LOGGER.warning(
+                    "Minimum current (%s) >= maximum current (%s), using defaults",
+                    min_current,
+                    max_current
+                )
+                min_current = DEFAULT_MIN_CURRENT
+                max_current = DEFAULT_MAX_CURRENT
+                
+            self._attr_native_min_value = min_current
+            self._attr_native_max_value = max_current
+            
+            # Set initial value if not set
+            if self._value is None:
+                initial_current = float(state.get("currentSet", max_current))
+                self._value = max(min_current, min(initial_current, max_current))
+                
+            _LOGGER.debug(
+                "Current limits initialized: min=%s, max=%s, current=%s",
+                self._attr_native_min_value,
+                self._attr_native_max_value,
+                self._value
+            )
+                
+        except Exception as err:
+            _LOGGER.warning(
+                "Could not get current limits from device, using defaults: %s", 
+                err
+            )
+            self._attr_native_min_value = DEFAULT_MIN_CURRENT
+            self._attr_native_max_value = DEFAULT_MAX_CURRENT
+            if self._value is None:
+                self._value = DEFAULT_MAX_CURRENT
 
     @property
     def native_value(self) -> float | None:
@@ -68,39 +123,77 @@ class EveusCurrentNumber(RestoreNumber):
             "identifiers": {(DOMAIN, self._session_manager._host)},
             "name": "Eveus EV Charger",
             "manufacturer": "Eveus",
-            "model": f"Eveus {self._model}",
+            "model": "Eveus",
             "configuration_url": f"http://{self._session_manager._host}",
+            "sw_version": self._session_manager.firmware_version,
+            "serial_number": self._session_manager.station_id,
         }
 
     async def async_set_native_value(self, value: float) -> None:
         """Set new current value."""
-        value = int(min(self._attr_native_max_value, max(self._attr_native_min_value, value)))
-        success, _ = await self._session_manager.send_command("currentSet", value)
-        
-        if success:
-            self._value = float(value)
-            self.async_write_ha_state()
+        # Validate value
+        if not self._attr_native_min_value <= value <= self._attr_native_max_value:
+            _LOGGER.warning(
+                "Current value %s outside allowed range [%s, %s]",
+                value,
+                self._attr_native_min_value,
+                self._attr_native_max_value
+            )
+            return
+
+        try:
+            success, result = await self._session_manager.send_command(
+                "currentSet", 
+                int(value),
+                verify=True
+            )
+            
+            if success:
+                self._value = float(value)
+                self.async_write_ha_state()
+                _LOGGER.debug("Current successfully set to %s", value)
+            else:
+                _LOGGER.warning(
+                    "Failed to set current to %s: %s",
+                    value,
+                    result.get("error", "Unknown error")
+                )
+                
+        except Exception as err:
+            _LOGGER.error("Error setting current to %s: %s", value, str(err))
 
     async def async_added_to_hass(self) -> None:
         """Handle entity which will be added."""
         await super().async_added_to_hass()
         
-        # Restore previous state
+        # Initialize current limits
+        await self._init_current_limits()
+        
+        # Try to restore previous state
         if state := await self.async_get_last_state():
             try:
                 restored_value = float(state.state)
                 if self._attr_native_min_value <= restored_value <= self._attr_native_max_value:
                     self._value = restored_value
-            except (TypeError, ValueError):
-                _LOGGER.warning("Could not restore previous state for %s", self.entity_id)
+                    _LOGGER.debug("Restored previous current value: %s", restored_value)
+            except (TypeError, ValueError) as err:
+                _LOGGER.warning(
+                    "Could not restore previous state for %s: %s",
+                    self.entity_id,
+                    err
+                )
 
-        # Get initial state from device
-        try:
-            device_state = await self._session_manager.get_state()
-            if "currentSet" in device_state:
-                self._value = float(device_state["currentSet"])
-        except Exception as err:
-            _LOGGER.error("Error getting initial state: %s", str(err))
+        # Get initial state from device if restore failed
+        if self._value is None:
+            try:
+                device_state = await self._session_manager.get_state()
+                if "currentSet" in device_state:
+                    current = float(device_state["currentSet"])
+                    if self._attr_native_min_value <= current <= self._attr_native_max_value:
+                        self._value = current
+                        _LOGGER.debug("Got initial current from device: %s", current)
+            except Exception as err:
+                _LOGGER.error("Error getting initial current: %s", str(err))
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -109,10 +202,9 @@ async def async_setup_entry(
 ) -> None:
     """Set up Eveus number entities."""
     session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
-    model = entry.data[CONF_MODEL]
 
     entities = [
-        EveusCurrentNumber(session_manager, entry.entry_id, model),
+        EveusCurrentNumber(session_manager, entry.entry_id),
     ]
 
     hass.data[DOMAIN][entry.entry_id]["entities"]["number"] = {
