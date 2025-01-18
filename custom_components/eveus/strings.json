@@ -4,20 +4,23 @@
         "step": {
             "user": {
                 "title": "Configure Eveus Connection",
-                "description": "Set up your Eveus charger connection.\n\nRequired helper entities:\n- {battery_capacity_helper}\n- {initial_soc_helper}\n- {soc_correction_helper}\n- {target_soc_helper}",
+                "description": "Set up your Eveus charger connection and EV parameters.\n\nCharger Connection:\n- Enter your charger's IP address, username, and password\n- Select your charger model (16A or 32A)\n\nEV Configuration:\n- Battery Capacity: Your EV's total battery capacity in kWh\n- Initial SOC: Current state of charge when starting to charge\n- Efficiency Loss: Typical charging losses (5-10%)\n- Target SOC: Desired charging target (usually 80% for daily, 100% for trips)",
                 "data": {
                     "host": "IP Address",
                     "username": "Username",
                     "password": "Password",
-                    "model": "Model"
+                    "model": "Model",
+                    "battery_capacity": "EV Battery Capacity (kWh)",
+                    "initial_soc": "Initial State of Charge (%)",
+                    "soc_correction": "Charging Efficiency Loss (%)",
+                    "target_soc": "Target State of Charge (%)"
                 }
             }
         },
         "error": {
-            "cannot_connect": "Failed to connect",
-            "invalid_auth": "Invalid authentication",
-            "input_missing": "Required helper entities are missing or incorrectly configured",
-            "unknown": "Unexpected error"
+            "cannot_connect": "Failed to connect, please verify the IP address",
+            "invalid_auth": "Invalid username or password",
+            "unknown": "Unexpected error occurred"
         },
         "abort": {
             "already_configured": "Device is already configured"
@@ -27,95 +30,10 @@
         "step": {
             "init": {
                 "title": "Eveus Options",
+                "description": "Configure charger options",
                 "data": {
                     "model": "Model"
                 }
-            }
-        }
-    },
-    "entity": {
-        "sensor": {
-            "charging_current": {
-                "name": "Charging Current"
-            },
-            "voltage": {
-                "name": "Voltage"
-            },
-            "current": {
-                "name": "Current"
-            },
-            "power": {
-                "name": "Power"
-            },
-            "session_energy": {
-                "name": "Session Energy"
-            },
-            "total_energy": {
-                "name": "Total Energy"
-            },
-            "state": {
-                "name": "State"
-            },
-            "substate": {
-                "name": "Substate"
-            },
-            "enabled": {
-                "name": "Enabled"
-            },
-            "ground": {
-                "name": "Ground",
-                "state": {
-                    "connected": "Connected",
-                    "not_connected": "Not Connected",
-                    "unknown": "Unknown"
-                }
-            },
-            "box_temperature": {
-                "name": "Box Temperature"
-            },
-            "plug_temperature": {
-                "name": "Plug Temperature"
-            },
-            "system_time": {
-                "name": "System Time"
-            },
-            "session_time": {
-                "name": "Session Time"
-            },
-            "counter_a_energy": {
-                "name": "Counter A Energy"
-            },
-            "counter_b_energy": {
-                "name": "Counter B Energy"
-            },
-            "counter_a_cost": {
-                "name": "Counter A Cost"
-            },
-            "counter_b_cost": {
-                "name": "Counter B Cost"
-            },
-            "battery_voltage": {
-                "name": "Battery Voltage"
-            },
-            "soc_energy": {
-                "name": "SOC Energy"
-            },
-            "soc_percent": {
-                "name": "SOC Percent"
-            },
-            "time_to_target": {
-                "name": "Time to Target"
-            }
-        },
-        "switch": {
-            "stop_charging": {
-                "name": "Stop Charging"
-            },
-            "one_charge": {
-                "name": "One Charge"
-            },
-            "reset_counter_a": {
-                "name": "Reset Counter A"
             }
         }
     }
