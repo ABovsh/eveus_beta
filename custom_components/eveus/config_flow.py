@@ -40,7 +40,6 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Required(CONF_HOST): str,
         vol.Required(CONF_USERNAME): str,
         vol.Required(CONF_PASSWORD): str,
-        vol.Required(CONF_MODEL, default=MODEL_16A): vol.In(MODELS),
     }
 )
 
