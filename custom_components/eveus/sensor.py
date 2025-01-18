@@ -342,24 +342,32 @@ class EveusSystemTimeSensor(BaseEveusSensor):
     """System time sensor implementation."""
 
     _attribute = ATTR_SYSTEM_TIME
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
 
     def _handle_state_update(self, state: dict) -> None:
         """Handle system time update."""
         try:
             timestamp = int(state.get(self._attribute, 0))
-            local_time = dt_util.as_local(datetime.fromtimestamp(timestamp))
+            system_time = datetime.fromtimestamp(timestamp)
+            local_time = dt_util.as_local(system_time)
             
             # Check time drift
             current_time = dt_util.now()
             drift = abs((current_time - local_time).total_seconds())
-            if drift > 300:  # 5 minutes
-                _LOGGER.warning("System time drift detected: %d seconds", drift)
             
-            self._attr_native_value = local_time.strftime("%H:%M")
+            # Only log warning if drift is significant (> 2 hours)
+            if drift > 7200:  
+                _LOGGER.warning(
+                    "Significant system time drift detected: %.1f hours. Consider synchronizing device time.",
+                    drift / 3600
+                )
+            
+            self._attr_native_value = local_time
             self._attr_extra_state_attributes = {
                 **self.extra_state_attributes,
                 "timestamp": timestamp,
-                "drift_seconds": drift
+                "drift_seconds": drift,
+                "needs_sync": drift > 7200,
             }
             
         except (TypeError, ValueError, OSError) as err:
@@ -478,6 +486,7 @@ class EveusEnabledSensor(BaseEveusSensor):
 
     _attribute = ATTR_ENABLED
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = ["Yes", "No", "Unknown"]
 
     def _handle_state_update(self, state: dict) -> None:
@@ -625,7 +634,7 @@ class EVSocKwhSensor(BaseEveusSensor):
 
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_state_class = SensorStateClass.TOTAL
     _attr_suggested_display_precision = 1
 
     def _handle_state_update(self, state: dict) -> None:
@@ -661,45 +670,6 @@ class EVSocKwhSensor(BaseEveusSensor):
 
         except (TypeError, ValueError, AttributeError) as err:
             _LOGGER.error("Error calculating SOC: %s", str(err))
-            if self._restored:
-                _LOGGER.info("Keeping restored value: %s", self._attr_native_value)
-            else:
-                self._attr_native_value = None
-
-class EVSocPercentSensor(BaseEveusSensor):
-    """EV State of Charge percentage sensor implementation."""
-
-    _attr_device_class = SensorDeviceClass.BATTERY
-    _attr_native_unit_of_measurement = PERCENTAGE
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_suggested_display_precision = 0
-
-    def _handle_state_update(self, state: dict) -> None:
-        """Calculate and update SOC percentage."""
-        try:
-            soc_kwh_state = self.hass.states.get(
-                f"sensor.{self._session_manager._host}_soc_energy"
-            )
-            if not soc_kwh_state or soc_kwh_state.state in ('unknown', 'unavailable'):
-                if not self._restored:
-                    self._attr_native_value = None
-                return
-
-            soc_kwh = float(soc_kwh_state.state)
-            max_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
-
-            if soc_kwh >= 0 and max_capacity > 0:
-                percentage = round((soc_kwh / max_capacity * 100), 0)
-                self._attr_native_value = max(0, min(percentage, 100))
-                self._attr_extra_state_attributes = {
-                    **self.extra_state_attributes,
-                    "max_capacity": max_capacity,
-                    "current_capacity": soc_kwh,
-                }
-                self._restored = False
-
-        except (TypeError, ValueError, AttributeError) as err:
-            _LOGGER.error("Error calculating SOC percentage: %s", str(err))
             if self._restored:
                 _LOGGER.info("Keeping restored value: %s", self._attr_native_value)
             else:
