@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Final
 
 from homeassistant.core import HomeAssistant
@@ -67,30 +67,30 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
     _attr_entity_registry_enabled_default: Final = True
     _attr_entity_registry_visible_default: Final = True
     _update_interval = UPDATE_INTERVAL
+    _translation_prefix = "sensor"
 
     def __init__(self, session_manager, name: str) -> None:
         """Initialize the sensor."""
         self._session_manager = session_manager
         self._attr_name = name
         self._attr_unique_id = f"{session_manager._host}_{name}"
+        self._attr_translation_key = f"{self._translation_prefix}_{name.lower().replace(' ', '_')}"
         self._previous_value = None
         self._restored = False
-        # Set the translation key based on the name instead of entity_id
-        self._attr_translation_key = name.lower().replace(" ", "_")
 
     async def async_added_to_hass(self) -> None:
         """Handle entity which will be added."""
         await super().async_added_to_hass()
-        state = await self.async_get_last_state()
-        if state and state.state not in ('unknown', 'unavailable'):
-            try:
-                if hasattr(self, '_attr_suggested_display_precision'):
-                    self._previous_value = float(state.state)
-                else:
+        if state := await self.async_get_last_state():
+            if state.state not in ('unknown', 'unavailable'):
+                try:
+                    if hasattr(self, '_attr_suggested_display_precision'):
+                        self._previous_value = float(state.state)
+                    else:
+                        self._previous_value = state.state
+                    self._restored = True
+                except (TypeError, ValueError):
                     self._previous_value = state.state
-                self._restored = True
-            except (TypeError, ValueError):
-                self._previous_value = state.state
 
     @property
     def device_info(self) -> dict[str, Any]:
@@ -342,32 +342,24 @@ class EveusSystemTimeSensor(BaseEveusSensor):
     """System time sensor implementation."""
 
     _attribute = ATTR_SYSTEM_TIME
-    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_native_unit_of_measurement = "HH:mm"
 
     def _handle_state_update(self, state: dict) -> None:
         """Handle system time update."""
         try:
             timestamp = int(state.get(self._attribute, 0))
-            system_time = datetime.fromtimestamp(timestamp)
-            local_time = dt_util.as_local(system_time)
+            if timestamp == 0:
+                raise ValueError("Invalid timestamp")
+
+            # Convert timestamp to datetime in local timezone
+            local_time = datetime.fromtimestamp(timestamp)
+            formatted_time = local_time.strftime("%H:%M")
             
-            # Check time drift
-            current_time = dt_util.now()
-            drift = abs((current_time - local_time).total_seconds())
-            
-            # Only log warning if drift is significant (> 2 hours)
-            if drift > 7200:  
-                _LOGGER.warning(
-                    "Significant system time drift detected: %.1f hours. Consider synchronizing device time.",
-                    drift / 3600
-                )
-            
-            self._attr_native_value = local_time
+            self._attr_native_value = formatted_time
             self._attr_extra_state_attributes = {
                 **self.extra_state_attributes,
                 "timestamp": timestamp,
-                "drift_seconds": drift,
-                "needs_sync": drift > 7200,
+                "full_datetime": local_time.strftime("%Y-%m-%d %H:%M:%S")
             }
             
         except (TypeError, ValueError, OSError) as err:
@@ -683,35 +675,55 @@ class EVSocPercentSensor(BaseEveusSensor):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 0
 
+    def _get_helper_value(self, entity_id: str) -> float:
+        """Get and validate helper value."""
+        state = self.hass.states.get(entity_id)
+        if not state or state.state in ('unknown', 'unavailable'):
+            raise ValueError(f"Helper {entity_id} unavailable")
+        return float(state.state)
+
     def _handle_state_update(self, state: dict) -> None:
         """Calculate and update SOC percentage."""
         try:
-            soc_kwh_state = self.hass.states.get(
-                f"sensor.{self._session_manager._host}_soc_energy"
+            # Get and validate all required values
+            max_capacity = self._get_helper_value(HELPER_EV_BATTERY_CAPACITY)
+            initial_soc = self._get_helper_value(HELPER_EV_INITIAL_SOC)
+            correction = self._get_helper_value(HELPER_EV_SOC_CORRECTION)
+            energy_charged = float(state.get(ATTR_COUNTER_A_ENERGY, 0))
+
+            # Validate ranges
+            if not (0 <= initial_soc <= 100 and max_capacity > 0 and 0 <= correction <= 10):
+                raise ValueError("Helper values out of valid range")
+
+            # Calculate SOC
+            efficiency = (1 - correction / 100)
+            energy_added = energy_charged * efficiency
+            initial_energy = (initial_soc / 100) * max_capacity
+            total_energy = initial_energy + energy_added
+            percentage = (total_energy / max_capacity) * 100
+
+            # Set valid value
+            self._attr_native_value = max(0, min(round(percentage), 100))
+
+            # Update attributes
+            self._attr_extra_state_attributes = {
+                **self.extra_state_attributes,
+                "initial_soc": initial_soc,
+                "energy_charged": round(energy_charged, 2),
+                "energy_added": round(energy_added, 2),
+                "efficiency": round(efficiency * 100, 1),
+                "max_capacity": max_capacity,
+                "current_energy": round(total_energy, 2),
+                "available_capacity": round(max_capacity - total_energy, 2)
+            }
+
+        except Exception as err:
+            _LOGGER.error(
+                "Error calculating SOC percentage for %s: %s",
+                self.name,
+                str(err)
             )
-            if not soc_kwh_state or soc_kwh_state.state in ('unknown', 'unavailable'):
-                if not self._restored:
-                    self._attr_native_value = None
-                return
-
-            soc_kwh = float(soc_kwh_state.state)
-            max_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
-
-            if soc_kwh >= 0 and max_capacity > 0:
-                percentage = round((soc_kwh / max_capacity * 100), 0)
-                self._attr_native_value = max(0, min(percentage, 100))
-                self._attr_extra_state_attributes = {
-                    **self.extra_state_attributes,
-                    "max_capacity": max_capacity,
-                    "current_capacity": soc_kwh,
-                }
-                self._restored = False
-
-        except (TypeError, ValueError, AttributeError) as err:
-            _LOGGER.error("Error calculating SOC percentage: %s", str(err))
-            if self._restored:
-                _LOGGER.info("Keeping restored value: %s", self._attr_native_value)
-            else:
+            if not self._restored:
                 self._attr_native_value = None
 
 class TimeToTargetSocSensor(BaseEveusSensor):
