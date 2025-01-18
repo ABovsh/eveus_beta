@@ -674,6 +674,45 @@ class EVSocKwhSensor(BaseEveusSensor):
                 _LOGGER.info("Keeping restored value: %s", self._attr_native_value)
             else:
                 self._attr_native_value = None
+                
+class EVSocPercentSensor(BaseEveusSensor):
+    """EV State of Charge percentage sensor implementation."""
+
+    _attr_device_class = SensorDeviceClass.BATTERY
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 0
+
+    def _handle_state_update(self, state: dict) -> None:
+        """Calculate and update SOC percentage."""
+        try:
+            soc_kwh_state = self.hass.states.get(
+                f"sensor.{self._session_manager._host}_soc_energy"
+            )
+            if not soc_kwh_state or soc_kwh_state.state in ('unknown', 'unavailable'):
+                if not self._restored:
+                    self._attr_native_value = None
+                return
+
+            soc_kwh = float(soc_kwh_state.state)
+            max_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
+
+            if soc_kwh >= 0 and max_capacity > 0:
+                percentage = round((soc_kwh / max_capacity * 100), 0)
+                self._attr_native_value = max(0, min(percentage, 100))
+                self._attr_extra_state_attributes = {
+                    **self.extra_state_attributes,
+                    "max_capacity": max_capacity,
+                    "current_capacity": soc_kwh,
+                }
+                self._restored = False
+
+        except (TypeError, ValueError, AttributeError) as err:
+            _LOGGER.error("Error calculating SOC percentage: %s", str(err))
+            if self._restored:
+                _LOGGER.info("Keeping restored value: %s", self._attr_native_value)
+            else:
+                self._attr_native_value = None
 
 class TimeToTargetSocSensor(BaseEveusSensor):
     """Time to target SOC sensor implementation."""
