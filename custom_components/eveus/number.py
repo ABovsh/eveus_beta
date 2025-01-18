@@ -121,28 +121,28 @@ class EveusCurrentNumber(RestoreNumber):
             "configuration_url": f"http://{self._host}",
         }
 
-async def _get_session(self) -> aiohttp.ClientSession:
-    """Get or create client session with retry logic."""
-    if self._session is None or self._session.closed:
-        for attempt in range(3):  # Try 3 times
-            try:
-                timeout = aiohttp.ClientTimeout(total=COMMAND_TIMEOUT)
-                connector = aiohttp.TCPConnector(
-                    limit=1,
-                    force_close=True,
-                    enable_cleanup_closed=True
-                )
-                self._session = aiohttp.ClientSession(
-                    timeout=timeout,
-                    connector=connector,
-                    raise_for_status=True
-                )
-                return self._session
-            except Exception as err:
-                if attempt == 2:  # Last attempt
-                    raise
-                await asyncio.sleep(1)  # Wait before retry
-    return self._session
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create client session with retry logic."""
+        if self._session is None or self._session.closed:
+            for attempt in range(3):  # Try 3 times
+                try:
+                    timeout = aiohttp.ClientTimeout(total=COMMAND_TIMEOUT)
+                    connector = aiohttp.TCPConnector(
+                        limit=1,
+                        force_close=True,
+                        enable_cleanup_closed=True
+                    )
+                    self._session = aiohttp.ClientSession(
+                        timeout=timeout,
+                        connector=connector,
+                        raise_for_status=True
+                    )
+                    return self._session
+                except Exception as err:
+                    if attempt == 2:  # Last attempt
+                        raise
+                    await asyncio.sleep(1)  # Wait before retry
+        return self._session
 
     async def async_set_native_value(self, value: float) -> None:
         """Set new current value with improved error handling and rate limiting."""
@@ -229,3 +229,17 @@ async def _get_session(self) -> aiohttp.ClientSession:
         if self._session and not self._session.closed:
             await self._session.close()
             self._session = None
+
+    async def async_shutdown(self) -> None:
+        """Shutdown the updater and cleanup resources."""
+        if self._update_task:
+            self._update_task.cancel()
+            try:
+                await self._update_task
+            except asyncio.CancelledError:
+                pass
+            
+        if self._session and not self._session.closed:
+            await self._session.close()
+            
+        self._sensors.clear()
