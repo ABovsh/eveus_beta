@@ -391,7 +391,7 @@ class EveusVoltageSensor(EveusNumericSensor):
         """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "Voltage"
-        self._attr_unique_id = f"{updater._host}_voltage"
+        self._attr_unique_id = f"{updater._host}_ev_charger_voltage"
 
     @property
     def native_value(self) -> float | None:
@@ -415,7 +415,7 @@ class EveusCurrentSensor(EveusNumericSensor):
         """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "Current"
-        self._attr_unique_id = f"{updater._host}_current"
+        self._attr_unique_id = f"{updater._host}_ev_charger_current"
 
 class EveusPowerSensor(EveusNumericSensor):
     """Power sensor."""
@@ -431,7 +431,7 @@ class EveusPowerSensor(EveusNumericSensor):
         """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "Power"
-        self._attr_unique_id = f"{updater._host}_power"
+        self._attr_unique_id = f"{updater._host}_ev_charger_power"
 
 class EveusCurrentSetSensor(EveusNumericSensor):
     """Current set sensor."""
@@ -447,7 +447,7 @@ class EveusCurrentSetSensor(EveusNumericSensor):
         """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "Current Set"
-        self._attr_unique_id = f"{updater._host}_current_set"
+        self._attr_unique_id = f"{updater._host}_ev_charger_current_set"
 
 class EveusSessionEnergySensor(EveusEnergyBaseSensor):
     """Session energy sensor."""
@@ -459,7 +459,7 @@ class EveusSessionEnergySensor(EveusEnergyBaseSensor):
         """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "Session Energy"
-        self._attr_unique_id = f"{updater._host}_session_energy"
+        self._attr_unique_id = f"{updater._host}_ev_charger_session_energy"
 
 class EveusTotalEnergySensor(EveusEnergyBaseSensor):
     """Total energy sensor."""
@@ -471,7 +471,7 @@ class EveusTotalEnergySensor(EveusEnergyBaseSensor):
         """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "Total Energy"
-        self._attr_unique_id = f"{updater._host}_total_energy"
+        self._attr_unique_id = f"{updater._host}_ev_charger_total_energy"
 
 class EveusStateSensor(BaseEveusSensor):
     """Charging state sensor."""
@@ -483,7 +483,7 @@ class EveusStateSensor(BaseEveusSensor):
         """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "State"
-        self._attr_unique_id = f"{updater._host}_state"
+        self._attr_unique_id = f"{updater._host}_ev_charger_state"
 
     @property
     def native_value(self) -> str:
@@ -512,7 +512,7 @@ class EveusSubstateSensor(BaseEveusSensor):
         """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "Substate"
-        self._attr_unique_id = f"{updater._host}_substate"
+        self._attr_unique_id = f"{updater._host}_ev_charger_substate"
 
     @property
     def native_value(self) -> str:
@@ -565,7 +565,7 @@ class EveusEnabledSensor(BaseEveusSensor):
         """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "Enabled"
-        self._attr_unique_id = f"{updater._host}_enabled"
+        self._attr_unique_id = f"{updater._host}_ev_charger_enabled"
 
     @property
     def native_value(self) -> str:
@@ -587,7 +587,7 @@ class EveusGroundSensor(BaseEveusSensor):
         """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "Ground"
-        self._attr_unique_id = f"{updater._host}_ground"
+        self._attr_unique_id = f"{updater._host}_ev_charger_ground"
 
     @property
     def native_value(self) -> str:
@@ -611,7 +611,7 @@ class EveusBoxTemperatureSensor(EveusNumericSensor):
         """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "Box Temperature"
-        self._attr_unique_id = f"{updater._host}_box_temperature"
+        self._attr_unique_id = f"{updater._host}_ev_charger_box_temperature"
 
     @property
     def native_value(self) -> float | None:
@@ -638,7 +638,7 @@ class EveusPlugTemperatureSensor(EveusNumericSensor):
         """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "Plug Temperature"
-        self._attr_unique_id = f"{updater._host}_plug_temperature"
+        self._attr_unique_id = f"{updater._host}_ev_charger_plug_temperature"
 
     @property
     def native_value(self) -> float | None:
@@ -660,7 +660,7 @@ class EveusSystemTimeSensor(BaseEveusSensor):
         """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "System Time"
-        self._attr_unique_id = f"{updater._host}_system_time"
+        self._attr_unique_id = f"{updater._host}_ev_charger_system_time"
 
     @property
     def native_value(self) -> str:
@@ -685,7 +685,7 @@ class EveusSessionTimeSensor(BaseEveusSensor):
         """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "Session Time"
-        self._attr_unique_id = f"{updater._host}_session_time"
+        self._attr_unique_id = f"{updater._host}_ev_charger_session_time"
     
     @property
     def native_value(self) -> int:
@@ -733,7 +733,7 @@ class EveusCounterAEnergySensor(EveusEnergyBaseSensor):
         """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "Counter A Energy"
-        self._attr_unique_id = f"{updater._host}_counter_a_energy"
+        self._attr_unique_id = f"{updater._host}_ev_charger_counter_a_energy"
 
 class EveusCounterBEnergySensor(EveusEnergyBaseSensor):
     """Counter B energy sensor."""
@@ -746,7 +746,7 @@ class EveusCounterBEnergySensor(EveusEnergyBaseSensor):
         """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "Counter B Energy"
-        self._attr_unique_id = f"{updater._host}_counter_b_energy"
+        self._attr_unique_id = f"{updater._host}_ev_charger_counter_b_energy"
 
 class EveusCounterACostSensor(EveusNumericSensor):
     """Counter A cost sensor."""
@@ -761,7 +761,7 @@ class EveusCounterACostSensor(EveusNumericSensor):
         """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "Counter A Cost"
-        self._attr_unique_id = f"{updater._host}_counter_a_cost"
+        self._attr_unique_id = f"{updater._host}_ev_charger_counter_a_cost"
 
 class EveusCounterBCostSensor(EveusNumericSensor):
     """Counter B cost sensor."""
@@ -776,7 +776,7 @@ class EveusCounterBCostSensor(EveusNumericSensor):
         """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "Counter B Cost"
-        self._attr_unique_id = f"{updater._host}_counter_b_cost"
+        self._attr_unique_id = f"{updater._host}_ev_charger_counter_b_cost"
 
 class EveusBatteryVoltageSensor(EveusNumericSensor):
     """Battery voltage sensor."""
@@ -791,7 +791,7 @@ class EveusBatteryVoltageSensor(EveusNumericSensor):
         """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "Battery Voltage"
-        self._attr_unique_id = f"{updater._host}_battery_voltage"
+        self._attr_unique_id = f"{updater._host}_ev_charger_battery_voltage"
 
     @property
     def native_value(self) -> float | None:
@@ -817,7 +817,7 @@ class EVSocKwhSensor(BaseEveusSensor):
         """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "SOC Energy"
-        self._attr_unique_id = f"{updater._host}_soc_kwh"
+        self._attr_unique_id = f"{updater._host}_ev_charger_soc_kwh"
 
     @property
     def native_value(self) -> float | None:
@@ -881,7 +881,7 @@ class EVSocPercentSensor(BaseEveusSensor):
         """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "SOC Percent"
-        self._attr_unique_id = f"{updater._host}_soc_percent"
+        self._attr_unique_id = f"{updater._host}_ev_charger_soc_percent"
 
     @property
     def native_value(self) -> float | None:
@@ -925,92 +925,6 @@ class EVSocPercentSensor(BaseEveusSensor):
                 "initial_soc": initial_soc,
                 "charged_energy": energy_charged,
                 "efficiency": 1 - correction / 100,
-            })
-        except (TypeError, ValueError, AttributeError):
-            pass
-        return attrs
-
-class TimeToTargetSocSensor(BaseEveusSensor):
-    """Time to target SOC sensor."""
-    _attr_icon = "mdi:timer"
-    _attr_translation_key = "time_to_target"
-
-    def __init__(self, updater: EveusUpdater) -> None:
-        """Initialize the sensor."""
-        super().__init__(updater)
-        self._attr_name = "Time to Target"
-        self._attr_unique_id = f"{updater._host}_time_to_target"
-
-    @property
-    def native_value(self) -> str:
-        """Calculate and return time to target SOC with enhanced status reporting."""
-        try:
-            if int(self._updater.data.get(ATTR_STATE, 0)) != CHARGING_STATE:
-                charging_state = CHARGING_STATES.get(
-                    int(self._updater.data.get(ATTR_STATE, -1)), 
-                    "Unknown"
-                )
-                return f"Not charging ({charging_state})"
-
-            current_soc = float(self.hass.states.get(f"sensor.{self._updater._host}_soc_percent").state)
-            target_soc = float(self.hass.states.get(HELPER_EV_TARGET_SOC).state)
-            
-            if current_soc >= target_soc:
-                return "Target reached"
-
-            power_meas = float(self._updater.data.get(ATTR_POWER, 0))
-            if power_meas < MIN_CHARGING_POWER:
-                return f"Insufficient power ({power_meas:.0f}W)"
-
-            battery_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
-            correction = float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state)
-
-            if not (_validate_soc_percentage(target_soc) and
-                   _validate_power_capacity(battery_capacity) and
-                   _validate_soc_correction(correction)):
-                return "Invalid parameters"
-
-            # Calculate remaining time
-            remaining_kwh = (target_soc - current_soc) * battery_capacity / 100
-            efficiency = (1 - correction / 100)
-            power_kw = power_meas * efficiency / 1000
-            total_minutes = round((remaining_kwh / power_kw * 60), 0)
-
-            if total_minutes < 1:
-                return "Less than 1m"
-
-            days = int(total_minutes // 1440)
-            hours = int((total_minutes % 1440) // 60)
-            minutes = int(total_minutes % 60)
-
-            if days > 0:
-                return f"{days}d {hours}h {minutes}m"
-            elif hours > 0:
-                return f"{hours}h {minutes}m"
-            return f"{minutes}m"
-
-        except (TypeError, ValueError, AttributeError) as err:
-            _LOGGER.debug("Error calculating time to target: %s", str(err))
-            return "Calculation error"
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return additional state attributes."""
-        attrs = super().extra_state_attributes
-        try:
-            current_soc = float(self.hass.states.get(f"sensor.{self._updater._host}_soc_percent").state)
-            target_soc = float(self.hass.states.get(HELPER_EV_TARGET_SOC).state)
-            battery_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
-            correction = float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state)
-            power_meas = float(self._updater.data.get(ATTR_POWER, 0))
-            
-            attrs.update({
-                "current_soc": current_soc,
-                "target_soc": target_soc,
-                "remaining_kwh": (target_soc - current_soc) * battery_capacity / 100,
-                "charging_power": power_meas,
-                "efficiency": 1 - correction / 100,
-                "max_capacity": battery_capacity,
             })
         except (TypeError, ValueError, AttributeError):
             pass
