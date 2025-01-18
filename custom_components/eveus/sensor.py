@@ -92,7 +92,7 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
                 except (TypeError, ValueError):
                     self._previous_value = state.state
 
-@property
+    @property
     def device_info(self) -> dict[str, Any]:
         """Return device information."""
         return {
@@ -344,31 +344,26 @@ class EveusSystemTimeSensor(BaseEveusSensor):
     """System time sensor implementation."""
 
     _attribute = ATTR_SYSTEM_TIME
-    _attr_device_class = None  # Remove timestamp device class to use custom formatting
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = None
+    _attr_native_unit_of_measurement = None
     _attr_icon = "mdi:clock"
 
     def _handle_state_update(self, state: dict) -> None:
         """Handle system time update."""
         try:
             timestamp = int(state.get(self._attribute, 0))
-            timezone_offset = int(state.get("timeZone", 2))
-            
             if timestamp == 0:
                 raise ValueError("Invalid timestamp")
 
             # Convert timestamp to datetime
             local_time = datetime.fromtimestamp(timestamp)
-            
-            # Set 24h format time as native value
+            # Format in 24h format
             self._attr_native_value = local_time.strftime("%H:%M")
             
-            # Store additional time formats in attributes
             self._attr_extra_state_attributes = {
                 **self.extra_state_attributes,
-                "timezone_offset": timezone_offset,
                 "full_datetime": local_time.strftime("%Y-%m-%d %H:%M:%S"),
-                "date": local_time.strftime("%Y-%m-%d"),
+                "date": local_time.strftime("%Y-%m-%d")
             }
             
         except (TypeError, ValueError, OSError) as err:
@@ -684,40 +679,51 @@ class EVSocPercentSensor(BaseEveusSensor):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 0
 
-    def _get_helper_value(self, entity_id: str) -> float:
-        """Get and validate helper value."""
-        state = self.hass.states.get(entity_id)
-        if not state or state.state in ('unknown', 'unavailable'):
-            raise ValueError(f"Helper {entity_id} unavailable")
-        return float(state.state)
-
     def _handle_state_update(self, state: dict) -> None:
         """Calculate and update SOC percentage."""
         try:
-            # Get and validate all required values
-            max_capacity = self._get_helper_value(HELPER_EV_BATTERY_CAPACITY)
-            initial_soc = self._get_helper_value(HELPER_EV_INITIAL_SOC)
-            correction = self._get_helper_value(HELPER_EV_SOC_CORRECTION)
-            energy_charged = float(state.get(ATTR_COUNTER_A_ENERGY, 0))
+            # Get battery capacity from helper
+            battery_capacity = self.hass.states.get(HELPER_EV_BATTERY_CAPACITY)
+            if not battery_capacity or battery_capacity.state in ('unknown', 'unavailable'):
+                _LOGGER.error("Battery capacity helper unavailable")
+                return
 
-            # Validate ranges
-            if not (0 <= initial_soc <= 100 and max_capacity > 0 and 0 <= correction <= 10):
-                raise ValueError("Helper values out of valid range")
+            # Get initial SOC from helper
+            initial_soc = self.hass.states.get(HELPER_EV_INITIAL_SOC)
+            if not initial_soc or initial_soc.state in ('unknown', 'unavailable'):
+                _LOGGER.error("Initial SOC helper unavailable")
+                return
+
+            # Get energy charged
+            energy_charged = float(state.get(ATTR_COUNTER_A_ENERGY, 0))
+            
+            # Get correction factor
+            correction = self.hass.states.get(HELPER_EV_SOC_CORRECTION)
+            if not correction or correction.state in ('unknown', 'unavailable'):
+                _LOGGER.error("SOC correction helper unavailable")
+                return
 
             # Calculate SOC
-            efficiency = (1 - correction / 100)
+            max_capacity = float(battery_capacity.state)
+            initial_soc_value = float(initial_soc.state)
+            correction_factor = float(correction.state)
+
+            # Calculate energy added considering losses
+            efficiency = (1 - correction_factor / 100)
             energy_added = energy_charged * efficiency
-            initial_energy = (initial_soc / 100) * max_capacity
+
+            # Calculate total energy and percentage
+            initial_energy = (initial_soc_value / 100) * max_capacity
             total_energy = initial_energy + energy_added
             percentage = (total_energy / max_capacity) * 100
 
-            # Set valid value
+            # Ensure percentage is within valid range
             self._attr_native_value = max(0, min(round(percentage), 100))
-
-            # Update attributes
+            
+            # Add detailed attributes
             self._attr_extra_state_attributes = {
                 **self.extra_state_attributes,
-                "initial_soc": initial_soc,
+                "initial_soc": initial_soc_value,
                 "energy_charged": round(energy_charged, 2),
                 "energy_added": round(energy_added, 2),
                 "efficiency": round(efficiency * 100, 1),
@@ -726,12 +732,8 @@ class EVSocPercentSensor(BaseEveusSensor):
                 "available_capacity": round(max_capacity - total_energy, 2)
             }
 
-        except Exception as err:
-            _LOGGER.error(
-                "Error calculating SOC percentage for %s: %s",
-                self.name,
-                str(err)
-            )
+        except (TypeError, ValueError, AttributeError) as err:
+            _LOGGER.error("Error calculating SOC percentage: %s", str(err))
             if not self._restored:
                 self._attr_native_value = None
 
