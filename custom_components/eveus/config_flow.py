@@ -13,7 +13,8 @@ from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import aiohttp_client
+from homeassistant.helpers import aiohttp_client, entity_registry
+from homeassistant.helpers.entity_registry import EntityRegistry
 
 from .const import (
     DOMAIN,
@@ -21,12 +22,26 @@ from .const import (
     MODEL_32A,
     CONF_MODEL,
     MODELS,
+    CONF_BATTERY_CAPACITY,
+    CONF_INITIAL_SOC,
+    CONF_SOC_CORRECTION,
+    CONF_TARGET_SOC,
+    DEFAULT_BATTERY_CAPACITY,
+    DEFAULT_INITIAL_SOC,
+    DEFAULT_SOC_CORRECTION,
+    DEFAULT_TARGET_SOC,
+    MIN_BATTERY_CAPACITY,
+    MAX_BATTERY_CAPACITY,
+    MIN_SOC,
+    MAX_SOC,
+    MIN_CORRECTION,
+    MAX_CORRECTION,
+    API_ENDPOINT_MAIN,
+    COMMAND_TIMEOUT,
     HELPER_EV_BATTERY_CAPACITY,
     HELPER_EV_INITIAL_SOC,
     HELPER_EV_SOC_CORRECTION,
     HELPER_EV_TARGET_SOC,
-    API_ENDPOINT_MAIN,
-    COMMAND_TIMEOUT,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -37,46 +52,70 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Required(CONF_USERNAME): str,
         vol.Required(CONF_PASSWORD): str,
         vol.Required(CONF_MODEL, default=MODEL_16A): vol.In(MODELS),
+        vol.Required(CONF_BATTERY_CAPACITY, default=DEFAULT_BATTERY_CAPACITY): vol.All(
+            vol.Coerce(float), 
+            vol.Range(min=MIN_BATTERY_CAPACITY, max=MAX_BATTERY_CAPACITY)
+        ),
+        vol.Required(CONF_INITIAL_SOC, default=DEFAULT_INITIAL_SOC): vol.All(
+            vol.Coerce(float),
+            vol.Range(min=MIN_SOC, max=MAX_SOC)
+        ),
+        vol.Required(CONF_SOC_CORRECTION, default=DEFAULT_SOC_CORRECTION): vol.All(
+            vol.Coerce(float),
+            vol.Range(min=MIN_CORRECTION, max=MAX_CORRECTION)
+        ),
+        vol.Required(CONF_TARGET_SOC, default=DEFAULT_TARGET_SOC): vol.All(
+            vol.Coerce(float),
+            vol.Range(min=MIN_SOC, max=MAX_SOC)
+        ),
     }
 )
 
-REQUIRED_HELPERS: Final = [
-    HELPER_EV_BATTERY_CAPACITY,
-    HELPER_EV_INITIAL_SOC,
-    HELPER_EV_SOC_CORRECTION,
-    HELPER_EV_TARGET_SOC,
-]
-
-async def _validate_helper_entities(hass: HomeAssistant) -> bool:
-    """Validate that required helper entities exist and are properly configured."""
-    for entity_id in REQUIRED_HELPERS:
-        state = hass.states.get(entity_id)
-        if not state:
-            _LOGGER.error("Required helper entity missing: %s", entity_id)
-            return False
-        try:
-            if 'battery_capacity' in entity_id:
-                if not 10 <= float(state.state) <= 160:
-                    _LOGGER.error("Battery capacity must be between 10 and 160 kWh")
-                    return False
-            elif 'initial_soc' in entity_id or 'target_soc' in entity_id:
-                if not 0 <= float(state.state) <= 100:
-                    _LOGGER.error("SOC values must be between 0 and 100%")
-                    return False
-            elif 'correction' in entity_id:
-                if not 0 <= float(state.state) <= 10:
-                    _LOGGER.error("Correction factor must be between 0 and 10%")
-                    return False
-        except (ValueError, TypeError):
-            _LOGGER.error("Invalid value for helper entity: %s", entity_id)
-            return False
-    return True
+HELPER_ENTITIES = {
+    HELPER_EV_BATTERY_CAPACITY: {
+        "name": "EV Battery Capacity",
+        "icon": "mdi:car-battery",
+        "unit": "kWh",
+        "conf_key": CONF_BATTERY_CAPACITY,
+        "min": MIN_BATTERY_CAPACITY,
+        "max": MAX_BATTERY_CAPACITY,
+        "step": 1,
+        "mode": "slider",
+    },
+    HELPER_EV_INITIAL_SOC: {
+        "name": "Initial EV State of Charge",
+        "icon": "mdi:battery-charging-40",
+        "unit": "%",
+        "conf_key": CONF_INITIAL_SOC,
+        "min": MIN_SOC,
+        "max": MAX_SOC,
+        "step": 1,
+        "mode": "slider",
+    },
+    HELPER_EV_SOC_CORRECTION: {
+        "name": "Charging Efficiency Loss",
+        "icon": "mdi:chart-bell-curve",
+        "unit": "%",
+        "conf_key": CONF_SOC_CORRECTION,
+        "min": MIN_CORRECTION,
+        "max": MAX_CORRECTION,
+        "step": 0.1,
+        "mode": "box",
+    },
+    HELPER_EV_TARGET_SOC: {
+        "name": "Target SOC",
+        "icon": "mdi:battery-charging-high",
+        "unit": "%",
+        "conf_key": CONF_TARGET_SOC,
+        "min": MIN_SOC,
+        "max": MAX_SOC,
+        "step": 10,
+        "mode": "slider",
+    },
+}
 
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     """Validate the user input allows us to connect."""
-    if not await _validate_helper_entities(hass):
-        raise InvalidInput
-
     try:
         session = aiohttp_client.async_get_clientsession(hass)
         timeout = aiohttp.ClientTimeout(total=COMMAND_TIMEOUT)
@@ -95,7 +134,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
                 raise CannotConnect
             
             return {
-                "title": f"Eveus Charger ({data[CONF_HOST]})",
+                "title": f"Eveus EV Charger ({data[CONF_HOST]})",
                 "firmware_version": result.get("verFWMain", "Unknown"),
                 "hardware_version": result.get("verHW", "Unknown"),
             }
@@ -129,6 +168,9 @@ class EveusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 
                 info = await validate_input(self.hass, user_input)
                 
+                # Create helper entities
+                await self._create_helper_entities(user_input)
+                
                 return self.async_create_entry(
                     title=info["title"],
                     data={
@@ -141,8 +183,6 @@ class EveusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
                 errors["base"] = "invalid_auth"
-            except InvalidInput:
-                errors["base"] = "input_missing"
             except Exception:
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
@@ -151,13 +191,48 @@ class EveusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=STEP_USER_DATA_SCHEMA,
             errors=errors,
-            description_placeholders={
-                "battery_capacity_helper": HELPER_EV_BATTERY_CAPACITY,
-                "initial_soc_helper": HELPER_EV_INITIAL_SOC,
-                "soc_correction_helper": HELPER_EV_SOC_CORRECTION,
-                "target_soc_helper": HELPER_EV_TARGET_SOC,
-            }
         )
+
+    async def _create_helper_entities(self, user_input: dict[str, Any]) -> None:
+        """Create helper entities if they don't exist."""
+        ent_reg: EntityRegistry = entity_registry.async_get(self.hass)
+        created_helpers = []
+
+        for entity_id, config in HELPER_ENTITIES.items():
+            if not ent_reg.async_get(entity_id):
+                _LOGGER.debug("Creating helper entity: %s", entity_id)
+                try:
+                    await self.hass.services.async_call(
+                        "input_number",
+                        "create",
+                        {
+                            "name": config["name"],
+                            "initial": user_input[config["conf_key"]],
+                            "min": config["min"],
+                            "max": config["max"],
+                            "step": config["step"],
+                            "mode": config["mode"],
+                            "icon": config["icon"],
+                            "unit_of_measurement": config["unit"],
+                            "id": entity_id.split(".")[-1],
+                        },
+                        blocking=True,
+                    )
+                    created_helpers.append(entity_id)
+                except Exception as err:
+                    _LOGGER.error("Failed to create helper %s: %s", entity_id, str(err))
+                    # Cleanup any created helpers on failure
+                    for helper in created_helpers:
+                        try:
+                            await self.hass.services.async_call(
+                                "input_number",
+                                "delete",
+                                {"id": helper.split(".")[-1]},
+                                blocking=True,
+                            )
+                        except Exception:
+                            pass
+                    raise
 
     @staticmethod
     @callback
