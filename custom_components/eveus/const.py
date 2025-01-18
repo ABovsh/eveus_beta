@@ -4,6 +4,7 @@ from typing import Final
 
 DOMAIN: Final = "eveus"
 SCAN_INTERVAL = timedelta(seconds=30)
+UPDATE_INTERVAL: Final = timedelta(seconds=30)  # Added constant
 
 # Model constants
 MODEL_16A: Final = "16A"
@@ -61,7 +62,7 @@ API_ENDPOINT_EVENT: Final = "/pageEvent"
 
 # Command Parameters
 CMD_EVSE_ENABLED: Final = "evseEnabled"
-CMD_ONE_CHARGE: Final = "oneCharge" 
+CMD_ONE_CHARGE: Final = "oneCharge"
 CMD_RESET_COUNTER: Final = "rstEM1"
 
 # Error Handling
