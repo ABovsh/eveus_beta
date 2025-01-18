@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import asyncio
 import time
+import random
 from datetime import datetime
 from typing import Any, Final
 
@@ -72,6 +73,38 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Constants
+MIN_CHARGING_POWER = 100  # Watts
+MIN_UPDATE_TIME = 60  # Seconds
+CHARGING_STATE = 4
+MAX_RETRY_DELAY = 300  # 5 minutes
+JITTER_MIN = 0.8
+JITTER_MAX = 1.2
+
+# Temperature thresholds
+BOX_TEMP_CRITICAL = 80
+BOX_TEMP_HIGH = 60
+PLUG_TEMP_CRITICAL = 65
+PLUG_TEMP_HIGH = 50
+
+# Voltage thresholds
+VOLTAGE_MIN = 180
+VOLTAGE_MAX = 260
+BATTERY_VOLTAGE_CRITICAL = 2.5
+BATTERY_VOLTAGE_LOW = 2.7
+
+def _validate_soc_correction(correction: float) -> bool:
+    """Validate SOC correction value."""
+    return 0 <= correction <= 10
+
+def _validate_soc_percentage(soc: float) -> bool:
+    """Validate SOC percentage value."""
+    return 0 <= soc <= 100
+
+def _validate_power_capacity(capacity: float) -> bool:
+    """Validate power capacity value."""
+    return 10 <= capacity <= 160
+
 class EveusUpdater:
     """Class to manage Eveus data updates."""
 
@@ -127,15 +160,18 @@ class EveusUpdater:
         while True:
             try:
                 await self._update()
-                # Reset retry delay on successful update
                 self._current_retry_delay = RETRY_DELAY
                 await asyncio.sleep(SCAN_INTERVAL.total_seconds())
             except asyncio.CancelledError:
                 break
             except Exception as err:
                 _LOGGER.error("Error in update loop: %s", str(err))
-                await asyncio.sleep(self._current_retry_delay)
-                self._current_retry_delay = min(self._current_retry_delay * 2, 300)
+                jitter = random.uniform(JITTER_MIN, JITTER_MAX)
+                await asyncio.sleep(self._current_retry_delay * jitter)
+                self._current_retry_delay = min(
+                    self._current_retry_delay * 2,
+                    MAX_RETRY_DELAY
+                )
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create client session."""
@@ -190,7 +226,7 @@ class EveusUpdater:
                         
                         if failed_sensors:
                             _LOGGER.warning(
-                                "Failed to update the following sensors: %s",
+                                "Failed to update sensors: %s",
                                 ", ".join(failed_sensors)
                             )
                         return
@@ -201,7 +237,8 @@ class EveusUpdater:
                         self._available = self._error_count < self._max_errors
                         _LOGGER.error("Connection error: %s", str(err))
                         return
-                    await asyncio.sleep(RETRY_DELAY * (2 ** attempt))
+                    jitter = random.uniform(JITTER_MIN, JITTER_MAX)
+                    await asyncio.sleep(RETRY_DELAY * (2 ** attempt) * jitter)
                 
                 except Exception as err:
                     self._error_count += 1
@@ -289,7 +326,7 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
 
 class EveusNumericSensor(BaseEveusSensor):
     """Base class for numeric sensors."""
-
+    
     _attr_suggested_display_precision: Final = 2
 
     @property
@@ -303,7 +340,7 @@ class EveusNumericSensor(BaseEveusSensor):
             value = float(value)
             if not -1e6 <= value <= 1e6:
                 _LOGGER.warning(
-                    "Value out of reasonable range for %s: %f",
+                    "Value out of range for %s: %f",
                     self.entity_id,
                     value
                 )
@@ -333,7 +370,7 @@ class EveusEnergyBaseSensor(EveusNumericSensor):
         value = super().native_value
         if value is not None and value < 0:
             _LOGGER.warning(
-                "Negative energy value detected for %s: %f",
+                "Negative energy value for %s: %f",
                 self.entity_id,
                 value
             )
@@ -360,8 +397,8 @@ class EveusVoltageSensor(EveusNumericSensor):
     def native_value(self) -> float | None:
         """Return voltage with range validation."""
         value = super().native_value
-        if value is not None and not 180 <= value <= 260:
-            _LOGGER.warning("Voltage out of normal range: %f V", value)
+        if value is not None and not VOLTAGE_MIN <= value <= VOLTAGE_MAX:
+            _LOGGER.warning("Voltage out of range: %f V", value)
         return value
 
 class EveusCurrentSensor(EveusNumericSensor):
@@ -581,9 +618,9 @@ class EveusBoxTemperatureSensor(EveusNumericSensor):
         """Return temperature with safety validation."""
         value = super().native_value
         if value is not None:
-            if value > 80:
+            if value > BOX_TEMP_CRITICAL:
                 _LOGGER.warning("Box temperature critically high: %f°C", value)
-            elif value > 60:
+            elif value > BOX_TEMP_HIGH:
                 _LOGGER.warning("Box temperature high: %f°C", value)
         return value
 
@@ -608,9 +645,9 @@ class EveusPlugTemperatureSensor(EveusNumericSensor):
         """Return temperature with safety validation."""
         value = super().native_value
         if value is not None:
-            if value > 65:
+            if value > PLUG_TEMP_CRITICAL:
                 _LOGGER.warning("Plug temperature critically high: %f°C", value)
-            elif value > 50:
+            elif value > PLUG_TEMP_HIGH:
                 _LOGGER.warning("Plug temperature high: %f°C", value)
         return value
 
@@ -743,7 +780,7 @@ class EveusCounterBCostSensor(EveusNumericSensor):
 
 class EveusBatteryVoltageSensor(EveusNumericSensor):
     """Battery voltage sensor."""
-    _attr_device_class = SensorDeviceClass.VOLTAGE  
+    _attr_device_class = SensorDeviceClass.VOLTAGE
     _attr_native_unit_of_measurement = UnitOfElectricPotential.VOLT
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:battery"
@@ -761,9 +798,9 @@ class EveusBatteryVoltageSensor(EveusNumericSensor):
         """Return battery voltage with validation."""
         value = super().native_value
         if value is not None:
-            if value < 2.5:
+            if value < BATTERY_VOLTAGE_CRITICAL:
                 _LOGGER.warning("Battery voltage critically low: %f V", value)
-            elif value < 2.7:
+            elif value < BATTERY_VOLTAGE_LOW:
                 _LOGGER.warning("Battery voltage low: %f V", value)
         return value
 
@@ -792,7 +829,9 @@ class EVSocKwhSensor(BaseEveusSensor):
             correction = float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state)
 
             # Validate inputs
-            if not (0 <= initial_soc <= 100 and max_capacity > 0 and 0 <= correction <= 10):
+            if not (_validate_soc_percentage(initial_soc) and 
+                   _validate_power_capacity(max_capacity) and
+                   _validate_soc_correction(correction)):
                 _LOGGER.warning("Invalid input parameters for SOC calculation")
                 return None
 
@@ -814,11 +853,16 @@ class EVSocKwhSensor(BaseEveusSensor):
         """Return additional state attributes."""
         attrs = super().extra_state_attributes
         try:
+            initial_soc = float(self.hass.states.get(HELPER_EV_INITIAL_SOC).state)
+            max_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
+            correction = float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state)
+            energy_charged = float(self._updater.data.get(ATTR_COUNTER_A_ENERGY, 0))
+            
             attrs.update({
-                "initial_soc_kwh": (float(self.hass.states.get(HELPER_EV_INITIAL_SOC).state) / 100) * 
-                                 float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state),
-                "energy_charged": float(self._updater.data.get(ATTR_COUNTER_A_ENERGY, 0)),
-                "efficiency": 1 - float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state) / 100,
+                "initial_soc_kwh": (initial_soc / 100) * max_capacity,
+                "energy_charged": energy_charged,
+                "efficiency": 1 - correction / 100,
+                "max_capacity": max_capacity,
             })
         except (TypeError, ValueError, AttributeError):
             pass
@@ -843,21 +887,23 @@ class EVSocPercentSensor(BaseEveusSensor):
     def native_value(self) -> float | None:
         """Return the state of charge percentage with validation."""
         try:
-            soc_kwh = float(self._updater.data.get(ATTR_COUNTER_A_ENERGY, 0))
-            max_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
             initial_soc = float(self.hass.states.get(HELPER_EV_INITIAL_SOC).state)
+            max_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
+            energy_charged = float(self._updater.data.get(ATTR_COUNTER_A_ENERGY, 0))
             correction = float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state)
             
-            if not (0 <= initial_soc <= 100 and max_capacity > 0 and 0 <= correction <= 10):
-                _LOGGER.warning("Invalid input parameters for SOC calculation")
+            if not (_validate_soc_percentage(initial_soc) and 
+                   _validate_power_capacity(max_capacity) and
+                   _validate_soc_correction(correction)):
+                _LOGGER.warning("Invalid input parameters for SOC percentage calculation")
                 return None
 
             initial_kwh = (initial_soc / 100) * max_capacity
             efficiency = (1 - correction / 100)
-            charged_kwh = soc_kwh * efficiency
+            charged_kwh = energy_charged * efficiency
             total_kwh = initial_kwh + charged_kwh
-            percentage = (total_kwh / max_capacity * 100)
             
+            percentage = (total_kwh / max_capacity * 100)
             return max(0, min(round(percentage, 0), 100))
             
         except (TypeError, ValueError, AttributeError) as err:
@@ -869,15 +915,15 @@ class EVSocPercentSensor(BaseEveusSensor):
         """Return additional state attributes."""
         attrs = super().extra_state_attributes
         try:
-            soc_kwh = float(self._updater.data.get(ATTR_COUNTER_A_ENERGY, 0))
-            max_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
             initial_soc = float(self.hass.states.get(HELPER_EV_INITIAL_SOC).state)
+            max_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
             correction = float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state)
+            energy_charged = float(self._updater.data.get(ATTR_COUNTER_A_ENERGY, 0))
             
             attrs.update({
                 "max_capacity": max_capacity,
                 "initial_soc": initial_soc,
-                "charged_energy": soc_kwh,
+                "charged_energy": energy_charged,
                 "efficiency": 1 - correction / 100,
             })
         except (TypeError, ValueError, AttributeError):
@@ -899,36 +945,34 @@ class TimeToTargetSocSensor(BaseEveusSensor):
     def native_value(self) -> str:
         """Calculate and return time to target SOC with enhanced status reporting."""
         try:
-            if int(self._updater.data.get(ATTR_STATE, 0)) != 4:  # Not charging
+            if int(self._updater.data.get(ATTR_STATE, 0)) != CHARGING_STATE:
                 charging_state = CHARGING_STATES.get(
                     int(self._updater.data.get(ATTR_STATE, -1)), 
                     "Unknown"
                 )
                 return f"Not charging ({charging_state})"
 
-            # Get current SOC calculation components
-            soc_kwh = float(self._updater.data.get(ATTR_COUNTER_A_ENERGY, 0))
-            max_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
-            initial_soc = float(self.hass.states.get(HELPER_EV_INITIAL_SOC).state)
-            correction = float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state)
+            current_soc = float(self.hass.states.get(f"sensor.{self._updater._host}_soc_percent").state)
             target_soc = float(self.hass.states.get(HELPER_EV_TARGET_SOC).state)
-            
-            # Calculate current SOC 
-            initial_kwh = (initial_soc / 100) * max_capacity
-            efficiency = (1 - correction / 100)
-            charged_kwh = soc_kwh * efficiency
-            total_kwh = initial_kwh + charged_kwh
-            current_soc = (total_kwh / max_capacity * 100)
             
             if current_soc >= target_soc:
                 return "Target reached"
 
             power_meas = float(self._updater.data.get(ATTR_POWER, 0))
-            if power_meas < 100:
+            if power_meas < MIN_CHARGING_POWER:
                 return f"Insufficient power ({power_meas:.0f}W)"
 
+            battery_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
+            correction = float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state)
+
+            if not (_validate_soc_percentage(target_soc) and
+                   _validate_power_capacity(battery_capacity) and
+                   _validate_soc_correction(correction)):
+                return "Invalid parameters"
+
             # Calculate remaining time
-            remaining_kwh = (target_soc - current_soc) * max_capacity / 100
+            remaining_kwh = (target_soc - current_soc) * battery_capacity / 100
+            efficiency = (1 - correction / 100)
             power_kw = power_meas * efficiency / 1000
             total_minutes = round((remaining_kwh / power_kw * 60), 0)
 
@@ -954,25 +998,19 @@ class TimeToTargetSocSensor(BaseEveusSensor):
         """Return additional state attributes."""
         attrs = super().extra_state_attributes
         try:
-            soc_kwh = float(self._updater.data.get(ATTR_COUNTER_A_ENERGY, 0))
-            max_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
-            initial_soc = float(self.hass.states.get(HELPER_EV_INITIAL_SOC).state)
-            correction = float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state)
+            current_soc = float(self.hass.states.get(f"sensor.{self._updater._host}_soc_percent").state)
             target_soc = float(self.hass.states.get(HELPER_EV_TARGET_SOC).state)
-            
-            initial_kwh = (initial_soc / 100) * max_capacity
-            efficiency = (1 - correction / 100)
-            charged_kwh = soc_kwh * efficiency 
-            total_kwh = initial_kwh + charged_kwh
-            current_soc = (total_kwh / max_capacity * 100)
+            battery_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
+            correction = float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state)
+            power_meas = float(self._updater.data.get(ATTR_POWER, 0))
             
             attrs.update({
                 "current_soc": current_soc,
                 "target_soc": target_soc,
-                "charging_power": float(self._updater.data.get(ATTR_POWER, 0)),
-                "efficiency": efficiency,
-                "max_capacity": max_capacity,
-                "remaining_kwh": (target_soc - current_soc) * max_capacity / 100  
+                "remaining_kwh": (target_soc - current_soc) * battery_capacity / 100,
+                "charging_power": power_meas,
+                "efficiency": 1 - correction / 100,
+                "max_capacity": battery_capacity,
             })
         except (TypeError, ValueError, AttributeError):
             pass
@@ -1016,16 +1054,14 @@ async def async_setup_entry(
         TimeToTargetSocSensor(updater),
     ]
 
-    # Store entity references
-    if "entities" not in hass.data[DOMAIN][entry.entry_id]:
-        hass.data[DOMAIN][entry.entry_id]["entities"] = {}
-
     # Store updater reference
     if "updaters" not in hass.data[DOMAIN][entry.entry_id]:
         hass.data[DOMAIN][entry.entry_id]["updaters"] = {}
     hass.data[DOMAIN][entry.entry_id]["updaters"]["main"] = updater
 
-    # Store sensor references with unique_id as key
+    # Store sensor references
+    if "entities" not in hass.data[DOMAIN][entry.entry_id]:
+        hass.data[DOMAIN][entry.entry_id]["entities"] = {}
     hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
         sensor.unique_id: sensor for sensor in sensors
     }
