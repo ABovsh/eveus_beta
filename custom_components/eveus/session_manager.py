@@ -101,12 +101,10 @@ class SessionManager:
             )
 
             # Create session with optimized settings
-            self._session = aiohttp_client.async_create_clientsession(
-                self.hass,
+            self._session = aiohttp.ClientSession(
                 timeout=timeout,
                 connector=self._connection_pool,
                 raise_for_status=True,
-                connector_owner=False,
                 auth=aiohttp.BasicAuth(self._username, self._password),
             )
 
