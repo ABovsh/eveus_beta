@@ -173,21 +173,28 @@ class EveusUpdater:
                     MAX_RETRY_DELAY
                 )
 
-    async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create client session."""
-        if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=COMMAND_TIMEOUT)
-            connector = aiohttp.TCPConnector(
-                limit=1,
-                force_close=True,
-                enable_cleanup_closed=True
-            )
-            self._session = aiohttp.ClientSession(
-                timeout=timeout,
-                connector=connector,
-                raise_for_status=True
-            )
-        return self._session
+async def _get_session(self) -> aiohttp.ClientSession:
+    """Get or create client session with retry logic."""
+    if self._session is None or self._session.closed:
+        for attempt in range(3):  # Try 3 times
+            try:
+                timeout = aiohttp.ClientTimeout(total=COMMAND_TIMEOUT)
+                connector = aiohttp.TCPConnector(
+                    limit=1,
+                    force_close=True,
+                    enable_cleanup_closed=True
+                )
+                self._session = aiohttp.ClientSession(
+                    timeout=timeout,
+                    connector=connector,
+                    raise_for_status=True
+                )
+                return self._session
+            except Exception as err:
+                if attempt == 2:  # Last attempt
+                    raise
+                await asyncio.sleep(1)  # Wait before retry
+    return self._session
 
     async def _update(self) -> None:
         """Update the data with comprehensive error handling."""
@@ -810,7 +817,7 @@ class EVSocKwhSensor(BaseEveusSensor):
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
     _attr_icon = "mdi:battery-charging"
     _attr_suggested_display_precision = 1
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_state_class = SensorStateClass.TOTAL
     _attr_translation_key = "soc_energy"
 
     def __init__(self, updater: EveusUpdater) -> None:
@@ -941,33 +948,58 @@ class TimeToTargetSocSensor(BaseEveusSensor):
         self._attr_name = "Time to Target"
         self._attr_unique_id = f"{updater._host}_ev_charger_time_to_target"
 
-    def _get_state_value(self, entity_id: str) -> float:
-        """Get state value with validation."""
+    def _get_helper_value(self, entity_id: str, name: str) -> float | None:
+        """Get helper value safely."""
         state = self.hass.states.get(entity_id)
-        if not state:
-            raise ValueError(f"Missing required helper: {entity_id}")
+        if state is None:
+            _LOGGER.debug("Missing helper: %s (%s)", name, entity_id)
+            return None
         try:
             return float(state.state)
         except (TypeError, ValueError) as err:
-            raise ValueError(f"Invalid value for {entity_id}: {state.state}") from err
+            _LOGGER.debug("Invalid value for %s: %s", name, err)
+            return None
 
     @property
     def native_value(self) -> str:
         """Calculate and return time to target SOC with enhanced status reporting."""
         try:
+            # Check charging state first
             charging_state = int(self._updater.data.get(ATTR_STATE, 0))
             if charging_state != CHARGING_STATE:
                 return f"Not charging ({CHARGING_STATES.get(charging_state, 'Unknown')})"
 
+            # Check charging power
             power_meas = float(self._updater.data.get(ATTR_POWER, 0))
             if power_meas < MIN_CHARGING_POWER:
                 return f"Insufficient power ({power_meas:.0f}W)"
 
-            # Get and validate all required values
-            current_soc = float(self.hass.states.get(f"sensor.{self._updater._host}_ev_charger_soc_percent").state)
-            target_soc = self._get_state_value(HELPER_EV_TARGET_SOC)
-            battery_capacity = self._get_state_value(HELPER_EV_BATTERY_CAPACITY)
-            correction = self._get_state_value(HELPER_EV_SOC_CORRECTION)
+            # Get all required values safely
+            helpers = {
+                "Current SOC": self._get_helper_value(
+                    f"sensor.{self._updater._host}_ev_charger_soc_percent",
+                    "Current SOC"
+                ),
+                "Target SOC": self._get_helper_value(HELPER_EV_TARGET_SOC, "Target SOC"),
+                "Battery Capacity": self._get_helper_value(
+                    HELPER_EV_BATTERY_CAPACITY,
+                    "Battery Capacity"
+                ),
+                "Correction": self._get_helper_value(
+                    HELPER_EV_SOC_CORRECTION,
+                    "Efficiency Correction"
+                ),
+            }
+
+            # Check if any values are missing
+            missing = [name for name, value in helpers.items() if value is None]
+            if missing:
+                return f"Missing data: {', '.join(missing)}"
+
+            current_soc = helpers["Current SOC"]
+            target_soc = helpers["Target SOC"]
+            battery_capacity = helpers["Battery Capacity"]
+            correction = helpers["Correction"]
 
             # Additional validations
             if not _validate_soc_percentage(target_soc):
@@ -1003,31 +1035,49 @@ class TimeToTargetSocSensor(BaseEveusSensor):
                 return f"{hours}h {minutes}m"
             return f"{minutes}m"
 
-        except (TypeError, ValueError, AttributeError) as err:
-            _LOGGER.error("Error calculating time to target: %s", str(err))
-            return str(err)
+        except Exception as err:
+            _LOGGER.debug("Error calculating time to target: %s", str(err))
+            return f"Calculation error: {str(err)}"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return additional state attributes."""
+        """Return additional state attributes with safe value fetching."""
         attrs = super().extra_state_attributes
         try:
-            current_soc = float(self.hass.states.get(f"sensor.{self._updater._host}_ev_charger_soc_percent").state)
-            target_soc = float(self.hass.states.get(HELPER_EV_TARGET_SOC).state)
-            battery_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
-            correction = float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state)
+            helpers = {
+                "current_soc": self._get_helper_value(
+                    f"sensor.{self._updater._host}_ev_charger_soc_percent",
+                    "Current SOC"
+                ),
+                "target_soc": self._get_helper_value(HELPER_EV_TARGET_SOC, "Target SOC"),
+                "battery_capacity": self._get_helper_value(
+                    HELPER_EV_BATTERY_CAPACITY,
+                    "Battery Capacity"
+                ),
+                "correction": self._get_helper_value(
+                    HELPER_EV_SOC_CORRECTION,
+                    "Efficiency Correction"
+                ),
+            }
+            
             power_meas = float(self._updater.data.get(ATTR_POWER, 0))
             
+            # Only add values that are not None
             attrs.update({
-                "current_soc": current_soc,
-                "target_soc": target_soc,
-                "remaining_kwh": (target_soc - current_soc) * battery_capacity / 100,
-                "charging_power": power_meas,
-                "efficiency": 1 - correction / 100,
-                "max_capacity": battery_capacity,
+                key: value for key, value in helpers.items() if value is not None
             })
-        except (TypeError, ValueError, AttributeError):
-            pass
+            
+            if all(value is not None for value in helpers.values()):
+                attrs["remaining_kwh"] = (
+                    helpers["target_soc"] - helpers["current_soc"]
+                ) * helpers["battery_capacity"] / 100
+                attrs["efficiency"] = 1 - helpers["correction"] / 100
+                
+            attrs["charging_power"] = power_meas
+            
+        except Exception as err:
+            _LOGGER.debug("Error calculating attributes: %s", str(err))
+            
         return attrs
 
 async def async_setup_entry(
