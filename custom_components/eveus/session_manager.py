@@ -16,7 +16,6 @@ from homeassistant.util import dt as dt_util
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.event import async_track_time_interval
-from homeassistant.helpers import entity_registry as er
 
 from .const import (
     DOMAIN,
@@ -36,7 +35,6 @@ from .const import (
     REQUIRED_STATE_FIELDS,
     PERSISTENT_SESSION_DATA,
     CHARGING_STATES,
-    MODEL_MAX_CURRENT,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -66,7 +64,6 @@ class SessionManager:
         self._entry_id = entry_id
         
         # Device info
-        self._model = None
         self._firmware_version = None
         self._station_id = None
         self._capabilities = None
@@ -116,9 +113,10 @@ class SessionManager:
             await self._update_capabilities(state)
             
             _LOGGER.debug(
-                "Session manager initialized for %s (Model: %s, FW: %s)",
+                "Session manager initialized for %s (Current range: %s-%sA, FW: %s)",
                 self._host,
-                self._model,
+                self._capabilities.get("min_current"),
+                self._capabilities.get("max_current"),
                 self._firmware_version
             )
             
@@ -145,9 +143,12 @@ class SessionManager:
     async def _update_capabilities(self, state: dict) -> None:
         """Update device capabilities."""
         try:
+            min_current = float(state.get("minCurrent", 7))
+            max_current = float(state.get("curDesign", 16))
+            
             self._capabilities = {
-                "min_current": float(state.get("minCurrent", 7)),  # Use device's minCurrent
-                "max_current": float(state.get("curDesign", 16)),  # Use device's curDesign
+                "min_current": min_current,
+                "max_current": max_current,
                 "firmware_version": state.get("verFWMain", "Unknown").strip(),
                 "station_id": state.get("stationId", "Unknown").strip(),
                 "supports_one_charge": bool(state.get("oneChargeSupported", True)),
@@ -156,6 +157,15 @@ class SessionManager:
             
             self._firmware_version = self._capabilities["firmware_version"]
             self._station_id = self._capabilities["station_id"]
+            
+            # Log device capabilities
+            _LOGGER.info(
+                "Device capabilities updated - Current range: %.1f-%.1fA, Firmware: %s, ID: %s",
+                min_current,
+                max_current,
+                self._firmware_version,
+                self._station_id
+            )
             
         except Exception as err:
             _LOGGER.error("Failed to update capabilities: %s", err)
@@ -230,6 +240,16 @@ class SessionManager:
             self._available = self._error_count < 3
             
             raise DeviceError(f"Failed to get state after {retry_count} retries: {last_error}")
+
+    async def validate_current(self, current: float) -> bool:
+        """Validate current against device capabilities."""
+        if not self._capabilities:
+            return False
+
+        min_current = self._capabilities.get("min_current", 7)
+        max_current = self._capabilities.get("max_current", 16)
+            
+        return min_current <= current <= max_current
 
     async def send_command(
         self,
@@ -451,36 +471,9 @@ class SessionManager:
         return self._station_id
 
     @property
-    def model(self) -> Optional[str]:
-        """Return device model."""
-        return self._model
-
-    @property
     def capabilities(self) -> Optional[dict]:
         """Return device capabilities."""
         return self._capabilities
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        """Return device information."""
-        return {
-            "identifiers": {(DOMAIN, self._session_manager._host)},
-            "name": "Eveus EV Charger",
-            "manufacturer": "Eveus",
-            "model": f"Eveus ({self._capabilities.get('min_current', 7)}-{self._capabilities.get('max_current', 16)}A)",
-            "sw_version": self._firmware_version,
-            "serial_number": self._station_id,
-            "configuration_url": f"http://{self._session_manager._host}",
-            "hw_version": f"Current range: {self._capabilities.get('min_current', 7)}-{self._capabilities.get('max_current', 16)}A"
-        }
-
-    async def validate_current(self, current: float) -> bool:
-        """Validate current against device model."""
-        if not self._model:
-            return False
-            
-        max_current = MODEL_MAX_CURRENT.get(self._model, 16)
-        return 8 <= current <= max_current
 
     async def close(self) -> None:
         """Close session manager."""
@@ -488,5 +481,5 @@ class SessionManager:
         self._state_cache = None
         
         if self._session and not self._session.closed:
-            await self._session.close()     
+            await self._session.close()
         
