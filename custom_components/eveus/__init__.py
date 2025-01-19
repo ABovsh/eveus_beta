@@ -1,4 +1,3 @@
-# File: custom_components/eveus/__init__.py
 """The Eveus integration."""
 from __future__ import annotations
 
