@@ -77,6 +77,17 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
         self._attr_translation_key = f"{self._translation_prefix}_{name.lower().replace(' ', '_')}"
         self._previous_value = None
         self._restored = False
+        self._attr_should_poll = True
+
+    @property
+    def should_poll(self) -> bool:
+        """Return True as we want periodic updates."""
+        return True
+
+    @property
+    def scan_interval(self):
+        """Return update interval."""
+        return self._update_interval
 
     async def async_added_to_hass(self) -> None:
         """Handle entity which will be added."""
@@ -91,6 +102,9 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
                     self._restored = True
                 except (TypeError, ValueError):
                     self._previous_value = state.state
+        
+        # Ensure first update happens immediately
+        await self.async_update()
 
     @property
     def device_info(self) -> dict[str, Any]:
@@ -347,21 +361,34 @@ class EveusSystemTimeSensor(BaseEveusSensor):
     _attr_device_class = None
     _attr_native_unit_of_measurement = None
     _attr_icon = "mdi:clock"
+    _timezone_mapping = {
+        1: 1,  # GMT+1
+        2: 2,  # GMT+2
+        3: 3,  # GMT+3
+    }
 
     def _handle_state_update(self, state: dict) -> None:
         """Handle system time update."""
         try:
             timestamp = int(state.get(self._attribute, 0))
+            timezone_code = int(state.get("timeZone", 2))  # Default to GMT+2
+            
             if timestamp == 0:
                 raise ValueError("Invalid timestamp")
 
-            # Convert timestamp to datetime
-            local_time = datetime.fromtimestamp(timestamp)
+            # Get timezone offset in hours
+            offset = self._timezone_mapping.get(timezone_code, 2)
+            
+            # Convert timestamp to local time with offset
+            base_time = datetime.fromtimestamp(timestamp)
+            local_time = base_time.replace(hour=(base_time.hour - 2 + offset))  # Adjust from GMT+2
+            
             # Format in 24h format
             self._attr_native_value = local_time.strftime("%H:%M")
             
             self._attr_extra_state_attributes = {
                 **self.extra_state_attributes,
+                "timezone": f"GMT+{offset}",
                 "full_datetime": local_time.strftime("%Y-%m-%d %H:%M:%S"),
                 "date": local_time.strftime("%Y-%m-%d")
             }
@@ -863,9 +890,28 @@ async def async_setup_entry(
         TimeToTargetSocSensor(session_manager, "Time to Target"),
     ]
 
+    async def async_update_entities(now=None):
+        """Update all entities."""
+        try:
+            state = await session_manager.get_state()
+            for sensor in sensors:
+                try:
+                    sensor._handle_state_update(state)
+                    sensor.async_write_ha_state()
+                except Exception as err:
+                    _LOGGER.error(
+                        "Error updating sensor %s: %s",
+                        sensor.name,
+                        str(err),
+                        exc_info=True
+                    )
+        except Exception as err:
+            _LOGGER.error("Error getting state: %s", str(err))
+
     # Store entity references
     hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
         sensor.unique_id: sensor for sensor in sensors
     }
 
-    async_add_entities(sensors)
+    # Add entities
+    async_add_entities(sensors, True)
