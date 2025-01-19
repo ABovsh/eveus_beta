@@ -1032,7 +1032,7 @@ async def async_setup_entry(
            _LOGGER.error("Failed to adjust update interval: %s", err)
 
    # Add entities first
-   async_add_entities(sensors)
+   async_add_entities(sensors, update_before_add=True)
 
    # Setup initial update
    if not hass.is_running:
