@@ -38,6 +38,7 @@ class BaseEveusSwitch(SwitchEntity, RestoreEntity):
         self._session_manager = session_manager
         self._is_on = False
         self._attr_unique_id = f"{self._session_manager._host}_{self.name}"
+        self.entity_id = f"switch.eveus_{self.name.lower().replace(' ', '_')}"
         self._error_count = 0
         self._last_update = None
         self._restored = False
