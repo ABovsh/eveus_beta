@@ -398,33 +398,48 @@ class EveusSessionTimeSensor(BaseEveusSensor):
             self._attr_native_value = 0
 
 class EveusCommunicationSensor(BaseEveusSensor):
-    """Communication quality sensor implementation."""
+    """Enhanced communication quality sensor implementation."""
 
     _attr_name = "Communication"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:wifi-check"
-    _attr_device_class = SensorDeviceClass.TIMESTAMP  # Add this line
-    _attr_entity_registry_enabled_default = True
+    _attr_device_class = SensorDeviceClass.DURATION  # Changed from TIMESTAMP
+    _attr_native_unit_of_measurement = "s"
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def _handle_state_update(self, state: dict) -> None:
         """Handle state update."""
         try:
-            # Set timestamp as native value
-            self._attr_native_value = dt_util.now()
+            last_update = self._session_manager._last_update
+            current_time = time.time()
             
-            # Add detailed communication info
+            # Calculate seconds since last update
+            seconds_since_update = int(current_time - last_update) if last_update else 0
+            self._attr_native_value = seconds_since_update
+            
+            # Check if update took too long
+            if seconds_since_update > UPDATE_INTERVAL.total_seconds() * 2:
+                _LOGGER.warning(
+                    "Update delay detected: %s seconds (expected: %s)",
+                    seconds_since_update,
+                    UPDATE_INTERVAL.total_seconds()
+                )
+                
             self._attr_extra_state_attributes = {
                 **self.extra_state_attributes,
+                "last_update": dt_util.as_local(
+                    dt_util.utc_from_timestamp(last_update)
+                ).isoformat() if last_update else None,
+                "update_interval": UPDATE_INTERVAL.total_seconds(),
+                "delay_warning": seconds_since_update > UPDATE_INTERVAL.total_seconds() * 2,
                 "available": self._session_manager.available,
                 "error_count": self._session_manager._error_count,
-                "retry_delay": self._session_manager._current_retry_delay,
-                "last_state_age_seconds": int(time.time() - self._session_manager._last_update) if self._session_manager._last_update else None,
                 "total_requests": self._session_manager.request_count,
-                "failed_requests": self._session_manager._error_count,
             }
+
         except Exception as err:
             _LOGGER.error("Error updating communication state: %s", str(err))
-
+            
 class EveusStateSensor(BaseEveusSensor):
     """Charging state sensor implementation."""
 
