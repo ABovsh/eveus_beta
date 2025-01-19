@@ -1,3 +1,4 @@
+# Complete implementation of switch.py with all improvements
 """Support for Eveus switches with improved error handling."""
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ from .const import (
     CMD_ONE_CHARGE,
     CMD_RESET_COUNTER,
     UPDATE_INTERVAL_CHARGING,
+    UPDATE_INTERVAL_IDLE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -77,6 +79,7 @@ class BaseEveusSwitch(SwitchEntity, RestoreEntity):
             "model": self._session_manager.model,
             "sw_version": self._session_manager.firmware_version,
             "serial_number": self._session_manager.station_id,
+            "configuration_url": f"http://{self._session_manager._host}",
         }
 
     @property
@@ -88,27 +91,12 @@ class BaseEveusSwitch(SwitchEntity, RestoreEntity):
             "restored": self._restored,
         }
 
-    def _handle_state_update(self, state: dict) -> None:
-        """Handle state update from device."""
-        raise NotImplementedError
-
-class EveusStopChargingSwitch(BaseEveusSwitch):
-    """Charging control switch with improved error handling."""
-
-    _attr_name = "Stop Charging"
-    _attr_icon = "mdi:ev-station"
-    _attr_entity_category = EntityCategory.CONFIG
-
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn on charging with retry logic."""
+        """Turn on with retry logic."""
         attempts = 0
         while attempts < self._max_retry_attempts:
             try:
-                success, result = await self._session_manager.send_command(
-                    CMD_EVSE_ENABLED,
-                    1,
-                    verify=True
-                )
+                success, result = await self._execute_turn_on()
                 if success:
                     self._is_on = True
                     self._error_count = 0
@@ -118,7 +106,8 @@ class EveusStopChargingSwitch(BaseEveusSwitch):
                 attempts += 1
                 self._error_count += 1
                 _LOGGER.error(
-                    "Failed to enable charging (attempt %d/%d): %s",
+                    "Failed to turn on %s (attempt %d/%d): %s",
+                    self.name,
                     attempts,
                     self._max_retry_attempts,
                     result.get("error", "Unknown error")
@@ -130,7 +119,8 @@ class EveusStopChargingSwitch(BaseEveusSwitch):
                 attempts += 1
                 self._error_count += 1
                 _LOGGER.error(
-                    "Error enabling charging (attempt %d/%d): %s",
+                    "Error turning on %s (attempt %d/%d): %s",
+                    self.name,
                     attempts,
                     self._max_retry_attempts,
                     str(err)
@@ -139,15 +129,11 @@ class EveusStopChargingSwitch(BaseEveusSwitch):
                     await asyncio.sleep(self._retry_delay)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn off charging with retry logic."""
+        """Turn off with retry logic."""
         attempts = 0
         while attempts < self._max_retry_attempts:
             try:
-                success, result = await self._session_manager.send_command(
-                    CMD_EVSE_ENABLED,
-                    0,
-                    verify=True
-                )
+                success, result = await self._execute_turn_off()
                 if success:
                     self._is_on = False
                     self._error_count = 0
@@ -157,7 +143,8 @@ class EveusStopChargingSwitch(BaseEveusSwitch):
                 attempts += 1
                 self._error_count += 1
                 _LOGGER.error(
-                    "Failed to disable charging (attempt %d/%d): %s",
+                    "Failed to turn off %s (attempt %d/%d): %s",
+                    self.name,
                     attempts,
                     self._max_retry_attempts,
                     result.get("error", "Unknown error")
@@ -169,13 +156,49 @@ class EveusStopChargingSwitch(BaseEveusSwitch):
                 attempts += 1
                 self._error_count += 1
                 _LOGGER.error(
-                    "Error disabling charging (attempt %d/%d): %s",
+                    "Error turning off %s (attempt %d/%d): %s",
+                    self.name,
                     attempts,
                     self._max_retry_attempts,
                     str(err)
                 )
                 if attempts < self._max_retry_attempts:
                     await asyncio.sleep(self._retry_delay)
+
+    async def _execute_turn_on(self) -> tuple[bool, dict]:
+        """Execute turn on command."""
+        raise NotImplementedError
+
+    async def _execute_turn_off(self) -> tuple[bool, dict]:
+        """Execute turn off command."""
+        raise NotImplementedError
+
+    def _handle_state_update(self, state: dict) -> None:
+        """Handle state update."""
+        raise NotImplementedError
+
+class EveusStopChargingSwitch(BaseEveusSwitch):
+    """Charging control switch."""
+
+    _attr_name = "Stop Charging"
+    _attr_icon = "mdi:ev-station"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    async def _execute_turn_on(self) -> tuple[bool, dict]:
+        """Execute charging enable."""
+        return await self._session_manager.send_command(
+            CMD_EVSE_ENABLED,
+            1,
+            verify=True
+        )
+
+    async def _execute_turn_off(self) -> tuple[bool, dict]:
+        """Execute charging disable."""
+        return await self._session_manager.send_command(
+            CMD_EVSE_ENABLED,
+            0,
+            verify=True
+        )
 
     def _handle_state_update(self, state: dict) -> None:
         """Handle state update."""
@@ -190,89 +213,27 @@ class EveusStopChargingSwitch(BaseEveusSwitch):
             )
 
 class EveusOneChargeSwitch(BaseEveusSwitch):
-    """One charge mode switch with retry logic."""
+    """One charge mode switch."""
 
     _attr_name = "One Charge"
     _attr_icon = "mdi:lightning-bolt"
     _attr_entity_category = EntityCategory.CONFIG
 
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        """Enable one charge mode with retry logic."""
-        attempts = 0
-        while attempts < self._max_retry_attempts:
-            try:
-                success, result = await self._session_manager.send_command(
-                    CMD_ONE_CHARGE,
-                    1,
-                    verify=True
-                )
-                if success:
-                    self._is_on = True
-                    self._error_count = 0
-                    self.async_write_ha_state()
-                    return
-                    
-                attempts += 1
-                self._error_count += 1
-                _LOGGER.error(
-                    "Failed to enable one charge mode (attempt %d/%d): %s",
-                    attempts,
-                    self._max_retry_attempts,
-                    result.get("error", "Unknown error")
-                )
-                if attempts < self._max_retry_attempts:
-                    await asyncio.sleep(self._retry_delay)
-                    
-            except Exception as err:
-                attempts += 1
-                self._error_count += 1
-                _LOGGER.error(
-                    "Error enabling one charge mode (attempt %d/%d): %s",
-                    attempts,
-                    self._max_retry_attempts,
-                    str(err)
-                )
-                if attempts < self._max_retry_attempts:
-                    await asyncio.sleep(self._retry_delay)
+    async def _execute_turn_on(self) -> tuple[bool, dict]:
+        """Enable one charge mode."""
+        return await self._session_manager.send_command(
+            CMD_ONE_CHARGE,
+            1,
+            verify=True
+        )
 
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        """Disable one charge mode with retry logic."""
-        attempts = 0
-        while attempts < self._max_retry_attempts:
-            try:
-                success, result = await self._session_manager.send_command(
-                    CMD_ONE_CHARGE,
-                    0,
-                    verify=True
-                )
-                if success:
-                    self._is_on = False
-                    self._error_count = 0
-                    self.async_write_ha_state()
-                    return
-                    
-                attempts += 1
-                self._error_count += 1
-                _LOGGER.error(
-                    "Failed to disable one charge mode (attempt %d/%d): %s",
-                    attempts,
-                    self._max_retry_attempts,
-                    result.get("error", "Unknown error")
-                )
-                if attempts < self._max_retry_attempts:
-                    await asyncio.sleep(self._retry_delay)
-                    
-            except Exception as err:
-                attempts += 1
-                self._error_count += 1
-                _LOGGER.error(
-                    "Error disabling one charge mode (attempt %d/%d): %s",
-                    attempts,
-                    self._max_retry_attempts,
-                    str(err)
-                )
-                if attempts < self._max_retry_attempts:
-                    await asyncio.sleep(self._retry_delay)
+    async def _execute_turn_off(self) -> tuple[bool, dict]:
+        """Disable one charge mode."""
+        return await self._session_manager.send_command(
+            CMD_ONE_CHARGE,
+            0,
+            verify=True
+        )
 
     def _handle_state_update(self, state: dict) -> None:
         """Handle state update."""
@@ -287,57 +248,26 @@ class EveusOneChargeSwitch(BaseEveusSwitch):
             )
 
 class EveusResetCounterASwitch(BaseEveusSwitch):
-    """Reset counter switch with improved error handling."""
+    """Reset counter switch."""
 
     _attr_name = "Reset Counter A"
     _attr_icon = "mdi:counter"
     _attr_entity_category = EntityCategory.CONFIG
 
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        """Reset counter with retry logic."""
-        attempts = 0
-        while attempts < self._max_retry_attempts:
-            try:
-                success, result = await self._session_manager.send_command(
-                    CMD_RESET_COUNTER,
-                    0,
-                    verify=False
-                )
-                if success:
-                    self._is_on = False
-                    self._error_count = 0
-                    self.async_write_ha_state()
-                    return
-                    
-                attempts += 1
-                self._error_count += 1
-                _LOGGER.error(
-                    "Failed to reset counter (attempt %d/%d): %s",
-                    attempts,
-                    self._max_retry_attempts,
-                    result.get("error", "Unknown error")
-                )
-                if attempts < self._max_retry_attempts:
-                    await asyncio.sleep(self._retry_delay)
-                    
-            except Exception as err:
-                attempts += 1
-                self._error_count += 1
-                _LOGGER.error(
-                    "Error resetting counter (attempt %d/%d): %s",
-                    attempts,
-                    self._max_retry_attempts,
-                    str(err)
-                )
-                if attempts < self._max_retry_attempts:
-                    await asyncio.sleep(self._retry_delay)
+    async def _execute_turn_on(self) -> tuple[bool, dict]:
+        """Reset counter."""
+        return await self._session_manager.send_command(
+            CMD_RESET_COUNTER,
+            0,
+            verify=False
+        )
 
-    async def async_turn_off(self, **kwargs: Any) -> None:
+    async def _execute_turn_off(self) -> tuple[bool, dict]:
         """Reset command for off state."""
-        await self.async_turn_on()
+        return await self._execute_turn_on()
 
     def _handle_state_update(self, state: dict) -> None:
-        """Handle state update with validation."""
+        """Handle state update."""
         try:
             iem1_value = state.get("IEM1")
             if iem1_value in (None, "null", "", "undefined", "ERROR"):
@@ -398,6 +328,19 @@ async def async_setup_entry(
         except Exception as err:
             _LOGGER.error("Failed to update switches: %s", err)
 
+        # Update interval based on charging state
+        try:
+            is_charging = any(s.is_on for s in switches)
+            interval = UPDATE_INTERVAL_CHARGING if is_charging else UPDATE_INTERVAL_IDLE
+            
+            async_track_time_interval(
+                hass,
+                async_update_switches,
+                interval
+            )
+        except Exception as err:
+            _LOGGER.error("Failed to adjust update interval: %s", err)
+
     # Add entities
     async_add_entities(switches)
 
@@ -409,11 +352,3 @@ async def async_setup_entry(
         )
     else:
         await async_update_switches()
-
-    # Schedule periodic updates based on charging state
-    interval = UPDATE_INTERVAL_CHARGING if any(s.is_on for s in switches) else session_manager.get_update_interval()
-    async_track_time_interval(
-        hass,
-        async_update_switches,
-        interval
-    )
