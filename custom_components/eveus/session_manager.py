@@ -77,7 +77,6 @@ class SessionManager:
         
         # Pool configuration
         self._pool_size = 5
-        self._keepalive_timeout = 60
         self._session_timeout = ClientTimeout(
             total=COMMAND_TIMEOUT,
             connect=COMMAND_TIMEOUT / 3,
@@ -100,16 +99,14 @@ class SessionManager:
             _LOGGER.error("Error in periodic update: %s", str(err))
 
     async def _init_session(self) -> None:
-        """Initialize or reinitialize the session with proper configuration."""
+        """Initialize or reinitialize the session."""
         try:
             await self._cleanup_session()
 
             self._connection_pool = TCPConnector(
                 limit=self._pool_size,
                 enable_cleanup_closed=True,
-                keepalive_timeout=self._keepalive_timeout,
-                force_close=True,  # Added to prevent stale connections
-                ssl=False,
+                ssl=False
             )
 
             self._session = aiohttp.ClientSession(
@@ -134,8 +131,10 @@ class SessionManager:
         try:
             if self._session and not self._session.closed:
                 await self._session.close()
+                await asyncio.sleep(0.1)  # Allow time for cleanup
             if self._connection_pool and not self._connection_pool.closed:
                 await self._connection_pool.close()
+                await asyncio.sleep(0.1)  # Allow time for cleanup
         except Exception as err:
             _LOGGER.warning("Error during session cleanup: %s", str(err))
 
@@ -170,7 +169,6 @@ class SessionManager:
             for attempt in range(retry_count):
                 try:
                     async with self.get_session() as session:
-                        # Send command
                         response = await self._send_request(
                             session,
                             API_ENDPOINT_EVENT,
