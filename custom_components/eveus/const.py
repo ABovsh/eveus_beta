@@ -9,11 +9,6 @@ UPDATE_INTERVAL_CHARGING: Final = timedelta(seconds=10)
 UPDATE_INTERVAL_IDLE: Final = timedelta(seconds=120)
 UPDATE_INTERVAL_ERROR: Final = timedelta(seconds=30)
 
-MIN_CURRENT: Final = 8
-
-# Configuration
-CONF_MODEL: Final = "model"
-
 # Temperature thresholds
 TEMP_WARNING_BOX: Final = 60
 TEMP_CRITICAL_BOX: Final = 80
