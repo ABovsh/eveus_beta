@@ -2,14 +2,15 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Final
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -23,8 +24,8 @@ from homeassistant.const import (
     UnitOfTemperature,
     UnitOfTime,
     PERCENTAGE,
+    EVENT_HOMEASSISTANT_START,
 )
-from homeassistant.util import dt as dt_util
 
 from .const import (
     DOMAIN,
@@ -881,74 +882,42 @@ async def async_setup_entry(
         TimeToTargetSocSensor(session_manager, "Time to Target"),
     ]
 
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-) -> None:
-    """Set up Eveus sensors."""
-    session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
+    # Register sensors first to ensure they have hass attribute
+    async_add_entities(sensors, True)
 
-    sensors = [
-        EveusVoltageSensor(session_manager, "Voltage"),
-        EveusCurrentSensor(session_manager, "Current"),
-        EveusPowerSensor(session_manager, "Power"),
-        EveusCurrentSetSensor(session_manager, "Current Set"),
-        EveusSessionEnergySensor(session_manager, "Session Energy"),
-        EveusTotalEnergySensor(session_manager, "Total Energy"),
-        EveusStateSensor(session_manager, "State"),
-        EveusSubstateSensor(session_manager, "Substate"),
-        EveusEnabledSensor(session_manager, "Enabled"),
-        EveusGroundSensor(session_manager, "Ground"),
-        EveusBoxTemperatureSensor(session_manager, "Box Temperature"),
-        EveusPlugTemperatureSensor(session_manager, "Plug Temperature"),
-        EveusBatteryVoltageSensor(session_manager, "Battery Voltage"),
-        EveusSystemTimeSensor(session_manager, "System Time"),
-        EveusSessionTimeSensor(session_manager, "Session Time"),
-        EveusCounterAEnergySensor(session_manager, "Counter A Energy"),
-        EveusCounterBEnergySensor(session_manager, "Counter B Energy"),
-        EveusCounterACostSensor(session_manager, "Counter A Cost"),
-        EveusCounterBCostSensor(session_manager, "Counter B Cost"),
-        EVSocKwhSensor(session_manager, "SOC Energy"),
-        EVSocPercentSensor(session_manager, "SOC Percent"),
-        TimeToTargetSocSensor(session_manager, "Time to Target"),
-    ]
-
-    # Store entity references
+    # Store entity references after registration
     hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
         sensor.unique_id: sensor for sensor in sensors
     }
 
-    async def async_update_sensors(*_) -> None:
-        """Update all sensors with a single state fetch."""
+    @callback
+    def _async_update_sensors(*_) -> None:
+        """Update all sensors with single state fetch."""
         try:
-            state = await session_manager.get_state(force_refresh=True)
-            for sensor in sensors:
-                try:
-                    sensor._handle_state_update(state)
-                    sensor.async_write_ha_state()
-                except Exception as err:
-                    _LOGGER.error(
-                        "Error updating sensor %s: %s",
-                        sensor.name,
-                        str(err),
-                        exc_info=True
-                    )
+            if state := session_manager.last_state:
+                for sensor in sensors:
+                    try:
+                        sensor._handle_state_update(state)
+                    except Exception as err:
+                        _LOGGER.error(
+                            "Error updating sensor %s: %s",
+                            sensor.name,
+                            str(err),
+                            exc_info=True
+                        )
         except Exception as err:
             _LOGGER.error("Failed to update sensors: %s", err)
 
     # Initial update when Home Assistant starts
     if not hass.is_running:
         hass.bus.async_listen_once(
-            "homeassistant_start",
-            async_update_sensors
+            EVENT_HOMEASSISTANT_START,
+            _async_update_sensors
         )
 
     # Schedule periodic updates
-    async_track_time_interval(
+    return async_track_time_interval(
         hass,
-        async_update_sensors,
+        _async_update_sensors,
         UPDATE_INTERVAL
     )
-
-    async_add_entities(sensors, True)
