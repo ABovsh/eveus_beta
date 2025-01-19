@@ -28,6 +28,11 @@ from .const import (
 )
 from .session_manager import SessionManager
 
+from homeassistant.helpers.entity_registry import (
+    async_get as get_entity_registry,
+    async_entries_for_config_entry,
+)
+
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: Final = [
