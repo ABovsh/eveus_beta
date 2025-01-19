@@ -485,6 +485,8 @@ class EveusCounterBCostSensor(EveusEnergyCostSensor):
    """Counter B cost sensor implementation."""
    _attribute = ATTR_COUNTER_B_COST
 
+# Class update in sensor.py:
+# Class update in sensor.py:
 class EveusCommunicationSensor(BaseEveusSensor):
     """Enhanced communication quality sensor."""
 
@@ -496,33 +498,31 @@ class EveusCommunicationSensor(BaseEveusSensor):
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_icon = "mdi:wifi-check"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
-        self._last_successful = None
+        self._error_count = 0  # Initialize error count
 
     def _handle_state_update(self, state: dict) -> None:
         """Handle state update with delay detection."""
         try:
-            current_time = dt_util.utcnow()
-            
-            if self._session_manager.available:
-                self._last_successful = current_time
-                self._attr_native_value = 0
-            else:
-                if self._last_successful:
-                    self._attr_native_value = int((current_time - self._last_successful).total_seconds())
-                else:
-                    self._attr_native_value = 0
-
-            self._attr_extra_state_attributes = {
-                "available": self._session_manager.available,
-                "error_count": self._session_manager._error_count,
-                "last_successful_connection": self._last_successful.isoformat() if self._last_successful else None,
-                "connection_status": "Connected" if self._session_manager.available else "Disconnected"
-            }
-
+            last_update = self._session_manager.get_last_state_update()
+            current_time = dt_util.utcnow().timestamp()
+            self._attr_native_value = int(current_time - last_update)
         except Exception as err:
             self._error_count += 1
-            _LOGGER.error("Error updating communication state: %s", str(err))
+            _LOGGER.exception("Error updating communication state: %s", err)
 
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return the state attributes."""
+        return {
+            "available": self._session_manager.available,
+            "error_count": self._error_count,
+            "last_update": dt_util.utc_from_timestamp(
+                self._session_manager.get_last_state_update()
+            ).isoformat(),
+            "status": "Connected" if self._session_manager.available else "Disconnected",
+        }
+
+            
 class EveusStateSensor(BaseEveusSensor):
    """State sensor implementation."""
 
