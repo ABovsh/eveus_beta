@@ -404,24 +404,32 @@ class EveusTotalEnergySensor(EveusEnergySensor):
     _attribute = ATTR_TOTAL_ENERGY
 
 class EveusCounterEnergySensor(EveusEnergySensor):
-    """Energy counter sensor base class."""
+    """Base class for energy counter sensors."""
 
-    def _validate_value(self, value: float) -> bool:
-        """Validate energy counter value."""
-        if not super()._validate_value(value):
-            return False
-        
-        # Check for unrealistic jumps
-        if (self._previous_value is not None and 
-            abs(value - self._previous_value) > 10):  # 10 kWh jump threshold
-            _LOGGER.warning(
-                "Large energy counter jump detected: %f -> %f kWh",
-                self._previous_value,
-                value
+    def _handle_state_update(self, state: dict) -> None:
+        """Handle state update."""
+        try:
+            value = state.get(self._attribute)
+            if value in (None, "", "null"):
+                if not self._restored:
+                    self._attr_native_value = None
+                return
+
+            value = float(value)
+            if not self._validate_value(value):
+                return
+
+            self._attr_native_value = round(value, 2)
+            self._previous_value = self._attr_native_value
+            self._restored = False
+
+        except (TypeError, ValueError) as err:
+            self._error_count += 1
+            _LOGGER.error(
+                "Error converting value for %s: %s",
+                self.name,
+                str(err)
             )
-            return False
-            
-        return True
 
 class EveusCounterAEnergySensor(EveusCounterEnergySensor):
     """Counter A energy sensor implementation."""
@@ -486,7 +494,6 @@ class EveusCounterBCostSensor(EveusEnergyCostSensor):
    _attribute = ATTR_COUNTER_B_COST
 
 # Class update in sensor.py:
-# Class update in sensor.py:
 class EveusCommunicationSensor(BaseEveusSensor):
     """Enhanced communication quality sensor."""
 
@@ -498,30 +505,28 @@ class EveusCommunicationSensor(BaseEveusSensor):
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_icon = "mdi:wifi-check"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
-        self._error_count = 0  # Initialize error count
 
     def _handle_state_update(self, state: dict) -> None:
         """Handle state update with delay detection."""
         try:
-            last_update = self._session_manager.get_last_state_update()
-            current_time = dt_util.utcnow().timestamp()
+            last_update = self._session_manager._last_state_update
+            if not last_update:
+                self._attr_native_value = 0
+                return
+
+            current_time = time.time()
             self._attr_native_value = int(current_time - last_update)
+
+            self._attr_extra_state_attributes = {
+                "available": self._session_manager.available,
+                "error_count": self._session_manager._error_count,
+                "last_update": dt_util.utc_from_timestamp(last_update).isoformat() if last_update else None,
+                "status": "Connected" if self._session_manager.available else "Disconnected"
+            }
+
         except Exception as err:
             self._error_count += 1
-            _LOGGER.exception("Error updating communication state: %s", err)
-
-    @property
-    def extra_state_attributes(self) -> dict:
-        """Return the state attributes."""
-        return {
-            "available": self._session_manager.available,
-            "error_count": self._error_count,
-            "last_update": dt_util.utc_from_timestamp(
-                self._session_manager.get_last_state_update()
-            ).isoformat(),
-            "status": "Connected" if self._session_manager.available else "Disconnected",
-        }
-
+            _LOGGER.error("Error updating communication state: %s", str(err))
             
 class EveusStateSensor(BaseEveusSensor):
    """State sensor implementation."""
