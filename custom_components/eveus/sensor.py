@@ -849,6 +849,7 @@ async def async_setup_entry(
     session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
 
     sensors = [
+        EveusCommunicationSensor(session_manager, "Communication"),
         EveusVoltageSensor(session_manager, "Voltage"),
         EveusCurrentSensor(session_manager, "Current"),
         EveusPowerSensor(session_manager, "Power"),
