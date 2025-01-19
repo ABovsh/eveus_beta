@@ -349,6 +349,20 @@ class EveusCurrentSensor(BaseNumericSensor):
             
         return True
 
+class EveusCurrentSetSensor(BaseNumericSensor):
+    """Current set sensor implementation."""
+    
+    _attribute = ATTR_CURRENT_SET
+    _attr_device_class = SensorDeviceClass.CURRENT
+    _attr_native_unit_of_measurement = UnitOfElectricCurrent.AMPERE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 0
+
+    def __init__(self, session_manager, name: str) -> None:
+        super().__init__(session_manager, name)
+        self._min_value = float(session_manager.capabilities.get("min_current", 8))
+        self._max_value = float(session_manager.capabilities.get("max_current", 16))
+
 class EveusVoltageSensor(BaseNumericSensor):
     """Voltage sensor implementation."""
     
