@@ -87,7 +87,6 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
         self._attr_name = name
         self._attr_unique_id = f"{session_manager._host}_{name}"
         self.entity_id = f"sensor.eveus_{name.lower().replace(' ', '_')}"
-        self._attr_translation_key = f"{self._translation_prefix}_{name.lower().replace(' ', '_')}"
         self._previous_value = None
         self._restored = False
         self._error_count = 0
