@@ -1,4 +1,4 @@
-"""The Eveus integration."""
+"""Eveus integration with improved error handling and session management."""
 from __future__ import annotations
 
 import logging
@@ -13,8 +13,11 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers.storage import Store
+from homeassistant.helpers.entity_registry import async_get as get_entity_registry
+from homeassistant.helpers import device_registry as dr
 
-from .const import DOMAIN, UPDATE_INTERVAL
+from .const import DOMAIN, HELPER_EV_BATTERY_CAPACITY, HELPER_EV_INITIAL_SOC, HELPER_EV_SOC_CORRECTION, HELPER_EV_TARGET_SOC
 from .session_manager import SessionManager
 
 _LOGGER = logging.getLogger(__name__)
@@ -30,10 +33,34 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.data.setdefault(DOMAIN, {})
     return True
 
+async def validate_helper_entities(hass: HomeAssistant) -> tuple[bool, list[str]]:
+    """Validate required helper entities exist and are configured."""
+    required_helpers = [
+        HELPER_EV_BATTERY_CAPACITY,
+        HELPER_EV_INITIAL_SOC,
+        HELPER_EV_SOC_CORRECTION,
+        HELPER_EV_TARGET_SOC
+    ]
+    
+    missing_helpers = []
+    for helper in required_helpers:
+        if not hass.states.get(helper):
+            missing_helpers.append(helper)
+            
+    return len(missing_helpers) == 0, missing_helpers
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Eveus from a config entry."""
     try:
-        # Initialize session manager
+        # Validate helper entities
+        valid_helpers, missing = await validate_helper_entities(hass)
+        if not valid_helpers:
+            raise ConfigEntryNotReady(
+                f"Missing required helper entities: {', '.join(missing)}"
+            )
+
+        # Initialize session manager with storage
+        store = Store(hass, 1, f"{DOMAIN}_{entry.entry_id}_session")
         session_manager = SessionManager(
             hass=hass,
             host=entry.data[CONF_HOST],
@@ -42,26 +69,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             entry_id=entry.entry_id,
         )
 
-        # Test connection and get initial state
+        # Initialize session manager and test connection
         try:
-            initial_state = await session_manager.get_state()
+            await session_manager.initialize()
             
-            # Update entry data with firmware and station ID if needed
+            # Update entry data with device info
             data_update = {}
-            if "verFWMain" in initial_state:
-                data_update["firmware_version"] = initial_state["verFWMain"].strip()
-            if "stationId" in initial_state:
-                data_update["station_id"] = initial_state["stationId"].strip()
+            if session_manager.firmware_version:
+                data_update["firmware_version"] = session_manager.firmware_version
+            if session_manager.station_id:
+                data_update["station_id"] = session_manager.station_id
+            if session_manager.model:
+                data_update["model"] = session_manager.model
                 
             if data_update:
                 hass.config_entries.async_update_entry(
                     entry, 
                     data={**entry.data, **data_update}
                 )
+
+            # Update device registry
+            device_registry = dr.async_get(hass)
+            device_registry.async_get_or_create(
+                config_entry_id=entry.entry_id,
+                identifiers={(DOMAIN, entry.data[CONF_HOST])},
+                manufacturer="Eveus",
+                name=f"Eveus ({entry.data[CONF_HOST]})",
+                model=session_manager.model,
+                sw_version=session_manager.firmware_version,
+                configuration_url=f"http://{entry.data[CONF_HOST]}",
+            )
                 
         except Exception as err:
             await session_manager.close()
-            _LOGGER.error("Connection failed: %s", str(err))
+            _LOGGER.error("Failed to initialize session manager: %s", str(err))
             raise ConfigEntryNotReady from err
 
         # Store session manager and initialize data structure
@@ -69,6 +110,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "session_manager": session_manager,
             "title": entry.title,
             "options": entry.options.copy(),
+            "store": store,
             "entities": {
                 "sensor": {},
                 "switch": {},
@@ -89,26 +131,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryNotReady from err
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
+    """Unload a config entry with proper cleanup."""
     try:
         # Unload platforms
         unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
         if unload_ok:
-            # Get session manager and close it
-            session_manager = hass.data[DOMAIN][entry.entry_id].get("session_manager")
-            if session_manager:
-                await session_manager.close()
+            # Clean up entities
+            entity_registry = get_entity_registry(hass)
+            entries = entity_registry.entities.get_entries_for_config_entry(entry.entry_id)
+            
+            for entity_entry in entries:
+                entity_registry.async_remove(entity_entry.entity_id)
+
+            # Close session manager
+            session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
+            await session_manager.close()
+
+            # Clean up device registry
+            device_registry = dr.async_get(hass)
+            device_registry.async_remove_config_entry_device(
+                config_entry_id=entry.entry_id,
+                device_id=next(iter(device_registry.devices.keys()))
+            )
 
             # Remove entry data
             hass.data[DOMAIN].pop(entry.entry_id)
 
         return unload_ok
+        
     except Exception as err:
         _LOGGER.error("Error unloading entry: %s", str(err))
         return False
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload config entry."""
+    """Handle config entry reload."""
     await async_unload_entry(hass, entry)
     await async_setup_entry(hass, entry)
