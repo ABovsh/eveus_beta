@@ -78,17 +78,7 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
         self._attr_translation_key = f"{self._translation_prefix}_{name.lower().replace(' ', '_')}"
         self._previous_value = None
         self._restored = False
-        self._attr_should_poll = True
-
-    @property
-    def should_poll(self) -> bool:
-        """Return True as we want periodic updates."""
-        return True
-
-    @property
-    def scan_interval(self):
-        """Return update interval."""
-        return self._update_interval
+        self.hass = session_manager.hass
 
     async def async_added_to_hass(self) -> None:
         """Handle entity which will be added."""
@@ -103,9 +93,6 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
                     self._restored = True
                 except (TypeError, ValueError):
                     self._previous_value = state.state
-        
-        # Ensure first update happens immediately
-        await self.async_update()
 
     @property
     def device_info(self) -> dict[str, Any]:
@@ -124,6 +111,8 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional state attributes."""
+        from homeassistant.util import dt as dt_util
+        
         attrs = {
             "last_update": dt_util.as_local(
                 self._session_manager.last_successful_connection
@@ -882,42 +871,49 @@ async def async_setup_entry(
         TimeToTargetSocSensor(session_manager, "Time to Target"),
     ]
 
-    # Register sensors first to ensure they have hass attribute
-    async_add_entities(sensors, True)
-
-    # Store entity references after registration
+    # Store entity references
     hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
         sensor.unique_id: sensor for sensor in sensors
     }
 
-    @callback
-    def _async_update_sensors(*_) -> None:
-        """Update all sensors with single state fetch."""
+    # Add entities before setting up updates
+    await async_add_entities(sensors, True)
+
+    async def async_update_sensors(*_) -> None:
+        """Update all sensors."""
+        if not hass.is_running:
+            return
+
         try:
-            if state := session_manager.last_state:
-                for sensor in sensors:
-                    try:
-                        sensor._handle_state_update(state)
-                    except Exception as err:
-                        _LOGGER.error(
-                            "Error updating sensor %s: %s",
-                            sensor.name,
-                            str(err),
-                            exc_info=True
-                        )
+            state = await session_manager.get_state(force_refresh=True)
+            for sensor in sensors:
+                try:
+                    sensor._handle_state_update(state)
+                    sensor.async_write_ha_state()
+                except Exception as err:
+                    _LOGGER.error(
+                        "Error updating sensor %s: %s",
+                        sensor.name,
+                        str(err),
+                        exc_info=True
+                    )
         except Exception as err:
             _LOGGER.error("Failed to update sensors: %s", err)
 
-    # Initial update when Home Assistant starts
-    if not hass.is_running:
+    # Setup initial update
+    if not hass.state == "RUNNING":
         hass.bus.async_listen_once(
             EVENT_HOMEASSISTANT_START,
-            _async_update_sensors
+            async_update_sensors
         )
+    else:
+        await async_update_sensors()
 
     # Schedule periodic updates
-    return async_track_time_interval(
-        hass,
-        _async_update_sensors,
-        UPDATE_INTERVAL
+    hass.async_create_task(
+        async_track_time_interval(
+            hass,
+            async_update_sensors,
+            UPDATE_INTERVAL
+        )
     )
