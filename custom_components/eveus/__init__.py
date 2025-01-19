@@ -1,7 +1,10 @@
+# File: custom_components/eveus/__init__.py
 """The Eveus integration."""
 from __future__ import annotations
 
 import logging
+import asyncio
+from functools import partial
 from typing import Final
 
 from homeassistant.config_entries import ConfigEntry
@@ -65,14 +68,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 f"Missing required helper entities: {', '.join(missing)}"
             )
 
-        # Initialize session manager with storage
-        store = Store(hass, 1, f"{DOMAIN}_{entry.entry_id}_session")
-        session_manager = SessionManager(
-            hass=hass,
-            host=entry.data[CONF_HOST],
-            username=entry.data[CONF_USERNAME],
-            password=entry.data[CONF_PASSWORD],
-            entry_id=entry.entry_id,
+        # Initialize session manager in the executor
+        session_manager = await hass.async_add_executor_job(
+            partial(
+                SessionManager,
+                hass=hass,
+                host=entry.data[CONF_HOST],
+                username=entry.data[CONF_USERNAME],
+                password=entry.data[CONF_PASSWORD],
+                entry_id=entry.entry_id,
+            )
         )
 
         # Initialize session manager and test connection
@@ -118,7 +123,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "session_manager": session_manager,
             "title": entry.title,
             "options": entry.options.copy(),
-            "store": store,
             "entities": {
                 "sensor": {},
                 "switch": {},
