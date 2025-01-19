@@ -913,5 +913,25 @@ async def async_setup_entry(
         sensor.unique_id: sensor for sensor in sensors
     }
 
-    # Add entities
+    # Register update interval for all sensors
+    async def async_update_sensors(now=None):
+        """Update all sensors."""
+        try:
+            for sensor in sensors:
+                await sensor.async_update()
+        except Exception as err:
+            _LOGGER.error("Failed to update sensors: %s", err)
+
+    # Schedule updates every 30 seconds
+    if not hass.is_running:
+        hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_START, async_update_sensors
+        )
+    
+    async_track_time_interval(
+        hass,
+        async_update_sensors,
+        UPDATE_INTERVAL
+    )
+
     async_add_entities(sensors, True)
