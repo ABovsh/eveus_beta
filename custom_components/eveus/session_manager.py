@@ -20,6 +20,7 @@ from aiohttp import (
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.event import async_track_time_interval
 
 from .const import (
     DOMAIN,
@@ -28,6 +29,7 @@ from .const import (
     MAX_RETRIES,
     RETRY_DELAY,
     MIN_COMMAND_INTERVAL,
+    UPDATE_INTERVAL,
     API_ENDPOINT_MAIN,
     API_ENDPOINT_EVENT,
 )
@@ -59,6 +61,7 @@ class SessionManager:
         self._connection_pool: Optional[TCPConnector] = None
         self._base_url = f"http://{self._host}"
         self._last_state: Optional[dict] = None
+        self._last_update = 0
         
         # Connection state
         self._available = True
@@ -82,6 +85,20 @@ class SessionManager:
             sock_read=COMMAND_TIMEOUT / 2
         )
 
+        # Setup periodic updates
+        async_track_time_interval(
+            hass,
+            self._async_update_data,
+            UPDATE_INTERVAL
+        )
+
+    async def _async_update_data(self, *_) -> None:
+        """Update state periodically."""
+        try:
+            await self.get_state(force_refresh=True)
+        except Exception as err:
+            _LOGGER.error("Error in periodic update: %s", str(err))
+
     async def _init_session(self) -> None:
         """Initialize or reinitialize the session with proper configuration."""
         try:
@@ -91,6 +108,7 @@ class SessionManager:
                 limit=self._pool_size,
                 enable_cleanup_closed=True,
                 keepalive_timeout=self._keepalive_timeout,
+                force_close=True,  # Added to prevent stale connections
                 ssl=False,
             )
 
@@ -220,11 +238,14 @@ class SessionManager:
                     raise CommandError(f"Command failed after {retry_count} attempts")
 
     async def get_state(self, force_refresh: bool = False) -> dict[str, Any]:
-        """Get current state with error handling and optional caching."""
+        """Get current state with error handling and smart caching."""
+        current_time = time.time()
+
         try:
-            # Return cached state if available and not forcing refresh
+            # Check cache validity
             if not force_refresh and self._last_state is not None:
-                return self._last_state
+                if current_time - self._last_update < UPDATE_INTERVAL.total_seconds():
+                    return self._last_state
 
             async with self.get_session() as session:
                 response = await self._send_request(session, API_ENDPOINT_MAIN)
@@ -233,19 +254,21 @@ class SessionManager:
                 # Validate response structure
                 if not isinstance(data, dict):
                     raise ValueError("Invalid response format")
-                
-                # Update cache and success metrics
-                self._last_state = data
-                self._error_count = 0
-                self._current_retry_delay = RETRY_DELAY
-                self._last_successful_connection = dt_util.utcnow()
-                self._available = True
 
                 # Update firmware and station ID if available
                 if "verFWMain" in data:
                     self._firmware_version = data["verFWMain"].strip()
                 if "stationId" in data:
                     self._station_id = data["stationId"].strip()
+                
+                # Update cache and success metrics
+                self._last_state = data
+                self._last_update = current_time
+                self._error_count = 0
+                self._current_retry_delay = RETRY_DELAY
+                self._last_successful_connection = dt_util.utcnow()
+                self._available = True
+                
                 return data
 
         except Exception as err:
@@ -299,8 +322,7 @@ class SessionManager:
             elif command == "currentSet":
                 return state_data.get("currentSet") == value
             elif command == "rstEM1":
-                # Reset commands don't need verification
-                return True
+                return True  # Reset commands don't need verification
             return False
         except Exception as err:
             _LOGGER.error("Error verifying command: %s", str(err))
@@ -330,7 +352,6 @@ class SessionManager:
     def station_id(self) -> str | None:
         """Return the station ID."""
         return self._station_id
-    
     
     async def close(self) -> None:
         """Close all sessions and cleanup resources."""
