@@ -26,7 +26,6 @@ from .const import (
     MODEL_16A,
     MODEL_32A,
     MODELS,
-    CONF_MODEL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -36,7 +35,6 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Required(CONF_HOST): str,
         vol.Required(CONF_USERNAME): str,
         vol.Required(CONF_PASSWORD): str,
-        vol.Required(CONF_MODEL, default=MODEL_16A): vol.In(MODELS),
     }
 )
 
@@ -156,9 +154,8 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
                 "title": f"Eveus ({data[CONF_HOST]})",
                 "firmware_version": result.get("verFWMain", "Unknown").strip(),
                 "station_id": result.get("stationId", "Unknown").strip(),
-                "min_current": result.get("minCurrent", 8),
-                "max_current": result.get("curDesign", 16),
-                "model": data[CONF_MODEL],
+                "min_current": float(result.get("minCurrent", 8)),
+                "max_current": float(result.get("curDesign", 16)),
             }
             
             return device_info
