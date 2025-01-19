@@ -83,14 +83,19 @@ class BaseEveusSwitch(SwitchEntity, RestoreEntity):
             "configuration_url": f"http://{self._session_manager._host}",
         }
 
-    @property
+  @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional state attributes."""
-        return {
+        attrs = {
             "error_count": self._error_count,
-            "last_update": self._last_update.isoformat() if self._last_update else None,
             "restored": self._restored,
         }
+        if self._last_update is not None:
+            if isinstance(self._last_update, (int, float)):
+                attrs["last_update"] = dt_util.utc_from_timestamp(self._last_update).isoformat()
+            else:
+                attrs["last_update"] = self._last_update.isoformat()
+        return attrs
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn on with retry logic."""
@@ -176,7 +181,19 @@ class BaseEveusSwitch(SwitchEntity, RestoreEntity):
 
     def _handle_state_update(self, state: dict) -> None:
         """Handle state update."""
-        raise NotImplementedError
+        try:
+            if state.get(self._attribute) in (None, ""):
+                return
+            
+            self._is_on = bool(int(state.get(self._attribute, 0)))
+            self._last_update = dt_util.utcnow()
+            
+        except (TypeError, ValueError) as err:
+            self._error_count += 1
+            _LOGGER.error(
+                "Error parsing state value: %s",
+                str(err)
+            )
 
 class EveusStopChargingSwitch(BaseEveusSwitch):
     """Charging control switch."""
