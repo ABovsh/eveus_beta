@@ -486,53 +486,42 @@ class EveusCounterBCostSensor(EveusEnergyCostSensor):
    _attribute = ATTR_COUNTER_B_COST
 
 class EveusCommunicationSensor(BaseEveusSensor):
-   """Enhanced communication quality sensor."""
+    """Enhanced communication quality sensor."""
 
-   _attr_name = "Communication"
-   _attr_entity_category = EntityCategory.DIAGNOSTIC
-   _attr_icon = "mdi:wifi-check"
-   _attr_device_class = SensorDeviceClass.DURATION
-   _attr_native_unit_of_measurement = "s"
-   _attr_state_class = SensorStateClass.MEASUREMENT
+    def __init__(self, session_manager, name: str) -> None:
+        """Initialize communication sensor."""
+        super().__init__(session_manager, name)
+        self._attr_device_class = SensorDeviceClass.DURATION
+        self._attr_native_unit_of_measurement = "s"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_icon = "mdi:wifi-check"
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+        self._last_successful = None
 
-   def _handle_state_update(self, state: dict) -> None:
-       """Handle state update with delay detection."""
-       try:
-           last_update = self._session_manager._last_state_update
-           current_time = time.time()
-           
-           # Calculate seconds since last update
-           seconds_since_update = int(current_time - last_update) if last_update else 0
-           self._attr_native_value = seconds_since_update
-           
-           # Check for delayed updates
-           expected_interval = self._session_manager.get_update_interval().total_seconds()
-           if seconds_since_update > expected_interval * 2:
-               _LOGGER.warning(
-                   "Update delay detected: %ss (expected: %ss)",
-                   seconds_since_update,
-                   expected_interval
-               )
-               
-           self._attr_extra_state_attributes = {
-               **self.extra_state_attributes,
-               "last_update": dt_util.as_local(
-                   dt_util.utc_from_timestamp(last_update)
-               ).isoformat() if last_update else None,
-               "update_interval": expected_interval,
-               "delay_warning": seconds_since_update > expected_interval * 2,
-               "available": self._session_manager.available,
-               "error_count": self._session_manager._error_count,
-               "total_requests": len(self._session_manager._command_timestamps),
-               "last_successful_connection": (
-                   self._session_manager.last_successful_connection.isoformat() 
-                   if self._session_manager.last_successful_connection else None
-               ),
-           }
+    def _handle_state_update(self, state: dict) -> None:
+        """Handle state update with delay detection."""
+        try:
+            current_time = dt_util.utcnow()
+            
+            if self._session_manager.available:
+                self._last_successful = current_time
+                self._attr_native_value = 0
+            else:
+                if self._last_successful:
+                    self._attr_native_value = int((current_time - self._last_successful).total_seconds())
+                else:
+                    self._attr_native_value = 0
 
-       except Exception as err:
-           self._error_count += 1
-           _LOGGER.error("Error updating communication state: %s", str(err))
+            self._attr_extra_state_attributes = {
+                "available": self._session_manager.available,
+                "error_count": self._session_manager._error_count,
+                "last_successful_connection": self._last_successful.isoformat() if self._last_successful else None,
+                "connection_status": "Connected" if self._session_manager.available else "Disconnected"
+            }
+
+        except Exception as err:
+            self._error_count += 1
+            _LOGGER.error("Error updating communication state: %s", str(err))
 
 class EveusStateSensor(BaseEveusSensor):
    """State sensor implementation."""
