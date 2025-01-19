@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+import asyncio
+from datetime import datetime, timedelta
 from typing import Any, Final
 
 from homeassistant.core import HomeAssistant
@@ -821,7 +822,6 @@ async def async_setup_entry(
     """Set up Eveus sensors."""
     session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
 
-    # Create sensors list without initializing state
     sensors = [
         EveusVoltageSensor(session_manager, "Voltage"),
         EveusCurrentSensor(session_manager, "Current"),
@@ -853,34 +853,44 @@ async def async_setup_entry(
     }
 
     # Define update function with batched updates
-    async def async_update_sensors(event_time=None) -> None:
+    async def async_update_sensors(*_) -> None:
         """Update all sensors efficiently."""
         if not hass.is_running:
             return
 
         try:
             state = await session_manager.get_state(force_refresh=True)
-            update_tasks = []
             
-            # Split sensors into batches of 5 to prevent timeout
+            # Process sensors in batches
             batch_size = 5
             for i in range(0, len(sensors), batch_size):
                 batch = sensors[i:i + batch_size]
+                update_tasks = []
+                
                 for sensor in batch:
-                    sensor._handle_state_update(state)
-                    sensor.async_write_ha_state()
-                # Small delay between batches to prevent overload
+                    try:
+                        sensor._handle_state_update(state)
+                        sensor.async_write_ha_state()
+                    except Exception as err:
+                        _LOGGER.error(
+                            "Error updating sensor %s: %s",
+                            sensor.name,
+                            str(err),
+                            exc_info=True
+                        )
+                
+                # Small delay between batches
                 if i + batch_size < len(sensors):
                     await asyncio.sleep(0.1)
                     
         except Exception as err:
             _LOGGER.error("Failed to update sensors: %s", err)
 
-    # Add entities
+    # Add entities first
     async_add_entities(sensors)
 
     # Setup initial update
-    if not hass.state == "RUNNING":
+    if not hass.is_running:
         hass.bus.async_listen_once(
             EVENT_HOMEASSISTANT_START,
             async_update_sensors
@@ -888,9 +898,9 @@ async def async_setup_entry(
     else:
         await async_update_sensors()
 
-    # Schedule periodic updates with a small offset to prevent collisions
+    # Schedule periodic updates
     async_track_time_interval(
         hass,
         async_update_sensors,
-        timedelta(seconds=31)  # Slightly longer than default to prevent overlap
+        UPDATE_INTERVAL
     )
