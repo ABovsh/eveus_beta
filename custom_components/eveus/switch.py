@@ -1,4 +1,4 @@
-# Complete implementation of switch.py with all improvements
+# File: custom_components/eveus/switch.py
 """Support for Eveus switches with improved error handling."""
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.util import dt as dt_util
 
 from .const import (
     DOMAIN,
@@ -48,12 +49,10 @@ class BaseEveusSwitch(SwitchEntity, RestoreEntity):
         """Handle entity added to HA."""
         await super().async_added_to_hass()
         
-        # Restore previous state
         if last_state := await self.async_get_last_state():
             self._is_on = last_state.state == "on"
             self._restored = True
 
-        # Register with session manager
         await self._session_manager.register_entity(self)
 
     async def async_will_remove_from_hass(self) -> None:
@@ -75,15 +74,15 @@ class BaseEveusSwitch(SwitchEntity, RestoreEntity):
         """Return device information."""
         return {
             "identifiers": {(DOMAIN, self._session_manager._host)},
-            "name": "Eveus EV Charger",
+            "name": "Eveus",
             "manufacturer": "Eveus",
-            "model": self._session_manager.model,
+            "model": "Eveus",
             "sw_version": self._session_manager.firmware_version,
-            "serial_number": self._session_manager.station_id,
+            "hw_version": f"Current range: {self._session_manager.capabilities['min_current']}-{self._session_manager.capabilities['max_current']}A",
             "configuration_url": f"http://{self._session_manager._host}",
         }
 
-  @property
+    @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional state attributes."""
         attrs = {
@@ -97,27 +96,32 @@ class BaseEveusSwitch(SwitchEntity, RestoreEntity):
                 attrs["last_update"] = self._last_update.isoformat()
         return attrs
 
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn on with retry logic."""
+    async def _execute_command(self, command: bool) -> None:
+        """Execute turn on/off command with retry logic."""
+        method = self._execute_turn_on if command else self._execute_turn_off
         attempts = 0
+        
         while attempts < self._max_retry_attempts:
             try:
-                success, result = await self._execute_turn_on()
+                success, result = await method()
                 if success:
-                    self._is_on = True
+                    self._is_on = command
                     self._error_count = 0
+                    self._last_update = dt_util.utcnow()
                     self.async_write_ha_state()
                     return
                     
                 attempts += 1
                 self._error_count += 1
                 _LOGGER.error(
-                    "Failed to turn on %s (attempt %d/%d): %s",
+                    "Failed to turn %s %s (attempt %d/%d): %s",
+                    "on" if command else "off",
                     self.name,
                     attempts,
                     self._max_retry_attempts,
                     result.get("error", "Unknown error")
                 )
+                
                 if attempts < self._max_retry_attempts:
                     await asyncio.sleep(self._retry_delay)
                     
@@ -125,7 +129,8 @@ class BaseEveusSwitch(SwitchEntity, RestoreEntity):
                 attempts += 1
                 self._error_count += 1
                 _LOGGER.error(
-                    "Error turning on %s (attempt %d/%d): %s",
+                    "Error turning %s %s (attempt %d/%d): %s",
+                    "on" if command else "off",
                     self.name,
                     attempts,
                     self._max_retry_attempts,
@@ -134,42 +139,13 @@ class BaseEveusSwitch(SwitchEntity, RestoreEntity):
                 if attempts < self._max_retry_attempts:
                     await asyncio.sleep(self._retry_delay)
 
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn on with retry logic."""
+        await self._execute_command(True)
+
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off with retry logic."""
-        attempts = 0
-        while attempts < self._max_retry_attempts:
-            try:
-                success, result = await self._execute_turn_off()
-                if success:
-                    self._is_on = False
-                    self._error_count = 0
-                    self.async_write_ha_state()
-                    return
-                    
-                attempts += 1
-                self._error_count += 1
-                _LOGGER.error(
-                    "Failed to turn off %s (attempt %d/%d): %s",
-                    self.name,
-                    attempts,
-                    self._max_retry_attempts,
-                    result.get("error", "Unknown error")
-                )
-                if attempts < self._max_retry_attempts:
-                    await asyncio.sleep(self._retry_delay)
-                    
-            except Exception as err:
-                attempts += 1
-                self._error_count += 1
-                _LOGGER.error(
-                    "Error turning off %s (attempt %d/%d): %s",
-                    self.name,
-                    attempts,
-                    self._max_retry_attempts,
-                    str(err)
-                )
-                if attempts < self._max_retry_attempts:
-                    await asyncio.sleep(self._retry_delay)
+        await self._execute_command(False)
 
     async def _execute_turn_on(self) -> tuple[bool, dict]:
         """Execute turn on command."""
@@ -179,28 +155,13 @@ class BaseEveusSwitch(SwitchEntity, RestoreEntity):
         """Execute turn off command."""
         raise NotImplementedError
 
-    def _handle_state_update(self, state: dict) -> None:
-        """Handle state update."""
-        try:
-            if state.get(self._attribute) in (None, ""):
-                return
-            
-            self._is_on = bool(int(state.get(self._attribute, 0)))
-            self._last_update = dt_util.utcnow()
-            
-        except (TypeError, ValueError) as err:
-            self._error_count += 1
-            _LOGGER.error(
-                "Error parsing state value: %s",
-                str(err)
-            )
-
 class EveusStopChargingSwitch(BaseEveusSwitch):
     """Charging control switch."""
 
     _attr_name = "Stop Charging"
     _attr_icon = "mdi:ev-station"
     _attr_entity_category = EntityCategory.CONFIG
+    _attribute = CMD_EVSE_ENABLED
 
     async def _execute_turn_on(self) -> tuple[bool, dict]:
         """Execute charging enable."""
@@ -218,24 +179,13 @@ class EveusStopChargingSwitch(BaseEveusSwitch):
             verify=True
         )
 
-    def _handle_state_update(self, state: dict) -> None:
-        """Handle state update."""
-        try:
-            self._is_on = bool(state.get("evseEnabled"))
-            self._last_update = self.hass.loop.time()
-        except (TypeError, ValueError) as err:
-            self._error_count += 1
-            _LOGGER.error(
-                "Error parsing evseEnabled state: %s",
-                str(err)
-            )
-
 class EveusOneChargeSwitch(BaseEveusSwitch):
     """One charge mode switch."""
 
     _attr_name = "One Charge"
     _attr_icon = "mdi:lightning-bolt"
     _attr_entity_category = EntityCategory.CONFIG
+    _attribute = CMD_ONE_CHARGE
 
     async def _execute_turn_on(self) -> tuple[bool, dict]:
         """Enable one charge mode."""
@@ -253,24 +203,13 @@ class EveusOneChargeSwitch(BaseEveusSwitch):
             verify=True
         )
 
-    def _handle_state_update(self, state: dict) -> None:
-        """Handle state update."""
-        try:
-            self._is_on = bool(state.get("oneCharge"))
-            self._last_update = self.hass.loop.time()
-        except (TypeError, ValueError) as err:
-            self._error_count += 1
-            _LOGGER.error(
-                "Error parsing oneCharge state: %s",
-                str(err)
-            )
-
 class EveusResetCounterASwitch(BaseEveusSwitch):
     """Reset counter switch."""
 
     _attr_name = "Reset Counter A"
     _attr_icon = "mdi:counter"
     _attr_entity_category = EntityCategory.CONFIG
+    _attribute = CMD_RESET_COUNTER
 
     async def _execute_turn_on(self) -> tuple[bool, dict]:
         """Reset counter."""
@@ -284,29 +223,12 @@ class EveusResetCounterASwitch(BaseEveusSwitch):
         """Reset command for off state."""
         return await self._execute_turn_on()
 
-    def _handle_state_update(self, state: dict) -> None:
-        """Handle state update."""
-        try:
-            iem1_value = state.get("IEM1")
-            if iem1_value in (None, "null", "", "undefined", "ERROR"):
-                self._is_on = False
-            else:
-                self._is_on = float(iem1_value) != 0
-            self._last_update = self.hass.loop.time()
-        except (TypeError, ValueError) as err:
-            self._error_count += 1
-            _LOGGER.error(
-                "Error parsing IEM1 state: %s",
-                str(err)
-            )
-            self._is_on = False
-
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Eveus switches with improved error handling."""
+    """Set up Eveus switches."""
     session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
 
     switches = [
@@ -315,7 +237,6 @@ async def async_setup_entry(
         EveusResetCounterASwitch(session_manager),
     ]
 
-    # Store entity references
     hass.data[DOMAIN][entry.entry_id]["entities"]["switch"] = {
         switch.unique_id: switch for switch in switches
     }
@@ -326,47 +247,39 @@ async def async_setup_entry(
             return
 
         try:
-            # Get state once for all switches
+            # Get current state
             state = await session_manager.get_state(force_refresh=True)
             
+            # Update switches
             for switch in switches:
                 try:
-                    switch._handle_state_update(state)
-                    switch.async_write_ha_state()
+                    if state.get(switch._attribute) is not None:
+                        switch._is_on = bool(int(state.get(switch._attribute, 0)))
+                        switch._last_update = dt_util.utcnow()
+                        switch.async_write_ha_state()
                 except Exception as err:
                     _LOGGER.error(
                         "Error updating switch %s: %s",
                         switch.name,
-                        str(err),
-                        exc_info=True
+                        str(err)
                     )
-                
                 await asyncio.sleep(0.1)
-                    
-        except Exception as err:
-            _LOGGER.error("Failed to update switches: %s", err)
 
-        # Update interval based on charging state
-        try:
-            is_charging = any(s.is_on for s in switches)
-            interval = UPDATE_INTERVAL_CHARGING if is_charging else UPDATE_INTERVAL_IDLE
-            
-            async_track_time_interval(
-                hass,
-                async_update_switches,
-                interval
-            )
         except Exception as err:
-            _LOGGER.error("Failed to adjust update interval: %s", err)
+            _LOGGER.error("Failed to update switches: %s", str(err))
 
-    # Add entities
     async_add_entities(switches)
 
-    # Setup initial update
-    if not hass.is_running:
+    if hass.is_running:
+        await async_update_switches()
+    else:
         hass.bus.async_listen_once(
             "homeassistant_start",
             async_update_switches
         )
-    else:
-        await async_update_switches()
+
+    async_track_time_interval(
+        hass,
+        async_update_switches,
+        UPDATE_INTERVAL_IDLE
+    )
