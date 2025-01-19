@@ -1,21 +1,14 @@
-"""Session manager for Eveus integration with connection pooling."""
+"""Optimized session manager for Eveus integration."""
 from __future__ import annotations
 
 import logging
 import asyncio
 import time
 from typing import Any, Optional
-from datetime import datetime, timedelta
-from contextlib import asynccontextmanager
+from datetime import datetime
 
 import aiohttp
-from aiohttp import (
-    ClientSession,
-    ClientTimeout,
-    TCPConnector,
-    ClientResponse,
-    ClientError
-)
+from aiohttp import ClientTimeout, ClientError, ClientResponse, ClientSession
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
@@ -24,20 +17,19 @@ from homeassistant.helpers.event import async_track_time_interval
 
 from .const import (
     DOMAIN,
-    COMMAND_TIMEOUT,
-    UPDATE_TIMEOUT,
-    MAX_RETRIES,
-    RETRY_DELAY,
-    MIN_COMMAND_INTERVAL,
     UPDATE_INTERVAL,
     API_ENDPOINT_MAIN,
     API_ENDPOINT_EVENT,
+    COMMAND_TIMEOUT,
+    MAX_RETRIES,
+    RETRY_DELAY,
+    MIN_COMMAND_INTERVAL,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 class SessionManager:
-    """Manages API sessions with connection pooling and error recovery."""
+    """Optimized session manager for Eveus."""
 
     def __init__(
         self,
@@ -56,32 +48,25 @@ class SessionManager:
         self._firmware_version = None
         self._station_id = None
         
-        # Session management
-        self._session: Optional[ClientSession] = None
-        self._connection_pool: Optional[TCPConnector] = None
+        # Basic state management
         self._base_url = f"http://{self._host}"
         self._last_state: Optional[dict] = None
         self._last_update = 0
+        self._request_count = 0
         
         # Connection state
         self._available = True
-        self._last_connection_attempt = 0
+        self._last_command_time = 0
         self._error_count = 0
         self._current_retry_delay = RETRY_DELAY
         self._last_successful_connection: Optional[datetime] = None
         
-        # Locks
-        self._session_lock = asyncio.Lock()
-        self._command_lock = asyncio.Lock()
-        self._last_command_time = 0
-        
-        # Pool configuration
-        self._pool_size = 5
-        self._session_timeout = ClientTimeout(
+        # Timeouts
+        self._timeout = ClientTimeout(
             total=COMMAND_TIMEOUT,
-            connect=COMMAND_TIMEOUT / 3,
-            sock_connect=COMMAND_TIMEOUT / 3,
-            sock_read=COMMAND_TIMEOUT / 2
+            connect=3,
+            sock_connect=3,
+            sock_read=5
         )
 
         # Setup periodic updates
@@ -98,59 +83,6 @@ class SessionManager:
         except Exception as err:
             _LOGGER.error("Error in periodic update: %s", str(err))
 
-    async def _init_session(self) -> None:
-        """Initialize or reinitialize the session."""
-        try:
-            await self._cleanup_session()
-
-            self._connection_pool = TCPConnector(
-                limit=self._pool_size,
-                enable_cleanup_closed=True,
-                ssl=False
-            )
-
-            self._session = aiohttp.ClientSession(
-                timeout=self._session_timeout,
-                connector=self._connection_pool,
-                raise_for_status=True,
-                auth=aiohttp.BasicAuth(self._username, self._password),
-            )
-
-            # Reset state
-            self._error_count = 0
-            self._current_retry_delay = RETRY_DELAY
-            self._available = True
-
-        except Exception as err:
-            _LOGGER.error("Failed to initialize session: %s", str(err))
-            self._available = False
-            raise
-
-    async def _cleanup_session(self) -> None:
-        """Cleanup existing session and pool."""
-        try:
-            if self._session and not self._session.closed:
-                await self._session.close()
-                await asyncio.sleep(0.1)  # Allow time for cleanup
-            if self._connection_pool and not self._connection_pool.closed:
-                await self._connection_pool.close()
-                await asyncio.sleep(0.1)  # Allow time for cleanup
-        except Exception as err:
-            _LOGGER.warning("Error during session cleanup: %s", str(err))
-
-    @asynccontextmanager
-    async def get_session(self) -> ClientSession:
-        """Get an active session with automatic retry and error handling."""
-        async with self._session_lock:
-            try:
-                if not self._session or self._session.closed:
-                    await self._init_session()
-                yield self._session
-            except Exception as err:
-                _LOGGER.error("Session error: %s", str(err))
-                self._available = False
-                raise
-
     async def send_command(
         self,
         command: str,
@@ -158,24 +90,29 @@ class SessionManager:
         verify: bool = True,
         retry_count: int = MAX_RETRIES,
     ) -> tuple[bool, dict[str, Any]]:
-        """Send command with comprehensive error handling and verification."""
-        async with self._command_lock:
-            # Rate limiting
-            current_time = time.time()
-            time_since_last = current_time - self._last_command_time
-            if time_since_last < MIN_COMMAND_INTERVAL:
-                await asyncio.sleep(MIN_COMMAND_INTERVAL - time_since_last)
+        """Send command with error handling and verification."""
+        current_time = time.time()
+        
+        # Rate limiting
+        time_since_last = current_time - self._last_command_time
+        if time_since_last < MIN_COMMAND_INTERVAL:
+            await asyncio.sleep(MIN_COMMAND_INTERVAL - time_since_last)
 
-            for attempt in range(retry_count):
-                try:
-                    async with self.get_session() as session:
-                        response = await self._send_request(
-                            session,
-                            API_ENDPOINT_EVENT,
-                            data={command: value, "pageevent": command},
-                        )
-                        
+        for attempt in range(retry_count):
+            try:
+                self._request_count += 1
+                async with aiohttp.ClientSession(
+                    auth=aiohttp.BasicAuth(self._username, self._password),
+                    timeout=self._timeout,
+                ) as session:
+                    async with session.post(
+                        f"{self._base_url}{API_ENDPOINT_EVENT}",
+                        data={command: value, "pageevent": command},
+                        ssl=False,
+                    ) as response:
+                        response.raise_for_status()
                         response_text = await response.text()
+
                         if "error" in response_text.lower():
                             raise CommandError(f"Error in response: {response_text}")
 
@@ -194,115 +131,69 @@ class SessionManager:
                         
                         return True, {"response": response_text}
 
-                except CommandError as err:
-                    _LOGGER.error(
-                        "Command error for %s (attempt %d/%d): %s",
-                        command,
-                        attempt + 1,
-                        retry_count,
-                        str(err)
-                    )
-                except asyncio.TimeoutError:
-                    _LOGGER.warning(
-                        "Timeout sending command %s (attempt %d/%d)",
-                        command,
-                        attempt + 1,
-                        retry_count
-                    )
-                except ClientError as err:
-                    _LOGGER.warning(
-                        "Network error for command %s (attempt %d/%d): %s",
-                        command,
-                        attempt + 1,
-                        retry_count,
-                        str(err)
-                    )
-                except Exception as err:
-                    _LOGGER.error(
-                        "Unexpected error sending command %s (attempt %d/%d): %s",
-                        command,
-                        attempt + 1,
-                        retry_count,
-                        str(err),
-                        exc_info=True
-                    )
+            except Exception as err:
+                _LOGGER.error(
+                    "Command error for %s (attempt %d/%d): %s",
+                    command,
+                    attempt + 1,
+                    retry_count,
+                    str(err)
+                )
+                self._error_count += 1
 
                 if attempt + 1 < retry_count:
                     await asyncio.sleep(self._current_retry_delay)
                     self._current_retry_delay = min(self._current_retry_delay * 2, 60)
                 else:
-                    self._error_count += 1
                     self._available = self._error_count < 3
-                    raise CommandError(f"Command failed after {retry_count} attempts")
+                    return False, {"error": str(err)}
 
     async def get_state(self, force_refresh: bool = False) -> dict[str, Any]:
-        """Get current state with error handling and smart caching."""
+        """Get current state with smart caching."""
         current_time = time.time()
 
+        # Use cache if valid and not forcing refresh
+        if not force_refresh and self._last_state is not None:
+            if current_time - self._last_update < UPDATE_INTERVAL.total_seconds():
+                return self._last_state
+
         try:
-            # Check cache validity
-            if not force_refresh and self._last_state is not None:
-                if current_time - self._last_update < UPDATE_INTERVAL.total_seconds():
-                    return self._last_state
+            self._request_count += 1
+            async with aiohttp.ClientSession(
+                auth=aiohttp.BasicAuth(self._username, self._password),
+                timeout=self._timeout,
+            ) as session:
+                async with session.post(
+                    f"{self._base_url}{API_ENDPOINT_MAIN}",
+                    ssl=False,
+                ) as response:
+                    response.raise_for_status()
+                    data = await response.json()
 
-            async with self.get_session() as session:
-                response = await self._send_request(session, API_ENDPOINT_MAIN)
-                data = await response.json()
-                
-                # Validate response structure
-                if not isinstance(data, dict):
-                    raise ValueError("Invalid response format")
+                    # Validate response
+                    if not isinstance(data, dict):
+                        raise ValueError("Invalid response format")
 
-                # Update firmware and station ID if available
-                if "verFWMain" in data:
-                    self._firmware_version = data["verFWMain"].strip()
-                if "stationId" in data:
-                    self._station_id = data["stationId"].strip()
-                
-                # Update cache and success metrics
-                self._last_state = data
-                self._last_update = current_time
-                self._error_count = 0
-                self._current_retry_delay = RETRY_DELAY
-                self._last_successful_connection = dt_util.utcnow()
-                self._available = True
-                
-                return data
+                    # Update device info
+                    if "verFWMain" in data:
+                        self._firmware_version = data["verFWMain"].strip()
+                    if "stationId" in data:
+                        self._station_id = data["stationId"].strip()
+                    
+                    # Update state tracking
+                    self._last_state = data
+                    self._last_update = current_time
+                    self._error_count = 0
+                    self._current_retry_delay = RETRY_DELAY
+                    self._last_successful_connection = dt_util.utcnow()
+                    self._available = True
+                    
+                    return data
 
         except Exception as err:
             self._error_count += 1
             self._available = self._error_count < 3
             _LOGGER.error("Error getting state: %s", str(err))
-            raise
-
-    async def _send_request(
-        self,
-        session: ClientSession,
-        endpoint: str,
-        method: str = "POST",
-        **kwargs
-    ) -> ClientResponse:
-        """Send request with proper error handling."""
-        url = f"{self._base_url}{endpoint}"
-        
-        try:
-            response = await session.request(
-                method,
-                url,
-                timeout=kwargs.pop('timeout', self._session_timeout),
-                ssl=False,
-                **kwargs
-            )
-            return response
-
-        except asyncio.TimeoutError as err:
-            _LOGGER.error("Timeout accessing %s: %s", url, str(err))
-            raise
-        except ClientError as err:
-            _LOGGER.error("Network error accessing %s: %s", url, str(err))
-            raise
-        except Exception as err:
-            _LOGGER.error("Unexpected error accessing %s: %s", url, str(err))
             raise
 
     def _verify_command(
@@ -328,40 +219,38 @@ class SessionManager:
 
     @property
     def available(self) -> bool:
-        """Return if the device is available."""
+        """Return if device is available."""
         return self._available
 
     @property
     def last_successful_connection(self) -> Optional[datetime]:
-        """Return the last successful connection time."""
+        """Return last successful connection time."""
         return self._last_successful_connection
 
     @property
     def last_state(self) -> Optional[dict[str, Any]]:
-        """Return the last known state."""
+        """Return last known state."""
         return self._last_state
 
     @property
     def firmware_version(self) -> str | None:
-        """Return the firmware version."""
+        """Return firmware version."""
         return self._firmware_version
 
     @property
     def station_id(self) -> str | None:
-        """Return the station ID."""
+        """Return station ID."""
         return self._station_id
-    
+
+    @property
+    def request_count(self) -> int:
+        """Return total request count."""
+        return self._request_count
+
     async def close(self) -> None:
-        """Close all sessions and cleanup resources."""
-        try:
-            await self._cleanup_session()
-        except Exception as err:
-            _LOGGER.error("Error closing session manager: %s", str(err))
-        finally:
-            self._session = None
-            self._connection_pool = None
-            self._available = False
-            self._last_state = None
+        """Close session manager."""
+        self._available = False
+        self._last_state = None
 
 
 class CommandError(HomeAssistantError):
