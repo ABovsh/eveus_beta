@@ -1,4 +1,4 @@
-"""Eveus integration with improved error handling and session management."""
+"""The Eveus integration."""
 from __future__ import annotations
 
 import logging
@@ -17,7 +17,13 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.entity_registry import async_get as get_entity_registry
 from homeassistant.helpers import device_registry as dr
 
-from .const import DOMAIN, HELPER_EV_BATTERY_CAPACITY, HELPER_EV_INITIAL_SOC, HELPER_EV_SOC_CORRECTION, HELPER_EV_TARGET_SOC
+from .const import (
+    DOMAIN,
+    HELPER_EV_BATTERY_CAPACITY,
+    HELPER_EV_INITIAL_SOC,
+    HELPER_EV_SOC_CORRECTION,
+    HELPER_EV_TARGET_SOC,
+)
 from .session_manager import SessionManager
 
 _LOGGER = logging.getLogger(__name__)
@@ -73,14 +79,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         try:
             await session_manager.initialize()
             
-            # Update entry data with device info
+            # Update entry data
             data_update = {}
             if session_manager.firmware_version:
                 data_update["firmware_version"] = session_manager.firmware_version
             if session_manager.station_id:
                 data_update["station_id"] = session_manager.station_id
-            if session_manager.model:
-                data_update["model"] = session_manager.model
+            if session_manager.capabilities:
+                data_update["min_current"] = session_manager.capabilities["min_current"]
+                data_update["max_current"] = session_manager.capabilities["max_current"]
                 
             if data_update:
                 hass.config_entries.async_update_entry(
@@ -95,9 +102,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 identifiers={(DOMAIN, entry.data[CONF_HOST])},
                 manufacturer="Eveus",
                 name=f"Eveus ({entry.data[CONF_HOST]})",
-                model=session_manager.model,
+                model=f"Eveus {session_manager.capabilities['min_current']}-{session_manager.capabilities['max_current']}A",
                 sw_version=session_manager.firmware_version,
                 configuration_url=f"http://{entry.data[CONF_HOST]}",
+                hw_version=f"Current range: {session_manager.capabilities['min_current']}-{session_manager.capabilities['max_current']}A"
             )
                 
         except Exception as err:
@@ -131,13 +139,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryNotReady from err
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload a config entry."""
     try:
         # Unload platforms
         unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
         if unload_ok:
             # Clean up entities
-            entity_registry = er.async_get(hass)
+            entity_registry = get_entity_registry(hass)
             entity_entries = [
                 entry for entry in entity_registry.entities.values()
                 if entry.config_entry_id == entry.entry_id
