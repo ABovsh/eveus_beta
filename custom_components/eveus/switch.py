@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 from typing import Any, Final
 
 from homeassistant.components.switch import SwitchEntity
@@ -9,6 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import EntityCategory
+from homeassistant.helpers.event import async_track_time_interval
 
 from .const import (
     DOMAIN,
@@ -17,7 +19,6 @@ from .const import (
     CMD_RESET_COUNTER,
     UPDATE_INTERVAL,
 )
-from .session_manager import SessionManager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,14 +26,14 @@ class BaseEveusSwitch(SwitchEntity):
     """Base class for Eveus switches."""
 
     _attr_has_entity_name: Final = True
-    _attr_should_poll = True
+    _attr_should_poll = False  # Use coordinated updates instead
 
-    def __init__(self, session_manager: SessionManager) -> None:
+    def __init__(self, session_manager) -> None:
         """Initialize the switch."""
         self._session_manager = session_manager
         self._is_on = False
         self._attr_unique_id = f"{self._session_manager._host}_{self.name}"
-        self._update_interval = UPDATE_INTERVAL
+        self.hass = session_manager.hass
 
     @property
     def available(self) -> bool:
@@ -53,21 +54,10 @@ class BaseEveusSwitch(SwitchEntity):
             "manufacturer": "Eveus",
             "model": f"Eveus ({self._session_manager._host})",
             "configuration_url": f"http://{self._session_manager._host}",
+            "sw_version": self._session_manager.firmware_version,
+            "serial_number": self._session_manager.station_id,
             "suggested_area": "Garage",
         }
-
-    async def async_update(self) -> None:
-        """Update device state."""
-        try:
-            state = await self._session_manager.get_state()
-            self._handle_state_update(state)
-        except Exception as err:
-            _LOGGER.error(
-                "Error updating switch %s: %s",
-                self.name,
-                str(err),
-                exc_info=True
-            )
 
     def _handle_state_update(self, state: dict) -> None:
         """Handle state update from device."""
@@ -194,7 +184,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Eveus switches based on config entry."""
+    """Set up Eveus switches."""
     session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
 
     switches = [
@@ -208,4 +198,47 @@ async def async_setup_entry(
         switch.unique_id: switch for switch in switches
     }
 
+    async def async_update_switches(*_) -> None:
+        """Update all switches efficiently."""
+        if not hass.is_running:
+            return
+
+        try:
+            state = await session_manager.get_state(force_refresh=True)
+            
+            for switch in switches:
+                try:
+                    switch._handle_state_update(state)
+                    switch.async_write_ha_state()
+                except Exception as err:
+                    _LOGGER.error(
+                        "Error updating switch %s: %s",
+                        switch.name,
+                        str(err),
+                        exc_info=True
+                    )
+                    
+                # Small delay between updates
+                await asyncio.sleep(0.1)
+                
+        except Exception as err:
+            _LOGGER.error("Failed to update switches: %s", err)
+
+    # Add entities first
     async_add_entities(switches)
+
+    # Setup initial update
+    if not hass.is_running:
+        hass.bus.async_listen_once(
+            "homeassistant_start",
+            async_update_switches
+        )
+    else:
+        await async_update_switches()
+
+    # Schedule periodic updates with offset
+    async_track_time_interval(
+        hass,
+        async_update_switches,
+        UPDATE_INTERVAL
+    )
