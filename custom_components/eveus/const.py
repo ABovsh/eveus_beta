@@ -102,6 +102,28 @@ ERROR_STATES: Final = {
     14: "High Voltage"
 }
 
+REQUIRED_STATE_FIELDS: Final = {
+    "evseEnabled",
+    "state", 
+    "subState",
+    "currentSet",
+    "curDesign",
+    "ground",
+    "temperature1",
+    "temperature2",
+    "powerMeas",
+    "voltMeas1",
+    "curMeas1",
+    "sessionEnergy",
+    "totalEnergy",
+    "sessionTime",
+    "IEM1",
+    "IEM2",
+    "IEM1_money", 
+    "IEM2_money",
+    "vBat"
+}
+
 NORMAL_SUBSTATES: Final = {
     0: "No Limits",
     1: "Limited by User",
