@@ -441,7 +441,10 @@ class SessionManager:
                 
             state_code = int(self._state_cache.get("state", 2))
             
-            if state_code == 4:  # Charging
+            # Explicitly set 60-second interval for idle state
+            if state_code in [2, 3]:  # Standby or Connected
+                return timedelta(seconds=60)
+            elif state_code == 4:  # Charging
                 return UPDATE_INTERVAL_CHARGING
             elif state_code == 7:  # Error
                 return UPDATE_INTERVAL_ERROR
