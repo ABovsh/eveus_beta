@@ -401,13 +401,14 @@ class EveusCommunicationSensor(BaseEveusSensor):
     _attr_name = "Communication"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:wifi-check"
-    _attr_suggested_display_precision = 0
+    _attr_device_class = SensorDeviceClass.TIMESTAMP  # Add this line
+    _attr_entity_registry_enabled_default = True
 
     def _handle_state_update(self, state: dict) -> None:
         """Handle state update."""
         try:
-            # Always update on state update
-            self._attr_native_value = dt_util.now().strftime("%H:%M:%S")
+            # Set timestamp as native value
+            self._attr_native_value = dt_util.now()
             
             # Add detailed communication info
             self._attr_extra_state_attributes = {
@@ -415,8 +416,8 @@ class EveusCommunicationSensor(BaseEveusSensor):
                 "available": self._session_manager.available,
                 "error_count": self._session_manager._error_count,
                 "retry_delay": self._session_manager._current_retry_delay,
-                "last_state_age_seconds": round(time.time() - self._session_manager._last_update) if self._session_manager._last_update else None,
-                "total_requests": self._session_manager._request_count if hasattr(self._session_manager, '_request_count') else 0,
+                "last_state_age_seconds": int(time.time() - self._session_manager._last_update) if self._session_manager._last_update else None,
+                "total_requests": self._session_manager.request_count,
                 "failed_requests": self._session_manager._error_count,
             }
         except Exception as err:
