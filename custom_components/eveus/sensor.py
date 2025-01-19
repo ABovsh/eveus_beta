@@ -169,9 +169,11 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional state attributes."""
-        attrs = {
-            "last_update": self._last_update.isoformat() if self._last_update else None,
+        return {
             "error_count": self._error_count,
+            "last_update": dt_util.as_local(
+                dt_util.utc_from_timestamp(self._last_update)
+            ).isoformat() if isinstance(self._last_update, (int, float)) else None,
             "restored": self._restored,
         }
         if self._previous_value is not None:
