@@ -110,7 +110,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 config_entry_id=entry.entry_id,
                 identifiers={(DOMAIN, entry.data[CONF_HOST])},
                 manufacturer="Eveus",
-                name=f"Current range: {session_manager.capabilities['min_current']}-{session_manager.capabilities['max_current']}A",
+                name=f"{session_manager.capabilities['min_current']}-{session_manager.capabilities['max_current']}A",
                 model="Eveus",
                 sw_version=session_manager.firmware_version,
                 configuration_url=f"http://{entry.data[CONF_HOST]}",
