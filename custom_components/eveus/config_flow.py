@@ -1,4 +1,5 @@
-"""Config flow for Eveus integration with improved validation."""
+# File: custom_components/eveus/config_flow.py
+"""Config flow for Eveus integration."""
 from __future__ import annotations
 
 import logging
@@ -23,9 +24,6 @@ from .const import (
     HELPER_EV_INITIAL_SOC,
     HELPER_EV_SOC_CORRECTION,
     HELPER_EV_TARGET_SOC,
-    MODEL_16A,
-    MODEL_32A,
-    MODELS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -79,36 +77,6 @@ async def validate_helper_values(hass: HomeAssistant) -> tuple[bool, list[str]]:
             
     return len(invalid_helpers) == 0, invalid_helpers
 
-async def validate_device_model(host: str, auth: aiohttp.BasicAuth, model: str) -> bool:
-    """Validate device matches specified model."""
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"http://{host}{API_ENDPOINT_MAIN}",
-                auth=auth,
-                timeout=COMMAND_TIMEOUT,
-                ssl=False,
-            ) as response:
-                response.raise_for_status()
-                data = await response.json()
-                
-                max_current = float(data.get("curDesign", 16))
-                detected_model = "32A" if max_current > 16 else "16A"
-                
-                if detected_model != model:
-                    _LOGGER.warning(
-                        "Model mismatch: specified %s but detected %s",
-                        model,
-                        detected_model
-                    )
-                    return False
-                    
-                return True
-                
-    except Exception as err:
-        _LOGGER.error("Error validating device model: %s", err)
-        return False
-
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     """Validate the user input with comprehensive checks."""
     
@@ -121,7 +89,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     if not valid_helpers:
         raise InvalidHelperValues(invalid_list)
 
-    # Test connection and validate model
+    # Test connection and get device info
     try:
         session = aiohttp_client.async_get_clientsession(hass)
         auth = aiohttp.BasicAuth(data[CONF_USERNAME], data[CONF_PASSWORD])
@@ -140,8 +108,8 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
             
             if not isinstance(result, dict):
                 raise CannotConnect("Invalid response format")
-                
-            # Get device info
+            
+            # Get device info with dynamic current range
             device_info = {
                 "title": f"Eveus ({data[CONF_HOST]})",
                 "firmware_version": result.get("verFWMain", "Unknown").strip(),
@@ -168,14 +136,14 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
         raise CannotConnect(f"Unexpected error: {err}") from err
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for Eveus with improved validation."""
+    """Handle a config flow for Eveus."""
 
     VERSION = 1
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle the initial step with comprehensive validation."""
+        """Handle the initial step."""
         errors = {}
         error_details = []
 
@@ -196,7 +164,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         "station_id": info["station_id"],
                         "min_current": info["min_current"],
                         "max_current": info["max_current"],
-                        "model": info["model"],
                     }
                 )
 
@@ -211,12 +178,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except InvalidAuth:
                 errors["base"] = "invalid_auth"
                 
-            except InvalidModel:
-                errors["base"] = "invalid_model"
-                error_details = [
-                    f"Device model does not match specified model: {user_input[CONF_MODEL]}"
-                ]
-                
             except CannotConnect as err:
                 errors["base"] = "cannot_connect"
                 error_details = [str(err)]
@@ -225,7 +186,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
                 error_details = ["An unexpected error occurred"]
-                # Show form with any errors
+
+        # Show form with any errors
         schema = self.add_suggested_values_to_schema(
             STEP_USER_DATA_SCHEMA, user_input or {}
         )
@@ -236,7 +198,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 f"{helper}: {ranges[0]}-{ranges[1]}"
                 for helper, ranges in REQUIRED_HELPERS.items()
             ]),
-            "models": ", ".join(MODELS),
         }
         
         return self.async_show_form(
@@ -253,7 +214,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> config_entries.OptionsFlow:
         """Create options flow."""
         return OptionsFlowHandler(config_entry)
-
 
 class OptionsFlowHandler(config_entries.OptionsFlow):
     """Handle options flow for Eveus."""
@@ -279,19 +239,9 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     data=user_input
                 )
 
-        schema = {
-            vol.Optional(
-                CONF_MODEL,
-                default=self.config_entry.options.get(
-                    CONF_MODEL,
-                    self.config_entry.data.get(CONF_MODEL, MODEL_16A)
-                ),
-            ): vol.In(MODELS),
-        }
-
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema(schema),
+            data_schema=vol.Schema({}),
             errors=errors,
         )
 
@@ -314,6 +264,3 @@ class CannotConnect(HomeAssistantError):
 
 class InvalidAuth(HomeAssistantError):
     """Error to indicate invalid authentication."""
-
-class InvalidModel(HomeAssistantError):
-    """Error to indicate model mismatch."""
