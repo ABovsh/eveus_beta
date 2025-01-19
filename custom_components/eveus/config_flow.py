@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import asyncio
 from typing import Any, Final
+from functools import partial
 
 import aiohttp
 import voluptuous as vol
@@ -44,44 +45,49 @@ REQUIRED_HELPERS = {
     HELPER_EV_TARGET_SOC: (0, 100),  # %
 }
 
-async def validate_host_format(host: str) -> bool:
+async def validate_host_format(hass: HomeAssistant, host: str) -> bool:
     """Validate host format."""
-    if not host:
-        return False
-    if host.startswith(("http://", "https://")):
-        return False
-    if ":" in host or "/" in host:
-        return False
-    return True
+    def _validate():
+        if not host:
+            return False
+        if host.startswith(("http://", "https://")):
+            return False
+        if ":" in host or "/" in host:
+            return False
+        return True
+    
+    return await hass.async_add_executor_job(_validate)
 
 async def validate_helper_values(hass: HomeAssistant) -> tuple[bool, list[str]]:
     """Validate helper entities and their values."""
-    invalid_helpers = []
-    
-    for helper_id, (min_val, max_val) in REQUIRED_HELPERS.items():
-        state = hass.states.get(helper_id)
-        if not state:
-            invalid_helpers.append(f"Missing helper: {helper_id}")
-            continue
-            
-        try:
-            value = float(state.state)
-            if not min_val <= value <= max_val:
+    def _validate():
+        invalid_helpers = []
+        for helper_id, (min_val, max_val) in REQUIRED_HELPERS.items():
+            state = hass.states.get(helper_id)
+            if not state:
+                invalid_helpers.append(f"Missing helper: {helper_id}")
+                continue
+                
+            try:
+                value = float(state.state)
+                if not min_val <= value <= max_val:
+                    invalid_helpers.append(
+                        f"{helper_id}: Value {value} outside range [{min_val}, {max_val}]"
+                    )
+            except (ValueError, TypeError):
                 invalid_helpers.append(
-                    f"{helper_id}: Value {value} outside range [{min_val}, {max_val}]"
+                    f"{helper_id}: Invalid value '{state.state}'"
                 )
-        except (ValueError, TypeError):
-            invalid_helpers.append(
-                f"{helper_id}: Invalid value '{state.state}'"
-            )
-            
-    return len(invalid_helpers) == 0, invalid_helpers
+                
+        return len(invalid_helpers) == 0, invalid_helpers
+    
+    return await hass.async_add_executor_job(_validate)
 
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     """Validate the user input with comprehensive checks."""
     
     # Validate host format
-    if not await validate_host_format(data[CONF_HOST]):
+    if not await validate_host_format(hass, data[CONF_HOST]):
         raise InvalidHost("Invalid host format")
     
     # Validate helper entities
@@ -244,7 +250,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             data_schema=vol.Schema({}),
             errors=errors,
         )
-
 
 class InvalidHost(HomeAssistantError):
     """Error to indicate invalid host format."""
