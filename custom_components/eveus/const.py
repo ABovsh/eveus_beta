@@ -1,6 +1,7 @@
+# File: custom_components/eveus/const.py
 """Constants for the Eveus integration."""
 from datetime import timedelta
-from typing import Final
+from typing import Final, Set
 
 DOMAIN: Final = "eveus"
 
@@ -102,10 +103,25 @@ ERROR_STATES: Final = {
     14: "High Voltage"
 }
 
-REQUIRED_STATE_FIELDS: Final = {
+NORMAL_SUBSTATES: Final = {
+    0: "No Limits",
+    1: "Limited by User",
+    2: "Energy Limit",
+    3: "Time Limit",
+    4: "Cost Limit",
+    5: "Schedule 1 Limit",
+    6: "Schedule 1 Energy Limit",
+    7: "Schedule 2 Limit",
+    8: "Schedule 2 Energy Limit",
+    9: "Waiting for Activation",
+    10: "Paused by Adaptive Mode"
+}
+
+# Required state fields validation
+REQUIRED_STATE_FIELDS: Final[set[str]] = {
     "evseEnabled",
-    "state", 
-    "subState",
+    "state",
+    "subState", 
     "currentSet",
     "curDesign",
     "ground",
@@ -119,21 +135,19 @@ REQUIRED_STATE_FIELDS: Final = {
     "sessionTime",
     "IEM1",
     "IEM2",
-    "IEM1_money", 
+    "IEM1_money",
     "IEM2_money",
     "vBat"
 }
 
-NORMAL_SUBSTATES: Final = {
-    0: "No Limits",
-    1: "Limited by User",
-    2: "Energy Limit",
-    3: "Time Limit",
-    4: "Cost Limit",
-    5: "Schedule 1 Limit",
-    6: "Schedule 1 Energy Limit",
-    7: "Schedule 2 Limit",
-    8: "Schedule 2 Energy Limit",
-    9: "Waiting for Activation",
-    10: "Paused by Adaptive Mode"
+# Persistent session storage
+PERSISTENT_SESSION_DATA: Final[set[str]] = {
+    "sessionEnergy",
+    "sessionTime",
+    "sessionMoney",
+    "totalEnergy",
+    "IEM1",
+    "IEM2",
+    "IEM1_money",
+    "IEM2_money"
 }
