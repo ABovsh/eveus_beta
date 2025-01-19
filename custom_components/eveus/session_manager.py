@@ -62,6 +62,7 @@ class SessionManager:
         self._username = username
         self._password = password
         self._entry_id = entry_id
+        self._model = "Eveus"
         
         # Device info
         self._firmware_version = None
@@ -469,6 +470,13 @@ class SessionManager:
     def station_id(self) -> Optional[str]:
         """Return station ID."""
         return self._station_id
+
+    @property
+    def model(self) -> str:
+        """Return the model name."""
+        if self._capabilities:
+            return f"Eveus {self._capabilities.get('min_current', 7)}-{self._capabilities.get('max_current', 16)}A"
+        return "Eveus"
 
     @property
     def capabilities(self) -> Optional[dict]:
