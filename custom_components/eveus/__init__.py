@@ -131,29 +131,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryNotReady from err
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry with proper cleanup."""
     try:
         # Unload platforms
         unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
         if unload_ok:
             # Clean up entities
-            entity_registry = get_entity_registry(hass)
-            entries = entity_registry.entities.get_entries_for_config_entry(entry.entry_id)
+            entity_registry = er.async_get(hass)
+            entity_entries = [
+                entry for entry in entity_registry.entities.values()
+                if entry.config_entry_id == entry.entry_id
+            ]
             
-            for entity_entry in entries:
+            for entity_entry in entity_entries:
                 entity_registry.async_remove(entity_entry.entity_id)
 
             # Close session manager
             session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
             await session_manager.close()
-
-            # Clean up device registry
-            device_registry = dr.async_get(hass)
-            device_registry.async_remove_config_entry_device(
-                config_entry_id=entry.entry_id,
-                device_id=next(iter(device_registry.devices.keys()))
-            )
 
             # Remove entry data
             hass.data[DOMAIN].pop(entry.entry_id)
