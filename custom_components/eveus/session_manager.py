@@ -146,8 +146,8 @@ class SessionManager:
         """Update device capabilities."""
         try:
             self._capabilities = {
-                "min_current": float(state.get("minCurrent", 8)),
-                "max_current": float(state.get("curDesign", 16)),
+                "min_current": float(state.get("minCurrent", 7)),  # Use device's minCurrent
+                "max_current": float(state.get("curDesign", 16)),  # Use device's curDesign
                 "firmware_version": state.get("verFWMain", "Unknown").strip(),
                 "station_id": state.get("stationId", "Unknown").strip(),
                 "supports_one_charge": bool(state.get("oneChargeSupported", True)),
@@ -156,11 +156,6 @@ class SessionManager:
             
             self._firmware_version = self._capabilities["firmware_version"]
             self._station_id = self._capabilities["station_id"]
-            
-            # Determine model from max current
-            self._model = (
-                "32A" if self._capabilities["max_current"] > 16 else "16A"
-            )
             
         except Exception as err:
             _LOGGER.error("Failed to update capabilities: %s", err)
