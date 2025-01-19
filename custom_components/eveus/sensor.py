@@ -65,10 +65,9 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
     """Base sensor implementation."""
 
     _attr_has_entity_name: Final = True
-    _attr_should_poll = True
+    _attr_should_poll = False  # Use coordinated updates instead
     _attr_entity_registry_enabled_default: Final = True
     _attr_entity_registry_visible_default: Final = True
-    _update_interval = UPDATE_INTERVAL
     _translation_prefix = "sensor"
 
     def __init__(self, session_manager, name: str) -> None:
@@ -80,20 +79,6 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
         self._previous_value = None
         self._restored = False
         self.hass = session_manager.hass
-
-    async def async_added_to_hass(self) -> None:
-        """Handle entity which will be added."""
-        await super().async_added_to_hass()
-        if state := await self.async_get_last_state():
-            if state.state not in ('unknown', 'unavailable'):
-                try:
-                    if hasattr(self, '_attr_suggested_display_precision'):
-                        self._previous_value = float(state.state)
-                    else:
-                        self._previous_value = state.state
-                    self._restored = True
-                except (TypeError, ValueError):
-                    self._previous_value = state.state
 
     @property
     def device_info(self) -> dict[str, Any]:
@@ -129,17 +114,8 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
         return self._session_manager.available
 
     async def async_update(self) -> None:
-        """Update the sensor."""
-        try:
-            state = await self._session_manager.get_state()
-            self._handle_state_update(state)
-        except Exception as err:
-            _LOGGER.error(
-                "Error updating sensor %s: %s",
-                self.name,
-                str(err),
-                exc_info=True
-            )
+        """Update is handled by the coordinator."""
+        pass
 
     def _handle_state_update(self, state: dict) -> None:
         """Handle state update from device."""
@@ -845,6 +821,7 @@ async def async_setup_entry(
     """Set up Eveus sensors."""
     session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
 
+    # Create sensors list without initializing state
     sensors = [
         EveusVoltageSensor(session_manager, "Voltage"),
         EveusCurrentSensor(session_manager, "Current"),
@@ -875,29 +852,32 @@ async def async_setup_entry(
         sensor.unique_id: sensor for sensor in sensors
     }
 
-    # Add entities before setting up updates
-    await async_add_entities(sensors, True)
-
-    async def async_update_sensors(*_) -> None:
-        """Update all sensors."""
+    # Define update function with batched updates
+    async def async_update_sensors(event_time=None) -> None:
+        """Update all sensors efficiently."""
         if not hass.is_running:
             return
 
         try:
             state = await session_manager.get_state(force_refresh=True)
-            for sensor in sensors:
-                try:
+            update_tasks = []
+            
+            # Split sensors into batches of 5 to prevent timeout
+            batch_size = 5
+            for i in range(0, len(sensors), batch_size):
+                batch = sensors[i:i + batch_size]
+                for sensor in batch:
                     sensor._handle_state_update(state)
                     sensor.async_write_ha_state()
-                except Exception as err:
-                    _LOGGER.error(
-                        "Error updating sensor %s: %s",
-                        sensor.name,
-                        str(err),
-                        exc_info=True
-                    )
+                # Small delay between batches to prevent overload
+                if i + batch_size < len(sensors):
+                    await asyncio.sleep(0.1)
+                    
         except Exception as err:
             _LOGGER.error("Failed to update sensors: %s", err)
+
+    # Add entities
+    async_add_entities(sensors)
 
     # Setup initial update
     if not hass.state == "RUNNING":
@@ -908,11 +888,9 @@ async def async_setup_entry(
     else:
         await async_update_sensors()
 
-    # Schedule periodic updates
-    hass.async_create_task(
-        async_track_time_interval(
-            hass,
-            async_update_sensors,
-            UPDATE_INTERVAL
-        )
+    # Schedule periodic updates with a small offset to prevent collisions
+    async_track_time_interval(
+        hass,
+        async_update_sensors,
+        timedelta(seconds=31)  # Slightly longer than default to prevent overlap
     )
