@@ -9,6 +9,9 @@ UPDATE_INTERVAL_CHARGING: Final = timedelta(seconds=10)
 UPDATE_INTERVAL_IDLE: Final = timedelta(seconds=120)
 UPDATE_INTERVAL_ERROR: Final = timedelta(seconds=30)
 
+# Configuration
+CONF_MODEL: Final = "model"
+
 # Temperature thresholds
 TEMP_WARNING_BOX: Final = 60
 TEMP_CRITICAL_BOX: Final = 80
@@ -111,14 +114,4 @@ NORMAL_SUBSTATES: Final = {
     8: "Schedule 2 Energy Limit",
     9: "Waiting for Activation",
     10: "Paused by Adaptive Mode"
-}
-
-# Validation parameters
-REQUIRED_STATE_FIELDS: Final = {
-    "state", "subState", "currentSet", "powerMeas", "totalEnergy"
-}
-
-# Session recovery
-PERSISTENT_SESSION_DATA: Final = {
-    "session_energy", "session_time", "session_start", "initial_soc"
 }
