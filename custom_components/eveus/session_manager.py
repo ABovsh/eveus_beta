@@ -460,6 +460,20 @@ class SessionManager:
         """Return device capabilities."""
         return self._capabilities
 
+    @property
+    def device_info(self) -> dict[str, Any]:
+        """Return device information."""
+        return {
+            "identifiers": {(DOMAIN, self._session_manager._host)},
+            "name": "Eveus EV Charger",
+            "manufacturer": "Eveus",
+            "model": f"Eveus ({self._capabilities.get('min_current', 7)}-{self._capabilities.get('max_current', 16)}A)",
+            "sw_version": self._firmware_version,
+            "serial_number": self._station_id,
+            "configuration_url": f"http://{self._session_manager._host}",
+            "hw_version": f"Current range: {self._capabilities.get('min_current', 7)}-{self._capabilities.get('max_current', 16)}A"
+        }
+
     async def validate_current(self, current: float) -> bool:
         """Validate current against device model."""
         if not self._model:
