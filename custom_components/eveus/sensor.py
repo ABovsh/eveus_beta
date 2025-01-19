@@ -361,49 +361,6 @@ class EveusSystemTimeSensor(BaseEveusSensor):
     _attr_device_class = None
     _attr_native_unit_of_measurement = None
     _attr_icon = "mdi:clock"
-    _timezone_mapping = {
-        1: 1,  # GMT+1
-        2: 2,  # GMT+2
-        3: 3,  # GMT+3
-    }
-
-    def _handle_state_update(self, state: dict) -> None:
-        """Handle system time update."""
-        try:
-            timestamp = int(state.get(self._attribute, 0))
-            timezone_code = int(state.get("timeZone", 2))  # Default to GMT+2
-            
-            if timestamp == 0:
-                raise ValueError("Invalid timestamp")
-
-            # Get timezone offset in hours
-            offset = self._timezone_mapping.get(timezone_code, 2)
-            
-            # Convert timestamp to local time with offset
-            base_time = datetime.fromtimestamp(timestamp)
-            local_time = base_time.replace(hour=(base_time.hour - 2 + offset))  # Adjust from GMT+2
-            
-            # Format in 24h format
-            self._attr_native_value = local_time.strftime("%H:%M")
-            
-            self._attr_extra_state_attributes = {
-                **self.extra_state_attributes,
-                "timezone": f"GMT+{offset}",
-                "full_datetime": local_time.strftime("%Y-%m-%d %H:%M:%S"),
-                "date": local_time.strftime("%Y-%m-%d")
-            }
-            
-        except (TypeError, ValueError, OSError) as err:
-            _LOGGER.error("Error processing system time: %s", str(err))
-            self._attr_native_value = None
-
-class EveusSystemTimeSensor(BaseEveusSensor):
-    """System time sensor implementation."""
-
-    _attribute = ATTR_SYSTEM_TIME
-    _attr_device_class = None
-    _attr_native_unit_of_measurement = None
-    _attr_icon = "mdi:clock"
 
     def _handle_state_update(self, state: dict) -> None:
         """Handle system time update."""
@@ -429,6 +386,49 @@ class EveusSystemTimeSensor(BaseEveusSensor):
         except (TypeError, ValueError, OSError) as err:
             _LOGGER.error("Error processing system time: %s", str(err))
             self._attr_native_value = None
+
+class EveusSessionTimeSensor(BaseEveusSensor):
+    """Session time sensor implementation."""
+
+    _attribute = ATTR_SESSION_TIME
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.SECONDS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def _handle_state_update(self, state: dict) -> None:
+        """Handle session time update."""
+        try:
+            seconds = int(state.get(self._attribute, 0))
+            if seconds < 0:
+                _LOGGER.warning("Negative session time: %d seconds", seconds)
+                return
+                
+            self._attr_native_value = seconds
+
+            # Calculate formatted time
+            days = seconds // 86400
+            hours = (seconds % 86400) // 3600
+            minutes = (seconds % 3600) // 60
+
+            if days > 0:
+                formatted_time = f"{days}d {hours:02d}h {minutes:02d}m"
+            elif hours > 0:
+                formatted_time = f"{hours}h {minutes:02d}m"
+            else:
+                formatted_time = f"{minutes}m"
+
+            self._attr_extra_state_attributes = {
+                **self.extra_state_attributes,
+                "formatted_time": formatted_time,
+                "days": days,
+                "hours": hours,
+                "minutes": minutes,
+            }
+
+        except (TypeError, ValueError) as err:
+            _LOGGER.error("Error processing session time: %s", str(err))
+            self._attr_native_value = 0
+
 
 class EveusStateSensor(BaseEveusSensor):
     """Charging state sensor implementation."""
@@ -881,10 +881,48 @@ async def async_setup_entry(
         TimeToTargetSocSensor(session_manager, "Time to Target"),
     ]
 
-    async def async_update_entities(now=None):
-        """Update all entities."""
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up Eveus sensors."""
+    session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
+
+    sensors = [
+        EveusVoltageSensor(session_manager, "Voltage"),
+        EveusCurrentSensor(session_manager, "Current"),
+        EveusPowerSensor(session_manager, "Power"),
+        EveusCurrentSetSensor(session_manager, "Current Set"),
+        EveusSessionEnergySensor(session_manager, "Session Energy"),
+        EveusTotalEnergySensor(session_manager, "Total Energy"),
+        EveusStateSensor(session_manager, "State"),
+        EveusSubstateSensor(session_manager, "Substate"),
+        EveusEnabledSensor(session_manager, "Enabled"),
+        EveusGroundSensor(session_manager, "Ground"),
+        EveusBoxTemperatureSensor(session_manager, "Box Temperature"),
+        EveusPlugTemperatureSensor(session_manager, "Plug Temperature"),
+        EveusBatteryVoltageSensor(session_manager, "Battery Voltage"),
+        EveusSystemTimeSensor(session_manager, "System Time"),
+        EveusSessionTimeSensor(session_manager, "Session Time"),
+        EveusCounterAEnergySensor(session_manager, "Counter A Energy"),
+        EveusCounterBEnergySensor(session_manager, "Counter B Energy"),
+        EveusCounterACostSensor(session_manager, "Counter A Cost"),
+        EveusCounterBCostSensor(session_manager, "Counter B Cost"),
+        EVSocKwhSensor(session_manager, "SOC Energy"),
+        EVSocPercentSensor(session_manager, "SOC Percent"),
+        TimeToTargetSocSensor(session_manager, "Time to Target"),
+    ]
+
+    # Store entity references
+    hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
+        sensor.unique_id: sensor for sensor in sensors
+    }
+
+    async def async_update_sensors(*_) -> None:
+        """Update all sensors with a single state fetch."""
         try:
-            state = await session_manager.get_state()
+            state = await session_manager.get_state(force_refresh=True)
             for sensor in sensors:
                 try:
                     sensor._handle_state_update(state)
@@ -897,28 +935,16 @@ async def async_setup_entry(
                         exc_info=True
                     )
         except Exception as err:
-            _LOGGER.error("Error getting state: %s", str(err))
-
-    # Store entity references
-    hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
-        sensor.unique_id: sensor for sensor in sensors
-    }
-
-    # Register update interval for all sensors
-    async def async_update_sensors(now=None):
-        """Update all sensors."""
-        try:
-            for sensor in sensors:
-                await sensor.async_update()
-        except Exception as err:
             _LOGGER.error("Failed to update sensors: %s", err)
 
-    # Schedule updates every 30 seconds
+    # Initial update when Home Assistant starts
     if not hass.is_running:
         hass.bus.async_listen_once(
-            EVENT_HOMEASSISTANT_START, async_update_sensors
+            "homeassistant_start",
+            async_update_sensors
         )
-    
+
+    # Schedule periodic updates
     async_track_time_interval(
         hass,
         async_update_sensors,
