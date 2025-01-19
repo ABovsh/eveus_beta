@@ -3,8 +3,11 @@ from datetime import timedelta
 from typing import Final
 
 DOMAIN: Final = "eveus"
-SCAN_INTERVAL = timedelta(seconds=30)
-UPDATE_INTERVAL: Final = timedelta(seconds=30)  # Added constant
+
+# Update intervals
+UPDATE_INTERVAL_CHARGING: Final = timedelta(seconds=10)
+UPDATE_INTERVAL_IDLE: Final = timedelta(seconds=120)
+UPDATE_INTERVAL_ERROR: Final = timedelta(seconds=30)
 
 # Model constants
 MODEL_16A: Final = "16A"
@@ -19,7 +22,46 @@ MIN_CURRENT: Final = 8
 # Configuration
 CONF_MODEL: Final = "model"
 
-# API Attributes
+# Temperature thresholds
+TEMP_WARNING_BOX: Final = 60
+TEMP_CRITICAL_BOX: Final = 80
+TEMP_WARNING_PLUG: Final = 50
+TEMP_CRITICAL_PLUG: Final = 65
+
+# Battery voltage thresholds
+BATTERY_VOLTAGE_CRITICAL: Final = 2.5
+BATTERY_VOLTAGE_WARNING: Final = 2.7
+BATTERY_VOLTAGE_MIN: Final = 2.0
+BATTERY_VOLTAGE_MAX: Final = 3.3
+
+# API rate limiting
+MIN_COMMAND_INTERVAL: Final = 1.0  # seconds
+MAX_COMMANDS_PER_MINUTE: Final = 30
+COMMAND_COOLDOWN: Final = 2.0  # seconds
+
+# Error handling
+MAX_RETRIES: Final = 3
+RETRY_BASE_DELAY: Final = 1.0  # seconds
+MAX_RETRY_DELAY: Final = 30.0  # seconds
+COMMAND_TIMEOUT: Final = 5.0
+STATE_CACHE_TTL: Final = 2.0  # seconds
+
+# API Endpoints
+API_ENDPOINT_MAIN: Final = "/main"
+API_ENDPOINT_EVENT: Final = "/pageEvent"
+
+# Required helper entities
+HELPER_EV_BATTERY_CAPACITY: Final = "input_number.ev_battery_capacity"
+HELPER_EV_INITIAL_SOC: Final = "input_number.ev_initial_soc"
+HELPER_EV_SOC_CORRECTION: Final = "input_number.ev_soc_correction"
+HELPER_EV_TARGET_SOC: Final = "input_number.ev_target_soc"
+
+# Command Parameters
+CMD_EVSE_ENABLED: Final = "evseEnabled"
+CMD_ONE_CHARGE: Final = "oneCharge"
+CMD_RESET_COUNTER: Final = "rstEM1"
+
+# State attributes
 ATTR_VOLTAGE: Final = "voltMeas1"
 ATTR_CURRENT: Final = "curMeas1"
 ATTR_POWER: Final = "powerMeas"
@@ -40,45 +82,6 @@ ATTR_COUNTER_B_COST: Final = "IEM2_money"
 ATTR_GROUND: Final = "ground"
 ATTR_BATTERY_VOLTAGE: Final = "vBat"
 
-# Helper configuration defaults and ranges
-CONF_BATTERY_CAPACITY = "battery_capacity"
-CONF_INITIAL_SOC = "initial_soc"
-CONF_SOC_CORRECTION = "soc_correction"
-CONF_TARGET_SOC = "target_soc"
-DEFAULT_BATTERY_CAPACITY = 80
-DEFAULT_INITIAL_SOC = 20
-DEFAULT_SOC_CORRECTION = 7.5
-DEFAULT_TARGET_SOC = 80
-MIN_BATTERY_CAPACITY = 10
-MAX_BATTERY_CAPACITY = 160
-MIN_SOC = 0
-MAX_SOC = 100
-MIN_CORRECTION = 0
-MAX_CORRECTION = 10
-
-# API Endpoints
-API_ENDPOINT_MAIN: Final = "/main"
-API_ENDPOINT_EVENT: Final = "/pageEvent"
-
-# Command Parameters
-CMD_EVSE_ENABLED: Final = "evseEnabled"
-CMD_ONE_CHARGE: Final = "oneCharge"
-CMD_RESET_COUNTER: Final = "rstEM1"
-
-# Error Handling
-MAX_RETRIES: Final = 3
-RETRY_DELAY: Final = 2
-COMMAND_TIMEOUT: Final = 5
-UPDATE_TIMEOUT: Final = 10
-MIN_UPDATE_INTERVAL: Final = 2
-MIN_COMMAND_INTERVAL: Final = 1
-
-# Helper Entities
-HELPER_EV_BATTERY_CAPACITY: Final = "input_number.ev_battery_capacity"
-HELPER_EV_INITIAL_SOC: Final = "input_number.ev_initial_soc"
-HELPER_EV_SOC_CORRECTION: Final = "input_number.ev_soc_correction"
-HELPER_EV_TARGET_SOC: Final = "input_number.ev_target_soc"
-
 # State Mappings
 CHARGING_STATES: Final = {
     0: "Startup",
@@ -90,6 +93,7 @@ CHARGING_STATES: Final = {
     6: "Paused",
     7: "Error"
 }
+
 ERROR_STATES: Final = {
     0: "No Error",
     1: "Grounding Error",
@@ -107,6 +111,7 @@ ERROR_STATES: Final = {
     13: "GFCI Test Failure",
     14: "High Voltage"
 }
+
 NORMAL_SUBSTATES: Final = {
     0: "No Limits",
     1: "Limited by User",
@@ -119,4 +124,14 @@ NORMAL_SUBSTATES: Final = {
     8: "Schedule 2 Energy Limit",
     9: "Waiting for Activation",
     10: "Paused by Adaptive Mode"
+}
+
+# Validation parameters
+REQUIRED_STATE_FIELDS: Final = {
+    "state", "subState", "currentSet", "powerMeas", "totalEnergy"
+}
+
+# Session recovery
+PERSISTENT_SESSION_DATA: Final = {
+    "session_energy", "session_time", "session_start", "initial_soc"
 }
