@@ -397,47 +397,38 @@ class EveusSystemTimeSensor(BaseEveusSensor):
             _LOGGER.error("Error processing system time: %s", str(err))
             self._attr_native_value = None
 
-class EveusSessionTimeSensor(BaseEveusSensor):
-    """Session time sensor implementation."""
+class EveusSystemTimeSensor(BaseEveusSensor):
+    """System time sensor implementation."""
 
-    _attribute = ATTR_SESSION_TIME
-    _attr_device_class = SensorDeviceClass.DURATION
-    _attr_native_unit_of_measurement = UnitOfTime.SECONDS
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attribute = ATTR_SYSTEM_TIME
+    _attr_device_class = None
+    _attr_native_unit_of_measurement = None
+    _attr_icon = "mdi:clock"
 
     def _handle_state_update(self, state: dict) -> None:
-        """Handle session time update."""
+        """Handle system time update."""
         try:
-            seconds = int(state.get(self._attribute, 0))
-            if seconds < 0:
-                _LOGGER.warning("Negative session time: %d seconds", seconds)
-                return
-                
-            self._attr_native_value = seconds
+            timestamp = int(state.get(self._attribute, 0))
+            if timestamp == 0:
+                raise ValueError("Invalid timestamp")
 
-            # Calculate formatted time
-            days = seconds // 86400
-            hours = (seconds % 86400) // 3600
-            minutes = (seconds % 3600) // 60
-
-            if days > 0:
-                formatted_time = f"{days}d {hours:02d}h {minutes:02d}m"
-            elif hours > 0:
-                formatted_time = f"{hours}h {minutes:02d}m"
-            else:
-                formatted_time = f"{minutes}m"
-
+            # Convert timestamp to datetime
+            # Subtract 2 hours to adjust from device's GMT+2
+            local_time = datetime.fromtimestamp(timestamp - 7200)  # 7200 seconds = 2 hours
+            
+            # Format in 24h format
+            self._attr_native_value = local_time.strftime("%H:%M")
+            
             self._attr_extra_state_attributes = {
                 **self.extra_state_attributes,
-                "formatted_time": formatted_time,
-                "days": days,
-                "hours": hours,
-                "minutes": minutes,
+                "raw_timestamp": timestamp,
+                "full_datetime": local_time.strftime("%Y-%m-%d %H:%M:%S"),
+                "date": local_time.strftime("%Y-%m-%d")
             }
-
-        except (TypeError, ValueError) as err:
-            _LOGGER.error("Error processing session time: %s", str(err))
-            self._attr_native_value = 0
+            
+        except (TypeError, ValueError, OSError) as err:
+            _LOGGER.error("Error processing system time: %s", str(err))
+            self._attr_native_value = None
 
 class EveusStateSensor(BaseEveusSensor):
     """Charging state sensor implementation."""
