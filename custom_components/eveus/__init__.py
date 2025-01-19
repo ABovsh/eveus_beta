@@ -156,9 +156,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # Clean up entities
             entity_registry = get_entity_registry(hass)
             entries = async_entries_for_config_entry(entity_registry, entry.entry_id)
-            
             for entity_entry in entries:
-                entity_registry.async_remove(entity_entry.entity_id)
+                if entity_entry.entity_id not in [
+                    entity.entity_id 
+                    for platform_entities in hass.data[DOMAIN][entry.entry_id]["entities"].values()
+                    for entity in platform_entities.values()
+                ]:
+                    entity_registry.async_remove(entity_entry.entity_id)
 
             # Close session manager
             session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
