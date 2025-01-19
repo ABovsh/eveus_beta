@@ -141,20 +141,12 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
             if not isinstance(result, dict):
                 raise CannotConnect("Invalid response format")
                 
-            # Validate model
-            if not await validate_device_model(
-                data[CONF_HOST],
-                auth,
-                data[CONF_MODEL]
-            ):
-                raise InvalidModel
-            
             # Get device info
             device_info = {
                 "title": f"Eveus ({data[CONF_HOST]})",
                 "firmware_version": result.get("verFWMain", "Unknown").strip(),
                 "station_id": result.get("stationId", "Unknown").strip(),
-                "min_current": float(result.get("minCurrent", 8)),
+                "min_current": float(result.get("minCurrent", 7)),
                 "max_current": float(result.get("curDesign", 16)),
             }
             
