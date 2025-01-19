@@ -9,14 +9,6 @@ UPDATE_INTERVAL_CHARGING: Final = timedelta(seconds=10)
 UPDATE_INTERVAL_IDLE: Final = timedelta(seconds=120)
 UPDATE_INTERVAL_ERROR: Final = timedelta(seconds=30)
 
-# Model constants
-MODEL_16A: Final = "16A"
-MODEL_32A: Final = "32A"
-MODELS: Final = [MODEL_16A, MODEL_32A]
-MODEL_MAX_CURRENT: Final = {
-    MODEL_16A: 16,
-    MODEL_32A: 32,
-}
 MIN_CURRENT: Final = 8
 
 # Configuration
