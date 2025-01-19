@@ -7,7 +7,7 @@ DOMAIN: Final = "eveus"
 
 # Update intervals
 UPDATE_INTERVAL_CHARGING: Final = timedelta(seconds=10)
-UPDATE_INTERVAL_IDLE: Final = timedelta(seconds=120)
+UPDATE_INTERVAL_IDLE: Final = timedelta(seconds=60)
 UPDATE_INTERVAL_ERROR: Final = timedelta(seconds=30)
 
 # Configuration
