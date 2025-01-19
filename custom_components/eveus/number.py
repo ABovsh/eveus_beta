@@ -1,4 +1,5 @@
-"""Support for Eveus number entities with improved validation."""
+# File: custom_components/eveus/number.py
+"""Support for Eveus number entities."""
 from __future__ import annotations
 
 import logging
@@ -21,7 +22,7 @@ from .const import DOMAIN
 _LOGGER = logging.getLogger(__name__)
 
 class EveusCurrentNumber(RestoreNumber):
-    """Representation of Eveus current control."""
+    """Representation of Eveus current control with dynamic range."""
 
     _attr_native_step: Final = 1.0
     _attr_mode = NumberMode.SLIDER
@@ -41,75 +42,9 @@ class EveusCurrentNumber(RestoreNumber):
         self._attr_unique_id = f"{session_manager._host}_charging_current"
         self._value = None
         
-        # Set initial limits from device capabilities
-        capabilities = session_manager.capabilities
-        if capabilities:
-            self._attr_native_min_value = capabilities["min_current"]
-            self._attr_native_max_value = capabilities["max_current"]
-        else:
-            # Temporary defaults until we get real values
-            self._attr_native_min_value = 7
-            self._attr_native_max_value = 16
-
-        except Exception as err:
-            _LOGGER.error("Error initializing current control: %s", err)
-            raise
-
-    async def _validate_current(self, value: float) -> bool:
-        """Validate current value."""
-        try:
-            if not self._attr_native_min_value <= value <= self._attr_native_max_value:
-                _LOGGER.warning(
-                    "Current %s outside allowed range [%s, %s]",
-                    value,
-                    self._attr_native_min_value,
-                    self._attr_native_max_value
-                )
-                return False
-
-            # Additional model-specific validation
-            if not await self._session_manager.validate_current(value):
-                _LOGGER.warning(
-                    "Current %s not valid for model %s",
-                    value,
-                    self._session_manager.model
-                )
-                return False
-
-            return True
-
-        except Exception as err:
-            _LOGGER.error("Error validating current: %s", err)
-            return False
-
-    async def async_set_native_value(self, value: float) -> None:
-        """Set new current value with validation."""
-        try:
-            if not await self._validate_current(value):
-                return
-
-            success, result = await self._session_manager.send_command(
-                "currentSet",
-                int(value),
-                verify=True
-            )
-            
-            if success:
-                self._value = float(value)
-                self._error_count = 0
-                self.async_write_ha_state()
-                _LOGGER.debug("Current set to %s", value)
-            else:
-                self._error_count += 1
-                _LOGGER.warning(
-                    "Failed to set current to %s: %s",
-                    value,
-                    result.get("error", "Unknown error")
-                )
-                
-        except Exception as err:
-            self._error_count += 1
-            _LOGGER.error("Error setting current to %s: %s", value, err)
+        # Set current range from device capabilities
+        self._attr_native_min_value = session_manager.capabilities["min_current"]
+        self._attr_native_max_value = session_manager.capabilities["max_current"]
 
     @property
     def native_value(self) -> float | None:
@@ -128,19 +63,74 @@ class EveusCurrentNumber(RestoreNumber):
             "identifiers": {(DOMAIN, self._session_manager._host)},
             "name": "Eveus EV Charger",
             "manufacturer": "Eveus",
-            "model": self._session_manager.model,
+            "model": f"Eveus {self._attr_native_min_value}-{self._attr_native_max_value}A",
             "sw_version": self._session_manager.firmware_version,
             "serial_number": self._session_manager.station_id,
+            "configuration_url": f"http://{self._session_manager._host}",
+            "hw_version": f"Current range: {self._attr_native_min_value}-{self._attr_native_max_value}A"
         }
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return additional state attributes."""
-        return {
-            "error_count": self._error_count,
-            "restored": self._restored,
-            "model_max_current": self._attr_native_max_value,
-        }
+    async def async_set_native_value(self, value: float) -> None:
+        """Set new current value."""
+        # Validate value against device capabilities
+        if not self._attr_native_min_value <= value <= self._attr_native_max_value:
+            _LOGGER.warning(
+                "Current value %s outside allowed range [%s, %s]",
+                value,
+                self._attr_native_min_value,
+                self._attr_native_max_value
+            )
+            return
+
+        try:
+            success, result = await self._session_manager.send_command(
+                "currentSet",
+                int(value),
+                verify=True
+            )
+            
+            if success:
+                self._value = float(value)
+                self.async_write_ha_state()
+                _LOGGER.debug("Current set to %s", value)
+            else:
+                _LOGGER.warning(
+                    "Failed to set current to %s: %s",
+                    value,
+                    result.get("error", "Unknown error")
+                )
+                
+        except Exception as err:
+            _LOGGER.error("Error setting current to %s: %s", value, err)
+
+    async def async_added_to_hass(self) -> None:
+        """Handle entity which will be added."""
+        await super().async_added_to_hass()
+        
+        # Try to restore previous state
+        if state := await self.async_get_last_state():
+            try:
+                restored_value = float(state.state)
+                if self._attr_native_min_value <= restored_value <= self._attr_native_max_value:
+                    self._value = restored_value
+                    _LOGGER.debug("Restored previous current value: %s", restored_value)
+            except (TypeError, ValueError) as err:
+                _LOGGER.warning(
+                    "Could not restore previous state: %s",
+                    err
+                )
+
+        # Get initial state from device if restore failed
+        if self._value is None:
+            try:
+                device_state = await self._session_manager.get_state()
+                if "currentSet" in device_state:
+                    current = float(device_state["currentSet"])
+                    if self._attr_native_min_value <= current <= self._attr_native_max_value:
+                        self._value = current
+                        _LOGGER.debug("Got initial current from device: %s", current)
+            except Exception as err:
+                _LOGGER.error("Error getting initial current: %s", str(err))
 
 async def async_setup_entry(
     hass: HomeAssistant,
