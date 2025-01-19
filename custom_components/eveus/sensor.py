@@ -1,9 +1,11 @@
 """Support for Eveus sensors."""
 from __future__ import annotations
 
+import time
 import logging
 import asyncio
 from datetime import datetime, timedelta
+from homeassistant.util import dt as dt_util
 from typing import Any, Final
 
 from homeassistant.core import HomeAssistant
