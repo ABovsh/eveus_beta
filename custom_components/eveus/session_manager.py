@@ -57,24 +57,25 @@ class SessionManager:
        entry_id: str,
    ) -> None:
        """Initialize session manager."""
+       # Basic device info first
+       self._model = f"Eveus"  # Base model name before capabilities are known
+       self._firmware_version = "Unknown"
+       self._station_id = None
+       self._capabilities = {
+           "min_current": 7,
+           "max_current": 16,
+           "firmware_version": "Unknown",
+           "station_id": "Unknown",
+           "supports_one_charge": True,
+           "last_update": None
+       }
+       
+       # Then connection info
        self.hass = hass
        self._host = host
        self._username = username
        self._password = password
        self._entry_id = entry_id
-       self._model = "Eveus"  # Default model name
-          
-       # Device info
-       self._firmware_version = None 
-       self._station_id = None
-       self._capabilities = {
-           "min_current": 7,  # Default values
-           "max_current": 16,
-           "firmware_version": "Unknown",
-           "station_id": "Unknown",
-           "supports_one_charge": True,
-           "last_update": time.time()
-       }
        
        # Connection management
        self._base_url = f"http://{self._host}"
@@ -93,10 +94,6 @@ class SessionManager:
        self._retry_delay = RETRY_BASE_DELAY
        self._last_successful_connection = None
        
-       # Update interval tracking
-       self._current_interval = UPDATE_INTERVAL_IDLE
-       self._update_unsub = None
-       
        # Entity tracking
        self._registered_entities = set()
        self._entity_batch_size = 5
@@ -105,7 +102,7 @@ class SessionManager:
        # Persistent storage
        self._store = Store(hass, 1, f"{DOMAIN}_{entry_id}_session")
        self._stored_data = None
-
+   
        # Timeouts
        self._timeout = ClientTimeout(
            total=COMMAND_TIMEOUT,
@@ -496,11 +493,9 @@ def station_id(self) -> Optional[str]:
 @property
 def model(self) -> str:
     """Return the model name."""
-    if self._capabilities:
-        min_current = self._capabilities.get("min_current", 7)
-        max_current = self._capabilities.get("max_current", 16)
-        return f"Eveus {min_current}-{max_current}A"
-    return self._model
+    if not self._capabilities:
+        return self._model
+    return f"Eveus {self._capabilities['min_current']}-{self._capabilities['max_current']}A"
 
 @property
 def capabilities(self) -> Optional[dict]:
