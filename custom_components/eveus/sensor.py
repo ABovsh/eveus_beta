@@ -492,40 +492,58 @@ class EveusCounterBCostSensor(EveusEnergyCostSensor):
    """Counter B cost sensor implementation."""
    _attribute = ATTR_COUNTER_B_COST
 
-# Class update in sensor.py:
 class EveusCommunicationSensor(BaseEveusSensor):
-    """Enhanced communication quality sensor."""
+    """Enhanced communication quality sensor with precise update tracking."""
 
     def __init__(self, session_manager, name: str) -> None:
         """Initialize communication sensor."""
         super().__init__(session_manager, name)
         self._attr_device_class = SensorDeviceClass.DURATION
-        self._attr_native_unit_of_measurement = "s"
+        self._attr_native_unit_of_measurement = UnitOfTime.SECONDS
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_icon = "mdi:wifi-check"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
+        self._attr_entity_registry_enabled_default = True
+        self._update_interval = timedelta(seconds=1)
+        self._last_update = None
+        self._last_successful_update = None
+        self._attr_unique_id = f"{session_manager._host}_communication_status"
 
-    def _handle_state_update(self, state: dict) -> None:
-        """Handle state update with delay detection."""
+    async def async_added_to_hass(self) -> None:
+        """Handle entity added to HA."""
+        await super().async_added_to_hass()
+        
+        # Schedule regular updates
+        async_track_time_interval(
+            self.hass,
+            self._async_update_communication_time,
+            self._update_interval
+        )
+
+    async def _async_update_communication_time(self, *_) -> None:
+        """Update communication time every second."""
         try:
-            last_update = self._session_manager._last_state_update
-            if not last_update:
-                self._attr_native_value = 0
-                return
+            current_time = dt_util.utcnow()
+            last_state_update = self._session_manager._last_state_update
 
-            current_time = time.time()
-            self._attr_native_value = int(current_time - last_update)
+            if last_state_update:
+                time_diff = (current_time.timestamp() - last_state_update)
+                self._attr_native_value = int(time_diff)
+            else:
+                self._attr_native_value = 0
 
             self._attr_extra_state_attributes = {
                 "available": self._session_manager.available,
                 "error_count": self._session_manager._error_count,
-                "last_update": dt_util.utc_from_timestamp(last_update).isoformat() if last_update else None,
-                "status": "Connected" if self._session_manager.available else "Disconnected"
+                "last_update": dt_util.utc_from_timestamp(last_state_update).isoformat() if last_state_update else None,
+                "status": "Connected" if time_diff < 60 else "Disconnected",
+                "connection_quality": "Good" if time_diff < 30 else "Poor" if time_diff < 60 else "Lost"
             }
 
+            self.async_write_ha_state()
+
         except Exception as err:
-            self._error_count += 1
-            _LOGGER.error("Error updating communication state: %s", str(err))
+            _LOGGER.error("Error updating communication time: %s", str(err))
             
 class EveusStateSensor(BaseEveusSensor):
    """State sensor implementation."""
