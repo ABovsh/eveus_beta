@@ -86,6 +86,10 @@ class SessionManager:
         self._retry_delay = RETRY_BASE_DELAY
         self._last_successful_connection = None
         
+        # Update interval tracking
+        self._current_interval = UPDATE_INTERVAL_IDLE
+        self._update_unsub = None
+        
         # Entity tracking
         self._registered_entities = set()
         self._entity_batch_size = 5
@@ -94,7 +98,7 @@ class SessionManager:
         # Persistent storage
         self._store = Store(hass, 1, f"{DOMAIN}_{entry_id}_session")
         self._stored_data = None
-
+    
         # Timeouts
         self._timeout = ClientTimeout(
             total=COMMAND_TIMEOUT,
@@ -402,13 +406,12 @@ async def send_command(
                     self.update_entities,
                     self._current_interval
                 )
-
+    
             # Update entities in batches
             entities = list(self._registered_entities)
             for i in range(0, len(entities), self._entity_batch_size):
                 batch = entities[i:i + self._entity_batch_size]
                 
-                update_tasks = []
                 for entity in batch:
                     if hasattr(entity, '_handle_state_update'):
                         try:
@@ -424,11 +427,11 @@ async def send_command(
                 # Small delay between batches
                 if i + self._entity_batch_size < len(entities):
                     await asyncio.sleep(self._entity_update_delay)
-
+    
             # Store session data if charging
             if is_charging:
                 await self._store_session_data(state)
-
+    
         except Exception as err:
             _LOGGER.error("Failed to update entities: %s", err)
 
@@ -473,6 +476,11 @@ async def send_command(
     def available(self) -> bool:
         """Return if device is available."""
         return self._available
+
+    @property
+    def update_interval(self) -> timedelta:
+        """Return the current update interval."""
+        return self._current_interval
 
     @property
     def last_successful_connection(self) -> Optional[datetime]:
