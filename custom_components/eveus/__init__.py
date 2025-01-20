@@ -28,6 +28,11 @@ from .const import (
 )
 from .session_manager import SessionManager
 
+from homeassistant.helpers.entity_registry import (
+    async_get as get_entity_registry,
+    async_entries_for_config_entry,
+)
+
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: Final = [
@@ -77,19 +82,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
         await session_manager.initialize()
-        
-        # Update device registry
-        device_registry = dr.async_get(hass)
-        device_registry.async_get_or_create(
-            config_entry_id=entry.entry_id,
-            identifiers={(DOMAIN, entry.data[CONF_HOST])},
-            manufacturer="Eveus",
-            name=f"Eveus EV Charger",
-            model=session_manager.model,
-            sw_version=session_manager.firmware_version,
-            configuration_url=f"http://{entry.data[CONF_HOST]}",
-            serial_number=session_manager.station_id,
-        )
 
         # Store session manager and initialize data structure
         hass.data[DOMAIN][entry.entry_id] = {
@@ -102,6 +94,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "number": {},
             },
         }
+
+        # Setup platforms with proper registration tracking
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+        return True
+
+    except Exception as err:
+        _LOGGER.error("Error setting up Eveus integration: %s", str(err))
+        raise ConfigEntryNotReady from err
 
         # Forward to platform setup
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
