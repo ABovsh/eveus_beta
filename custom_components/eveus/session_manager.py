@@ -438,19 +438,17 @@ class SessionManager:
         try:
             if not self._state_cache:
                 return UPDATE_INTERVAL_IDLE
-                
+                    
             state_code = int(self._state_cache.get("state", 2))
             
-            # Explicitly set 60-second interval for idle state
-            if state_code in [2, 3]:  # Standby or Connected
-                return timedelta(seconds=60)
-            elif state_code == 4:  # Charging
+            # Use shorter interval for charging state
+            if state_code == 4:  # Charging
                 return UPDATE_INTERVAL_CHARGING
             elif state_code == 7:  # Error
                 return UPDATE_INTERVAL_ERROR
             else:
                 return UPDATE_INTERVAL_IDLE
-                
+                    
         except Exception:
             return UPDATE_INTERVAL_IDLE
 
