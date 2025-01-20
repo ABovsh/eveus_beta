@@ -72,20 +72,22 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 class BaseEveusSensor(SensorEntity, RestoreEntity):
-    """Base sensor with improved error handling."""
+    """Base sensor with improved error handling and registration."""
 
     _attr_has_entity_name: Final = True
     _attr_should_poll = False
-    _attr_entity_registry_enabled_default: Final = True
+    _attr_entity_registry_enabled_default = True
     _translation_prefix = "sensor"
     _max_retry_attempts = 3
     _retry_delay = 5.0
 
     def __init__(self, session_manager, name: str) -> None:
-        """Initialize the sensor."""
+        """Initialize the sensor with proper unique ID."""
         self._session_manager = session_manager
         self._attr_name = name
-        self._attr_unique_id = f"{session_manager._host}_{name}"
+        # Ensure consistent unique ID format
+        self._attr_unique_id = f"{session_manager._host}_{name.lower().replace(' ', '_')}"
+        # Use consistent entity ID format
         self.entity_id = f"sensor.eveus_{name.lower().replace(' ', '_')}"
         self._previous_value = None
         self._restored = False
@@ -98,13 +100,16 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
         await super().async_added_to_hass()
         
         # Restore previous state
-        last_state = await self.async_get_last_state()
-        if last_state:
+        if last_state := await self.async_get_last_state():
             self._attr_native_value = last_state.state
             self._previous_value = last_state.state
             self._restored = True
+            
+            # Restore attributes if available
+            if last_state.attributes:
+                self._attr_extra_state_attributes = dict(last_state.attributes)
 
-        # Register entity with session manager
+        # Register with session manager
         await self._session_manager.register_entity(self)
         
         # Request initial state
