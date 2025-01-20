@@ -379,7 +379,7 @@ class SessionManager:
         """Update all registered entities efficiently."""
         if not self._registered_entities:
             return
-
+    
         try:
             # Get current state once
             state = await self.get_state(force_refresh=True)
@@ -387,6 +387,21 @@ class SessionManager:
             # Determine update interval based on charging state
             charging_state = int(state.get("state", 2))
             is_charging = charging_state == 4
+            new_interval = UPDATE_INTERVAL_CHARGING if is_charging else UPDATE_INTERVAL_IDLE
+    
+            # Schedule new update interval if needed
+            if (
+                hasattr(self, '_current_interval') and 
+                self._current_interval != new_interval
+            ):
+                self._current_interval = new_interval
+                if self._update_unsub:
+                    self._update_unsub()
+                self._update_unsub = async_track_time_interval(
+                    self.hass,
+                    self.update_entities,
+                    self._current_interval
+                )
 
             # Update entities in batches
             entities = list(self._registered_entities)
