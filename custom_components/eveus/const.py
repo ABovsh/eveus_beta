@@ -50,7 +50,7 @@ HELPER_EV_TARGET_SOC: Final = "input_number.ev_target_soc"
 # Command Parameters
 CMD_EVSE_ENABLED: Final = "evseEnabled"
 CMD_ONE_CHARGE: Final = "oneCharge"
-CMD_RESET_COUNTER = "rstEM1"
+CMD_RESET_COUNTER: Final = "rstEM1"
 
 # State attributes
 ATTR_VOLTAGE: Final = "voltMeas1"
