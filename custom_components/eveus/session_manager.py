@@ -252,7 +252,7 @@ class SessionManager:
             
         return min_current <= current <= max_current
 
-    async def send_command(
+async def send_command(
     self,
     command: str,
     value: Any,
