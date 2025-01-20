@@ -498,7 +498,7 @@ class EveusCounterBCostSensor(EveusEnergyCostSensor):
    _attribute = ATTR_COUNTER_B_COST
 
 class EveusCommunicationSensor(BaseEveusSensor):
-    """Enhanced communication quality sensor with precise update tracking."""
+    """Enhanced communication quality sensor with reliable update tracking."""
 
     def __init__(self, session_manager, name: str) -> None:
         """Initialize communication sensor."""
@@ -508,47 +508,60 @@ class EveusCommunicationSensor(BaseEveusSensor):
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_icon = "mdi:wifi-check"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
-        self._attr_entity_registry_enabled_default = True
-        self._update_interval = timedelta(seconds=1)
-        self._last_update = None
-        self._last_successful_update = None
-        self._attr_unique_id = f"{session_manager._host}_communication_status"
+        self._last_sync = None
+        self._update_listener = None
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to HA."""
         await super().async_added_to_hass()
-        
-        # Schedule regular updates
-        async_track_time_interval(
+
+        # Update every second
+        self._update_listener = async_track_time_interval(
             self.hass,
-            self._async_update_communication_time,
-            self._update_interval
+            self._async_fast_update,
+            timedelta(seconds=1)
         )
 
-    async def _async_update_communication_time(self, *_) -> None:
-        """Update communication time every second."""
-        try:
-            current_time = dt_util.utcnow()
-            last_state_update = self._session_manager._last_state_update
+    async def async_will_remove_from_hass(self) -> None:
+        """Handle entity removal from HA."""
+        await super().async_will_remove_from_hass()
+        if self._update_listener is not None:
+            self._update_listener()
 
-            if last_state_update:
-                time_diff = (current_time.timestamp() - last_state_update)
-                self._attr_native_value = int(time_diff)
+    async def _async_fast_update(self, *_) -> None:
+        """Update time since last sync."""
+        try:
+            last_update = self._session_manager._last_state_update
+            if last_update:
+                current_time = time.time()
+                time_diff = int(current_time - last_update)
+                self._attr_native_value = time_diff
+
+                # Update status attributes
+                self._attr_extra_state_attributes = {
+                    "last_update": dt_util.utc_from_timestamp(last_update).isoformat(),
+                    "status": "Connected" if time_diff < 120 else "Disconnected",
+                    "connection_quality": (
+                        "Good" if time_diff < 60 
+                        else "Poor" if time_diff < 120 
+                        else "Lost"
+                    )
+                }
             else:
                 self._attr_native_value = 0
-
-            self._attr_extra_state_attributes = {
-                "available": self._session_manager.available,
-                "error_count": self._session_manager._error_count,
-                "last_update": dt_util.utc_from_timestamp(last_state_update).isoformat() if last_state_update else None,
-                "status": "Connected" if time_diff < 60 else "Disconnected",
-                "connection_quality": "Good" if time_diff < 30 else "Poor" if time_diff < 60 else "Lost"
-            }
+                self._attr_extra_state_attributes = {
+                    "status": "Initializing",
+                    "connection_quality": "Unknown"
+                }
 
             self.async_write_ha_state()
-
+            
         except Exception as err:
-            _LOGGER.error("Error updating communication time: %s", str(err))
+            _LOGGER.error("Error updating communication sensor: %s", str(err))
+
+    def _handle_state_update(self, state: dict) -> None:
+        """Handle state update from device."""
+        self._last_sync = time.time()
             
 class EveusStateSensor(BaseEveusSensor):
    """State sensor implementation."""
