@@ -253,93 +253,96 @@ class SessionManager:
         return min_current <= current <= max_current
 
     async def send_command(
-        self,
-        command: str,
-        value: Any,
-        verify: bool = True,
-        retry_count: int = MAX_RETRIES,
-    ) -> tuple[bool, dict[str, Any]]:
-        """Send command with rate limiting and verification."""
-        async with self._command_lock:
-            # Implement rate limiting
-            current_time = time.time()
-            
-            # Clean old timestamps
-            while (
-                self._command_timestamps and 
-                current_time - self._command_timestamps[0] > 60
-            ):
+    self,
+    command: str,
+    value: Any,
+    verify: bool = True,
+    retry_count: int = MAX_RETRIES,
+    data_format: str = None
+) -> tuple[bool, dict[str, Any]]:
+    """Send command with support for different data formats."""
+    async with self._command_lock:
+        current_time = time.time()
+        
+        # Implement rate limiting
+        if len(self._command_timestamps) >= MAX_COMMANDS_PER_MINUTE:
+            while self._command_timestamps and current_time - self._command_timestamps[0] > 60:
                 self._command_timestamps.popleft()
-            
-            # Check rate limits
-            if len(self._command_timestamps) >= MAX_COMMANDS_PER_MINUTE:
-                raise CommandError("Command rate limit exceeded")
-            
-            # Enforce minimum interval between commands
-            time_since_last = current_time - self._last_command_time
-            if time_since_last < MIN_COMMAND_INTERVAL:
-                await asyncio.sleep(MIN_COMMAND_INTERVAL - time_since_last)
+                
+        if len(self._command_timestamps) >= MAX_COMMANDS_PER_MINUTE:
+            return False, {"error": "Rate limit exceeded"}
 
-            # Add current timestamp to queue
-            self._command_timestamps.append(current_time)
-            self._last_command_time = current_time
+        # Enforce minimum interval
+        time_since_last = current_time - self._last_command_time
+        if time_since_last < MIN_COMMAND_INTERVAL:
+            await asyncio.sleep(MIN_COMMAND_INTERVAL - time_since_last)
 
-            # Execute command with retries
-            retry = 0
-            last_error = None
-            
-            while retry < retry_count:
-                try:
-                    session = await self._get_session()
-                    async with async_timeout.timeout(COMMAND_TIMEOUT):
-                        async with session.post(
-                            f"{self._base_url}{API_ENDPOINT_EVENT}",
-                            data={
-                                command: value,
-                                "pageevent": command
-                            },
-                            ssl=False,
-                        ) as response:
-                            response.raise_for_status()
-                            response_text = await response.text()
+        self._command_timestamps.append(current_time)
+        self._last_command_time = current_time
 
-                            if "error" in response_text.lower():
-                                raise CommandError(f"Error in response: {response_text}")
+        # Execute command with retries
+        retry = 0
+        last_error = None
+        
+        while retry < retry_count:
+            try:
+                session = await self._get_session()
+                
+                # Prepare request data
+                if data_format:
+                    data = data_format
+                else:
+                    data = {
+                        command: value,
+                        "pageevent": command
+                    }
 
-                            # Verify command if required
-                            if verify:
-                                await asyncio.sleep(0.5)  # Brief delay for device to process
-                                state = await self.get_state(force_refresh=True)
-                                if not self._verify_command(state, command, value):
-                                    raise CommandError("Command verification failed")
+                async with async_timeout.timeout(COMMAND_TIMEOUT):
+                    async with session.post(
+                        f"{self._base_url}{API_ENDPOINT_EVENT}",
+                        data=data,
+                        ssl=False,
+                    ) as response:
+                        response.raise_for_status()
+                        response_text = await response.text()
 
-                            # Update success metrics
-                            self._error_count = 0
-                            self._retry_delay = RETRY_BASE_DELAY
-                            self._last_successful_connection = dt_util.utcnow()
-                            self._available = True
-                            
-                            return True, {"response": response_text}
+                        if "error" in response_text.lower():
+                            raise CommandError(f"Error in response: {response_text}")
 
-                except asyncio.TimeoutError as err:
-                    last_error = f"Command timeout: {err}"
-                except ClientError as err:
-                    last_error = f"Client error: {err}"
-                except CommandError as err:
-                    last_error = str(err)
-                except Exception as err:
-                    last_error = f"Unexpected error: {err}"
+                        # Verify if required
+                        if verify:
+                            await asyncio.sleep(0.5)
+                            state = await self.get_state(force_refresh=True)
+                            if not self._verify_command(state, command, value):
+                                raise CommandError("Command verification failed")
 
-                retry += 1
-                if retry < retry_count:
-                    await asyncio.sleep(self._retry_delay)
-                    self._retry_delay = min(self._retry_delay * 2, MAX_RETRY_DELAY)
+                        # Update metrics
+                        self._error_count = 0
+                        self._retry_delay = RETRY_BASE_DELAY
+                        self._last_successful_connection = dt_util.utcnow()
+                        self._available = True
+                        
+                        return True, {"response": response_text}
 
-            # Update error tracking
-            self._error_count += 1
-            self._available = self._error_count < 3
-            
-            return False, {"error": last_error}
+            except asyncio.TimeoutError as err:
+                last_error = f"Command timeout: {err}"
+            except ClientError as err:
+                last_error = f"Client error: {err}"
+            except CommandError as err:
+                last_error = str(err)
+            except Exception as err:
+                last_error = f"Unexpected error: {err}"
+
+            retry += 1
+            if retry < retry_count:
+                await asyncio.sleep(self._retry_delay)
+                self._retry_delay = min(self._retry_delay * 2, MAX_RETRY_DELAY)
+
+        # Update error tracking
+        self._error_count += 1
+        self._available = self._error_count < 3
+        
+        return False, {"error": last_error}
 
     def _verify_command(
         self,
