@@ -344,12 +344,7 @@ class SessionManager:
         
         return False, {"error": last_error}
 
-    def _verify_command(
-        self,
-        state_data: dict[str, Any],
-        command: str,
-        value: Any
-    ) -> bool:
+    def _verify_command(self, state_data: dict[str, Any], command: str, value: Any) -> bool:
         """Verify command was applied correctly."""
         try:
             if command == "evseEnabled":
@@ -362,6 +357,10 @@ class SessionManager:
                 return abs(device_current - target_current) <= 0.5
             elif command == "rstEM1":
                 return True  # Reset commands don't need verification
+            return False
+            
+        except (TypeError, ValueError) as err:
+            _LOGGER.error("Error verifying command: %s", str(err))
             return False
             
         except (TypeError, ValueError) as err:
