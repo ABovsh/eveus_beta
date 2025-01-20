@@ -62,12 +62,19 @@ class SessionManager:
        self._username = username
        self._password = password
        self._entry_id = entry_id
-       self._model = "Eveus"
-       
+       self._model = "Eveus"  # Default model name
+          
        # Device info
        self._firmware_version = None 
        self._station_id = None
-       self._capabilities = None
+       self._capabilities = {
+           "min_current": 7,  # Default values
+           "max_current": 16,
+           "firmware_version": "Unknown",
+           "station_id": "Unknown",
+           "supports_one_charge": True,
+           "last_update": time.time()
+       }
        
        # Connection management
        self._base_url = f"http://{self._host}"
@@ -163,15 +170,6 @@ class SessionManager:
            self._firmware_version = self._capabilities["firmware_version"]
            self._station_id = self._capabilities["station_id"]
            self._model = f"Eveus {min_current}-{max_current}A"
-           
-           # Log device capabilities
-           _LOGGER.info(
-               "Device capabilities updated - Current range: %.1f-%.1fA, Firmware: %s, ID: %s",
-               min_current,
-               max_current,
-               self._firmware_version,
-               self._station_id
-           )
            
        except Exception as err:
            _LOGGER.error("Failed to update capabilities: %s", err)
@@ -497,8 +495,12 @@ def station_id(self) -> Optional[str]:
 
 @property
 def model(self) -> str:
-   """Return the model name."""
-   return self._model
+    """Return the model name."""
+    if self._capabilities:
+        min_current = self._capabilities.get("min_current", 7)
+        max_current = self._capabilities.get("max_current", 16)
+        return f"Eveus {min_current}-{max_current}A"
+    return self._model
 
 @property
 def capabilities(self) -> Optional[dict]:
