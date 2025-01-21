@@ -8,7 +8,6 @@ from functools import partial
 
 import aiohttp
 import voluptuous as vol
-from async_timeout import timeout
 
 from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
@@ -17,6 +16,9 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+# Change this line specifically:
+from homeassistant.util.timeout import timeout
 
 from .const import (
     DOMAIN,
