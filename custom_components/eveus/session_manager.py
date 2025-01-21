@@ -1,4 +1,6 @@
 """Optimized session manager for Eveus integration."""
+# File: custom_components/eveus/session_manager.py 
+# Replace the entire file with this content
 
 from __future__ import annotations
 
@@ -9,6 +11,7 @@ from typing import Any, Optional
 from datetime import datetime
 from collections import deque
 
+from aiohttp import ClientError, ClientTimeout
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 from homeassistant.exceptions import HomeAssistantError
