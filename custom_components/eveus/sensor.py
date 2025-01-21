@@ -564,6 +564,98 @@ class EveusCommunicationSensor(BaseEveusSensor):
         """Handle state update from device."""
         self._last_sync = time.time()
 
+class EveusStateSensor(BaseEveusSensor):
+    """Charger state sensor implementation."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = list(CHARGING_STATES.values())
+
+    def _handle_state_update(self, state: dict) -> None:
+        """Handle state update with enhanced error detection."""
+        try:
+            state_code = int(state.get(ATTR_STATE, -1))
+            
+            if state_code in CHARGING_STATES:
+                self._attr_native_value = CHARGING_STATES[state_code]
+            else:
+                _LOGGER.warning("Unknown state code: %d", state_code)
+                self._attr_native_value = "Unknown"
+
+            # Add additional state attributes
+            self._attr_extra_state_attributes = {
+                **self.extra_state_attributes,
+                "state_code": state_code,
+                "is_charging": state_code == 4,
+                "is_error": state_code == 7,
+                "requires_attention": state_code in (6, 7),  # Paused or Error
+                "allowed_actions": self._get_allowed_actions(state_code),
+                "description": self._get_state_description(state_code),
+            }
+
+            # Log state changes
+            if (self._previous_value != self._attr_native_value and 
+                self._previous_value is not None):
+                _LOGGER.info(
+                    "State changed from %s to %s",
+                    self._previous_value,
+                    self._attr_native_value
+                )
+
+            self._previous_value = self._attr_native_value
+
+        except (TypeError, ValueError) as err:
+            self._error_count += 1
+            _LOGGER.error(
+                "Error processing state: %s",
+                str(err)
+            )
+            self._attr_native_value = "Error"
+
+    def _get_allowed_actions(self, state_code: int) -> list[str]:
+        """Get list of allowed actions based on current state."""
+        actions = []
+        
+        if state_code in (2, 3):  # Standby or Connected
+            actions.extend(["start_charging", "set_current"])
+        elif state_code == 4:  # Charging
+            actions.extend(["stop_charging", "set_current", "pause_charging"])
+        elif state_code == 5:  # Complete
+            actions.extend(["start_charging", "reset_counter"])
+        elif state_code == 6:  # Paused
+            actions.extend(["resume_charging", "stop_charging"])
+            
+        return actions
+
+    def _get_state_description(self, state_code: int) -> str:
+        """Get detailed state description."""
+        descriptions = {
+            0: "System is starting up",
+            1: "Running system diagnostics",
+            2: "Ready to connect EV",
+            3: "EV connected, ready to charge",
+            4: "Actively charging EV",
+            5: "Charging session completed",
+            6: "Charging temporarily paused",
+            7: "Error condition detected"
+        }
+        return descriptions.get(state_code, "Unknown state")
+
+    @property
+    def icon(self) -> str:
+        """Return the icon based on state."""
+        state_icons = {
+            "Startup": "mdi:power",
+            "System Test": "mdi:cog",
+            "Standby": "mdi:ev-station",
+            "Connected": "mdi:ev-plug-type2",
+            "Charging": "mdi:battery-charging",
+            "Charge Complete": "mdi:battery-check",
+            "Paused": "mdi:pause-circle",
+            "Error": "mdi:alert-circle",
+            "Unknown": "mdi:help-circle"
+        }
+        return state_icons.get(self._attr_native_value, "mdi:help-circle")
 
 class EveusSubstateSensor(BaseEveusSensor):
    """Substate sensor implementation."""
@@ -947,83 +1039,113 @@ class TimeToTargetSocSensor(BaseEveusSensor):
                "charging_active": False,
            }
 
+# In sensor.py - Update the async_setup_entry function
+
 async def async_setup_entry(
-   hass: HomeAssistant,
-   entry: ConfigEntry,
-   async_add_entities: AddEntitiesCallback,
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
-   """Set up Eveus sensors."""
-   session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
+    """Set up Eveus sensors."""
+    try:
+        session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
 
-   sensors = [
-       EveusCommunicationSensor(session_manager, "Communication"),
-       EveusVoltageSensor(session_manager, "Voltage"),
-       EveusCurrentSensor(session_manager, "Current"),
-       EveusPowerSensor(session_manager, "Power"),
-       EveusCurrentSetSensor(session_manager, "Current Set"),
-       EveusSessionEnergySensor(session_manager, "Session Energy"),
-       EveusTotalEnergySensor(session_manager, "Total Energy"),
-       EveusStateSensor(session_manager, "State"),
-       EveusSubstateSensor(session_manager, "Substate"),
-       EveusEnabledSensor(session_manager, "Enabled"),
-       EveusGroundSensor(session_manager, "Ground"),
-       EveusBoxTemperatureSensor(session_manager, "Box Temperature"),
-       EveusPlugTemperatureSensor(session_manager, "Plug Temperature"),
-       EveusBatteryVoltageSensor(session_manager, "Battery Voltage"),
-       EveusSystemTimeSensor(session_manager, "System Time"),
-       EveusSessionTimeSensor(session_manager, "Session Time"),
-       EveusCounterAEnergySensor(session_manager, "Counter A Energy"),
-       EveusCounterBEnergySensor(session_manager, "Counter B Energy"),
-       EveusCounterACostSensor(session_manager, "Counter A Cost"),
-       EveusCounterBCostSensor(session_manager, "Counter B Cost"),
-       EVSocKwhSensor(session_manager, "SOC Energy"),
-       EVSocPercentSensor(session_manager, "SOC Percent"),
-       TimeToTargetSocSensor(session_manager, "Time to Target"),
-   ]
+        sensors = [
+            EveusCommunicationSensor(session_manager, "Communication"),
+            EveusVoltageSensor(session_manager, "Voltage"),
+            EveusCurrentSensor(session_manager, "Current"),
+            EveusPowerSensor(session_manager, "Power"),
+            EveusCurrentSetSensor(session_manager, "Current Set"),
+            EveusSessionEnergySensor(session_manager, "Session Energy"),
+            EveusTotalEnergySensor(session_manager, "Total Energy"),
+            EveusStateSensor(session_manager, "State"),
+            EveusSubstateSensor(session_manager, "Substate"),
+            EveusEnabledSensor(session_manager, "Enabled"),
+            EveusGroundSensor(session_manager, "Ground"),
+            EveusBoxTemperatureSensor(session_manager, "Box Temperature"),
+            EveusPlugTemperatureSensor(session_manager, "Plug Temperature"),
+            EveusBatteryVoltageSensor(session_manager, "Battery Voltage"),
+            EveusSystemTimeSensor(session_manager, "System Time"),
+            EveusSessionTimeSensor(session_manager, "Session Time"),
+            EveusCounterAEnergySensor(session_manager, "Counter A Energy"),
+            EveusCounterBEnergySensor(session_manager, "Counter B Energy"),
+            EveusCounterACostSensor(session_manager, "Counter A Cost"),
+            EveusCounterBCostSensor(session_manager, "Counter B Cost"),
+            EVSocKwhSensor(session_manager, "SOC Energy"),
+            EVSocPercentSensor(session_manager, "SOC Percent"),
+            TimeToTargetSocSensor(session_manager, "Time to Target"),
+        ]
 
-   # Store entity references
-   hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
-       sensor.unique_id: sensor for sensor in sensors
-   }
+        # Store entity references with proper error handling
+        try:
+            hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
+                sensor.unique_id: sensor for sensor in sensors
+            }
+        except Exception as err:
+            _LOGGER.error("Error storing sensor references: %s", str(err))
+            raise
 
-   # Get initial state for update interval
-   try:
-       state = await session_manager.get_state(force_refresh=True)
-       charging_state = int(state.get("state", 2))
-       interval = timedelta(seconds=10 if charging_state == 4 else 120)
-   except Exception:
-       interval = timedelta(seconds=120)
+        # Create update interval based on current state
+        try:
+            state = await session_manager.get_state(force_refresh=True)
+            charging_state = int(state.get("state", 2))
+            interval = UPDATE_INTERVAL_CHARGING if charging_state == 4 else UPDATE_INTERVAL_IDLE
+        except Exception as err:
+            _LOGGER.warning("Error determining update interval: %s. Using default.", str(err))
+            interval = UPDATE_INTERVAL_IDLE
 
-   async def async_update_sensors(*_) -> None:
-       """Update all sensors efficiently."""
-       if not hass.is_running:
-           return
+        async def async_update_sensors(*_) -> None:
+            """Update all sensors with enhanced error handling."""
+            if not hass.is_running:
+                return
 
-       try:
-           # Get state once for all sensors
-           state = await session_manager.get_state(force_refresh=True)
-           
-           # Update entities in batches
-           batch_size = 5
-           for i in range(0, len(sensors), batch_size):
-               batch = sensors[i:i + batch_size]
-               
-               for sensor in batch:
-                   try:
-                       sensor._handle_state_update(state)
-                       sensor.async_write_ha_state()
-                   except Exception as err:
-                       _LOGGER.error(
-                           "Error updating sensor %s: %s",
-                           sensor.name,
-                           str(err),
-                           exc_info=True
-                       )
-               
-               await asyncio.sleep(0.1)
-                   
-       except Exception as err:
-           _LOGGER.error("Failed to update sensors: %s", err)
+            try:
+                # Get state once for all sensors
+                state = await session_manager.get_state(force_refresh=True)
+                
+                # Update entities in batches with error handling
+                batch_size = 5
+                for i in range(0, len(sensors), batch_size):
+                    batch = sensors[i:i + batch_size]
+                    
+                    for sensor in batch:
+                        try:
+                            sensor._handle_state_update(state)
+                            sensor.async_write_ha_state()
+                        except Exception as err:
+                            _LOGGER.error(
+                                "Error updating sensor %s: %s",
+                                sensor.name,
+                                str(err)
+                            )
+                    
+                    await asyncio.sleep(0.1)
+
+            except Exception as err:
+                _LOGGER.error("Failed to update sensors: %s", str(err))
+
+        # Add entities with update before add
+        async_add_entities(sensors, update_before_add=True)
+
+        # Setup initial update
+        if not hass.is_running:
+            hass.bus.async_listen_once(
+                EVENT_HOMEASSISTANT_START,
+                async_update_sensors
+            )
+        else:
+            await async_update_sensors()
+
+        # Schedule periodic updates
+        async_track_time_interval(
+            hass,
+            async_update_sensors,
+            interval
+        )
+
+    except Exception as err:
+        _LOGGER.error("Error setting up sensors: %s", str(err))
+        raise
 
        # Adjust update interval based on charging state
        try:
