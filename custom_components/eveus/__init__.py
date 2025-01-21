@@ -72,16 +72,55 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 f"Missing required helper entities: {', '.join(missing)}"
             )
 
-        # Initialize session manager
-        session_manager = SessionManager(
-            hass=hass,
-            host=entry.data[CONF_HOST],
-            username=entry.data[CONF_USERNAME],
-            password=entry.data[CONF_PASSWORD],
-            entry_id=entry.entry_id,
+        # Initialize session manager in the executor
+        session_manager = await hass.async_add_executor_job(
+            partial(
+                SessionManager,
+                hass=hass,
+                host=entry.data[CONF_HOST],
+                username=entry.data[CONF_USERNAME],
+                password=entry.data[CONF_PASSWORD],
+                entry_id=entry.entry_id,
+            )
         )
 
-        await session_manager.initialize()
+        # Initialize session manager and test connection
+        try:
+            await session_manager.initialize()
+            
+            # Update entry data
+            data_update = {}
+            if session_manager.firmware_version:
+                data_update["firmware_version"] = session_manager.firmware_version
+            if session_manager.station_id:
+                data_update["station_id"] = session_manager.station_id
+            if session_manager.capabilities:
+                data_update["min_current"] = session_manager.capabilities["min_current"]
+                data_update["max_current"] = session_manager.capabilities["max_current"]
+                
+            if data_update:
+                hass.config_entries.async_update_entry(
+                    entry, 
+                    data={**entry.data, **data_update}
+                )
+
+            # Update device registry
+            device_registry = dr.async_get(hass)
+            device_registry.async_get_or_create(
+                config_entry_id=entry.entry_id,
+                identifiers={(DOMAIN, entry.data[CONF_HOST])},
+                manufacturer="Eveus",
+                name=f"Current range: {session_manager.capabilities['min_current']}-{session_manager.capabilities['max_current']}A",
+                model="Eveus",
+                sw_version=session_manager.firmware_version,
+                configuration_url=f"http://{entry.data[CONF_HOST]}",
+                serial_number=session_manager.station_id
+            )
+                
+        except Exception as err:
+            await session_manager.close()
+            _LOGGER.error("Failed to initialize session manager: %s", str(err))
+            raise ConfigEntryNotReady from err
 
         # Store session manager and initialize data structure
         hass.data[DOMAIN][entry.entry_id] = {
@@ -94,15 +133,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "number": {},
             },
         }
-
-        # Setup platforms with proper registration tracking
-        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-        return True
-
-    except Exception as err:
-        _LOGGER.error("Error setting up Eveus integration: %s", str(err))
-        raise ConfigEntryNotReady from err
 
         # Forward to platform setup
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

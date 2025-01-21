@@ -142,7 +142,7 @@ class BaseEveusSwitch(SwitchEntity, RestoreEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn on with retry logic."""
         await self._execute_command(True)
-    
+
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off with retry logic."""
         await self._execute_command(False)
