@@ -120,7 +120,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
         if unload_ok and entry.entry_id in hass.data[DOMAIN]:
             session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
-            await session_manager.close()
+            await session_manager.close()  # This now just cleans up resources
             hass.data[DOMAIN].pop(entry.entry_id)
         return unload_ok
 
