@@ -124,11 +124,13 @@ class SessionManager:
         self._error_count = 0
         self._session = None  # Just remove our reference
 
-    async def initialize(self) -> None:
+    async def async_initialize(self) -> None:
         """Initialize the session manager."""
         try:
-            # Load stored data
-            self._stored_data = await self._store.async_load() or {}
+            # Load stored data using executor
+            self._stored_data = await self.hass.async_add_executor_job(
+                self._store.async_load
+            ) or {}
             
             # Get initial state and capabilities
             state = await self.get_state(force_refresh=True)
