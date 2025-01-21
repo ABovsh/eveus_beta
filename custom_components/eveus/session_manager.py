@@ -124,30 +124,28 @@ class SessionManager:
         self._error_count = 0
         self._session = None  # Just remove our reference
 
-    async def async_initialize(self) -> None:
-        """Initialize the session manager."""
-        try:
-            # Load stored data using executor
-            self._stored_data = await self.hass.async_add_executor_job(
-                self._store.async_load
-            ) or {}
-            
-            # Get initial state and capabilities
-            state = await self.get_state(force_refresh=True)
-            await self._update_capabilities(state)
-            
-            _LOGGER.debug(
-                "Session manager initialized for %s (Current range: %s-%sA, FW: %s)",
-                self._host,
-                self._capabilities["min_current"],
-                self._capabilities["max_current"],
-                self._firmware_version
-            )
-            
-        except Exception as err:
-            _LOGGER.error("Failed to initialize session manager: %s", str(err))
-            self._available = False
-            raise
+    async def initialize(self) -> None:
+            """Initialize the session manager."""
+            try:
+                # Load stored data using executor
+                self._stored_data = await self._store.async_load() or {}
+                
+                # Get initial state and capabilities
+                state = await self.get_state(force_refresh=True)
+                await self._update_capabilities(state)
+                
+                _LOGGER.debug(
+                    "Session manager initialized for %s (Current range: %s-%sA, FW: %s)",
+                    self._host,
+                    self._capabilities.get("min_current"),
+                    self._capabilities.get("max_current"),
+                    self._firmware_version
+                )
+                
+            except Exception as err:
+                _LOGGER.error("Failed to initialize session manager: %s", str(err))
+                self._available = False
+                raise
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create an HTTP session."""
