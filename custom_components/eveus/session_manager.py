@@ -483,15 +483,11 @@ class SessionManager:
         """Update all registered entities efficiently."""
         if not self._registered_entities:
             return
-
+    
         try:
             # Get current state once
             state = await self.get_state(force_refresh=True)
             
-            # Determine charging state
-            charging_state = int(state.get("state", 2))
-            is_charging = charging_state == 4
-
             # Update entities in batches
             entities = list(self._registered_entities)
             for i in range(0, len(entities), self._entity_batch_size):
@@ -501,8 +497,7 @@ class SessionManager:
                     if hasattr(entity, '_handle_state_update'):
                         try:
                             entity._handle_state_update(state)
-                            if hasattr(entity, 'async_write_ha_state'):
-                                entity.async_write_ha_state()
+                            entity.async_write_ha_state()
                         except Exception as err:
                             _LOGGER.error(
                                 "Error updating entity %s: %s",
@@ -513,11 +508,12 @@ class SessionManager:
                 # Small delay between batches
                 if i + self._entity_batch_size < len(entities):
                     await asyncio.sleep(self._entity_update_delay)
-
+    
             # Store session data if charging
-            if is_charging:
+            charging_state = int(state.get("state", 2))
+            if charging_state == 4:  # Charging
                 await self._store_session_data(state)
-
+    
         except Exception as err:
             _LOGGER.error("Failed to update entities: %s", str(err))
             self._error_count += 1
