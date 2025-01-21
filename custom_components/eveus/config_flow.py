@@ -76,62 +76,59 @@ async def validate_helper_values(hass: HomeAssistant) -> tuple[bool, list[str]]:
    return len(invalid_helpers) == 0, invalid_helpers
 
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
-   """Validate the user input with comprehensive checks."""
+    """Validate the user input with comprehensive checks."""
+    
+    # Validate host format
+    if not await validate_host_format(data[CONF_HOST]):
+        raise InvalidHost("Invalid host format")
    
-   # Validate host format
-   if not await validate_host_format(data[CONF_HOST]):
-       raise InvalidHost("Invalid host format")
-   
-   # Validate helper entities
-   valid_helpers, invalid_list = await validate_helper_values(hass)
-   if not valid_helpers:
-       raise InvalidHelperValues(invalid_list)
+    # Validate helper entities
+    valid_helpers, invalid_list = await validate_helper_values(hass)
+    if not valid_helpers:
+        raise InvalidHelperValues(invalid_list)
 
-   # Test connection and get device info
-   try:
-       session = aiohttp_client.async_get_clientsession(hass)
-       auth = aiohttp.BasicAuth(data[CONF_USERNAME], data[CONF_PASSWORD])
-       
-       async with session.post(
-           f"http://{data[CONF_HOST]}{API_ENDPOINT_MAIN}",
-           auth=auth,
-           timeout=COMMAND_TIMEOUT,
-           ssl=False,
-       ) as response:
-           if response.status == 401:
-               raise InvalidAuth
-               
-           response.raise_for_status()
-           result = await response.json()
-           
-           if not isinstance(result, dict):
-               raise CannotConnect("Invalid response format")
-           
-           # Get device info with dynamic current range
-           device_info = {
-               "title": f"Eveus ({data[CONF_HOST]})",
-               "firmware_version": result.get("verFWMain", "Unknown").strip(),
-               "station_id": result.get("stationId", "Unknown").strip(),
-               "min_current": float(result.get("minCurrent", 7)),
-               "max_current": float(result.get("curDesign", 16)),
-           }
-           
-           return device_info
+    # Test connection and get device info
+    try:
+        session = aiohttp_client.async_get_clientsession(hass)
+        auth = aiohttp.BasicAuth(data[CONF_USERNAME], data[CONF_PASSWORD])
+        
+        async with async_timeout.timeout(COMMAND_TIMEOUT):
+            async with session.post(
+                f"http://{data[CONF_HOST]}{API_ENDPOINT_MAIN}",
+                auth=auth,
+                ssl=False,
+            ) as response:
+                if response.status == 401:
+                    raise InvalidAuth
+                    
+                response.raise_for_status()
+                result = await response.json()
+                
+                if not isinstance(result, dict):
+                    raise CannotConnect("Invalid response format")
+                
+                # Get device info with dynamic current range
+                device_info = {
+                    "title": f"Eveus ({data[CONF_HOST]})",
+                    "firmware_version": result.get("verFWMain", "Unknown").strip(),
+                    "station_id": result.get("stationId", "Unknown").strip(),
+                    "min_current": float(result.get("minCurrent", 7)),
+                    "max_current": float(result.get("curDesign", 16)),
+                }
+                
+                return device_info
 
-   except aiohttp.ClientResponseError as err:
-       if err.status == 401:
-           raise InvalidAuth from err
-       raise CannotConnect(f"Connection error: {err}") from err
-       
-   except asyncio.TimeoutError as err:
-       raise CannotConnect("Connection timeout") from err
-       
-   except aiohttp.ClientError as err:
-       raise CannotConnect(f"Connection failed: {err}") from err
-       
-   except Exception as err:
-       _LOGGER.error("Unexpected error: %s", err)
-       raise CannotConnect(f"Unexpected error: {err}") from err
+    except asyncio.TimeoutError:
+        raise CannotConnect("Connection timeout")
+    except aiohttp.ClientResponseError as err:
+        if err.status == 401:
+            raise InvalidAuth
+        raise CannotConnect(f"Connection error: {err}")
+    except (aiohttp.ClientError, ValueError) as err:
+        raise CannotConnect(f"Connection failed: {err}")
+    except Exception as err:
+        _LOGGER.exception("Unexpected error: %s", err)
+        raise CannotConnect(f"Unexpected error: {err}")
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
    """Handle a config flow for Eveus."""
