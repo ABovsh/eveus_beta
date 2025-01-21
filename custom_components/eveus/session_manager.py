@@ -15,6 +15,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.storage import Store
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_interval
 
 from .const import (
@@ -41,9 +42,15 @@ _LOGGER = logging.getLogger(__name__)
 
 class DeviceError(HomeAssistantError):
     """Device specific error."""
+    pass
 
 class CommandError(HomeAssistantError):
     """Command execution error."""
+    pass
+
+class ValidationError(HomeAssistantError):
+    """Data validation error."""
+    pass
 
 class SessionManager:
     """Optimized session manager for Eveus."""
@@ -67,7 +74,13 @@ class SessionManager:
         # Device info
         self._firmware_version = None
         self._station_id = None
-        self._capabilities = None
+        self._capabilities = {
+            "min_current": 7.0,
+            "max_current": 16.0,
+            "firmware_version": "Unknown",
+            "station_id": "Unknown",
+            "supports_one_charge": True,
+        }
         
         # Connection management
         self._base_url = f"http://{self._host}"
@@ -78,7 +91,7 @@ class SessionManager:
         self._last_command_time = 0
         
         # State management
-        self._state_cache = None
+        self._state_cache = {}
         self._last_state_update = 0
         self._state_lock = asyncio.Lock()
         self._available = True
@@ -92,7 +105,7 @@ class SessionManager:
         self._entity_update_delay = 0.1
         
         # Persistent storage
-        self._store = Store(hass, 1, f"{DOMAIN}_{entry_id}_session")
+        self._store: Optional[Store] = None
         self._stored_data = None
 
         # Timeouts
@@ -106,7 +119,8 @@ class SessionManager:
     async def initialize(self) -> None:
         """Initialize the session manager."""
         try:
-            # Load stored data
+            # Initialize store
+            self._store = Store(self.hass, 1, f"{DOMAIN}_{self._entry_id}_session")
             self._stored_data = await self._store.async_load() or {}
             
             # Get initial state and capabilities
@@ -116,70 +130,88 @@ class SessionManager:
             _LOGGER.debug(
                 "Session manager initialized for %s (Current range: %s-%sA, FW: %s)",
                 self._host,
-                self._capabilities.get("min_current"),
-                self._capabilities.get("max_current"),
+                self._capabilities["min_current"],
+                self._capabilities["max_current"],
                 self._firmware_version
             )
             
         except Exception as err:
-            _LOGGER.error("Failed to initialize session manager: %s", err)
+            _LOGGER.error("Failed to initialize session manager: %s", str(err))
+            self._available = False
             raise
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create an HTTP session."""
-        async with self._session_lock:
-            if self._session is None or self._session.closed:
-                self._session = aiohttp.ClientSession(
-                    auth=aiohttp.BasicAuth(self._username, self._password),
-                    timeout=self._timeout,
-                    connector=aiohttp.TCPConnector(
-                        limit=10,
-                        enable_cleanup_closed=True,
-                        force_close=False,
-                        keepalive_timeout=30
+        if not self._session or self._session.closed:
+            async with self._session_lock:
+                if not self._session or self._session.closed:
+                    self._session = async_get_clientsession(self.hass)
+                    self._session.auth = aiohttp.BasicAuth(
+                        self._username,
+                        self._password
                     )
-                )
-            return self._session
+        return self._session
 
     async def _update_capabilities(self, state: dict) -> None:
         """Update device capabilities."""
         try:
+            # Extract capabilities
             min_current = float(state.get("minCurrent", 7))
             max_current = float(state.get("curDesign", 16))
+            firmware = state.get("verFWMain", "Unknown").strip()
+            station_id = state.get("stationId", "Unknown").strip()
             
-            self._capabilities = {
+            # Validate values
+            if not (0 < min_current <= max_current <= 32):
+                raise ValidationError(
+                    f"Invalid current range: {min_current}-{max_current}A"
+                )
+            
+            # Update capabilities
+            self._capabilities.update({
                 "min_current": min_current,
                 "max_current": max_current,
-                "firmware_version": state.get("verFWMain", "Unknown").strip(),
-                "station_id": state.get("stationId", "Unknown").strip(),
-                "supports_one_charge": bool(state.get("oneChargeSupported", True)),
+                "firmware_version": firmware,
+                "station_id": station_id,
                 "last_update": time.time()
-            }
+            })
             
-            self._firmware_version = self._capabilities["firmware_version"]
-            self._station_id = self._capabilities["station_id"]
+            self._firmware_version = firmware
+            self._station_id = station_id
             
-            # Log device capabilities
             _LOGGER.info(
                 "Device capabilities updated - Current range: %.1f-%.1fA, Firmware: %s, ID: %s",
                 min_current,
                 max_current,
-                self._firmware_version,
-                self._station_id
+                firmware,
+                station_id
             )
             
         except Exception as err:
-            _LOGGER.error("Failed to update capabilities: %s", err)
+            _LOGGER.error("Failed to update capabilities: %s", str(err))
             raise
 
     def _validate_state_response(self, data: dict) -> None:
         """Validate state response data."""
         if not isinstance(data, dict):
-            raise ValueError("Invalid response format")
+            raise ValidationError("Invalid response format")
             
         missing = REQUIRED_STATE_FIELDS - set(data.keys())
         if missing:
-            raise ValueError(f"Missing required fields: {missing}")
+            raise ValidationError(f"Missing required fields: {missing}")
+            
+        try:
+            # Validate critical fields
+            state = int(data.get("state", -1))
+            if state not in CHARGING_STATES:
+                raise ValidationError(f"Invalid state value: {state}")
+                
+            current = float(data.get("currentSet", 0))
+            if not (self._capabilities["min_current"] <= current <= self._capabilities["max_current"]):
+                raise ValidationError(f"Current out of range: {current}A")
+                
+        except (TypeError, ValueError) as err:
+            raise ValidationError(f"Data validation failed: {err}")
 
     async def get_state(self, force_refresh: bool = False) -> dict[str, Any]:
         """Get current state with caching and validation."""
@@ -189,7 +221,7 @@ class SessionManager:
             # Use cache if valid and not forcing refresh
             if (
                 not force_refresh 
-                and self._state_cache is not None 
+                and self._state_cache
                 and current_time - self._last_state_update < STATE_CACHE_TTL
             ):
                 return self._state_cache.copy()
@@ -226,8 +258,8 @@ class SessionManager:
                     last_error = f"Timeout getting state: {err}"
                 except ClientError as err:
                     last_error = f"Client error: {err}"
-                except ValueError as err:
-                    last_error = f"Invalid response: {err}"
+                except ValidationError as err:
+                    last_error = f"Validation error: {err}"
                 except Exception as err:
                     last_error = f"Unexpected error: {err}"
                 
@@ -240,34 +272,30 @@ class SessionManager:
             self._error_count += 1
             self._available = self._error_count < 3
             
-            raise DeviceError(f"Failed to get state after {retry_count} retries: {last_error}")
-
-    async def validate_current(self, current: float) -> bool:
-        """Validate current against device capabilities."""
-        if not self._capabilities:
-            return False
-
-        min_current = self._capabilities.get("min_current", 7)
-        max_current = self._capabilities.get("max_current", 16)
-            
-        return min_current <= current <= max_current
-
+            _LOGGER.error(
+                "Failed to get state after %d retries: %s",
+                retry_count,
+                last_error
+            )
+            raise DeviceError(f"Failed to get state: {last_error}")
 
     async def send_command(
-            self,
-            command: str,
-            value: Any,
-            verify: bool = True,
-            retry_count: int = MAX_RETRIES,
-            data_format: str = None
+        self,
+        command: str,
+        value: Any,
+        verify: bool = True,
+        retry_count: int = MAX_RETRIES,
     ) -> tuple[bool, dict[str, Any]]:
-        """Send command with support for different data formats."""
+        """Send command with improved error handling."""
         async with self._command_lock:
             current_time = time.time()
             
             # Implement rate limiting
             if len(self._command_timestamps) >= MAX_COMMANDS_PER_MINUTE:
-                while self._command_timestamps and current_time - self._command_timestamps[0] > 60:
+                while (
+                    self._command_timestamps and 
+                    current_time - self._command_timestamps[0] > 60
+                ):
                     self._command_timestamps.popleft()
                     
             if len(self._command_timestamps) >= MAX_COMMANDS_PER_MINUTE:
@@ -278,25 +306,19 @@ class SessionManager:
             if time_since_last < MIN_COMMAND_INTERVAL:
                 await asyncio.sleep(MIN_COMMAND_INTERVAL - time_since_last)
 
+            # Update command tracking
             self._command_timestamps.append(current_time)
             self._last_command_time = current_time
 
             # Execute command with retries
-            retry = 0
-            last_error = None
-            
-            while retry < retry_count:
+            for retry in range(retry_count):
                 try:
                     session = await self._get_session()
                     
-                    # Prepare request data
-                    if data_format:
-                        data = data_format
-                    else:
-                        data = {
-                            command: value,
-                            "pageevent": command
-                        }
+                    data = {
+                        command: value,
+                        "pageevent": command
+                    }
 
                     async with async_timeout.timeout(COMMAND_TIMEOUT):
                         async with session.post(
@@ -310,7 +332,7 @@ class SessionManager:
                             if "error" in response_text.lower():
                                 raise CommandError(f"Error in response: {response_text}")
 
-                            # Verify if required
+                            # Verify command if required
                             if verify:
                                 await asyncio.sleep(0.5)
                                 state = await self.get_state(force_refresh=True)
@@ -325,46 +347,42 @@ class SessionManager:
                             
                             return True, {"response": response_text}
 
-                except asyncio.TimeoutError as err:
-                    last_error = f"Command timeout: {err}"
-                except ClientError as err:
-                    last_error = f"Client error: {err}"
-                except CommandError as err:
-                    last_error = str(err)
                 except Exception as err:
-                    last_error = f"Unexpected error: {err}"
+                    last_error = f"{type(err).__name__}: {str(err)}"
+                    _LOGGER.warning(
+                        "Command attempt %d/%d failed: %s",
+                        retry + 1,
+                        retry_count,
+                        last_error
+                    )
+                    
+                    if retry < retry_count - 1:
+                        await asyncio.sleep(self._retry_delay)
+                        self._retry_delay = min(self._retry_delay * 2, MAX_RETRY_DELAY)
 
-                retry += 1
-                if retry < retry_count:
-                    await asyncio.sleep(self._retry_delay)
-                    self._retry_delay = min(self._retry_delay * 2, MAX_RETRY_DELAY)
-
-            # Update error tracking
+            # Update error tracking after all retries failed
             self._error_count += 1
             self._available = self._error_count < 3
             
-            return False, {"error": last_error}
+            return False, {"error": f"Command failed after {retry_count} attempts: {last_error}"}
 
-    
-
-    def _verify_command(
-        self,
-        state_data: dict[str, Any],
-        command: str,
-        value: Any
-    ) -> bool:
+    def _verify_command(self, state: dict, command: str, value: Any) -> bool:
         """Verify command was applied correctly."""
         try:
             if command == "evseEnabled":
-                return state_data.get("evseEnabled") == value
+                return int(state.get("evseEnabled", -1)) == int(value)
+                
             elif command == "oneCharge":
-                return state_data.get("oneCharge") == value
+                return int(state.get("oneCharge", -1)) == int(value)
+                
             elif command == "currentSet":
-                device_current = float(state_data.get("currentSet", 0))
+                device_current = float(state.get("currentSet", 0))
                 target_current = float(value)
                 return abs(device_current - target_current) <= 0.5
+                
             elif command == "rstEM1":
                 return True  # Reset commands don't need verification
+                
             return False
             
         except (TypeError, ValueError) as err:
@@ -379,7 +397,82 @@ class SessionManager:
         """Unregister an entity from batch updates."""
         self._registered_entities.discard(entity)
 
-    async def update_entities(self) -> None:
+    async def _store_session_data(self, state: dict) -> None:
+        """Store persistent session data."""
+        if not self._store:
+            return
+            
+        try:
+            session_data = {
+                key: state.get(key)
+                for key in PERSISTENT_SESSION_DATA
+                if key in state
+            }
+            session_data["last_update"] = dt_util.utcnow().isoformat()
+            
+            await self._store.async_save(session_data)
+            
+        except Exception as err:
+            _LOGGER.error("Failed to store session data: %s", str(err))
+
+    @property
+    def available(self) -> bool:
+        """Return if device is available."""
+        return self._available
+
+    @property
+    def last_update(self) -> float:
+        """Return timestamp of last successful update."""
+        return self._last_state_update
+
+    @property
+    def firmware_version(self) -> str:
+        """Return firmware version."""
+        return self._firmware_version or "Unknown"
+
+    @property
+    def station_id(self) -> str:
+        """Return station ID."""
+        return self._station_id or "Unknown"
+
+    @property
+    def model(self) -> str:
+        """Return model name."""
+        min_current = self._capabilities.get("min_current", 7)
+        max_current = self._capabilities.get("max_current", 16)
+        return f"Eveus {min_current}-{max_current}A"
+
+    @property
+    def capabilities(self) -> dict:
+        """Return device capabilities."""
+        return self._capabilities.copy()
+
+    async def close(self) -> None:
+        """Close session manager and cleanup resources."""
+        self._available = False
+        self._state_cache = {}
+        self._registered_entities.clear()
+        
+        try:
+            # Store final state if charging
+            if self._state_cache.get("state") == 4:  # Charging
+                await self._store_session_data(self._state_cache)
+            
+            # Close HTTP session
+            if self._session and not self._session.closed:
+                await self._session.close()
+                self._session = None
+                
+        except Exception as err:
+            _LOGGER.error("Error during session manager cleanup: %s", str(err))
+        
+        finally:
+            self._command_timestamps.clear()
+            self._last_command_time = 0
+            self._error_count = 0
+            self._last_state_update = 0
+
+    async def async_update(self, *_) -> None:
         """Update all registered entities efficiently."""
         if not self._registered_entities:
             return
@@ -388,7 +481,7 @@ class SessionManager:
             # Get current state once
             state = await self.get_state(force_refresh=True)
             
-            # Determine update interval based on charging state
+            # Determine charging state
             charging_state = int(state.get("state", 2))
             is_charging = charging_state == 4
 
@@ -397,16 +490,16 @@ class SessionManager:
             for i in range(0, len(entities), self._entity_batch_size):
                 batch = entities[i:i + self._entity_batch_size]
                 
-                update_tasks = []
                 for entity in batch:
                     if hasattr(entity, '_handle_state_update'):
                         try:
                             entity._handle_state_update(state)
-                            entity.async_write_ha_state()
+                            if hasattr(entity, 'async_write_ha_state'):
+                                entity.async_write_ha_state()
                         except Exception as err:
                             _LOGGER.error(
                                 "Error updating entity %s: %s",
-                                entity.name,
+                                getattr(entity, 'name', 'Unknown'),
                                 str(err)
                             )
                 
@@ -419,25 +512,10 @@ class SessionManager:
                 await self._store_session_data(state)
 
         except Exception as err:
-            _LOGGER.error("Failed to update entities: %s", err)
-
-    async def _store_session_data(self, state: dict) -> None:
-        """Store persistent session data."""
-        try:
-            session_data = {
-                key: state.get(key)
-                for key in PERSISTENT_SESSION_DATA
-                if key in state
-            }
-            session_data["last_update"] = dt_util.utcnow().isoformat()
-            
-            await self._store.async_save(session_data)
-        except Exception as err:
-            _LOGGER.error("Failed to store session data: %s", err)
-
-    async def get_stored_session_data(self) -> dict:
-        """Get stored session data."""
-        return self._stored_data or {}
+            _LOGGER.error("Failed to update entities: %s", str(err))
+            self._error_count += 1
+            if self._error_count >= 3:
+                self._available = False
 
     def get_update_interval(self) -> timedelta:
         """Get appropriate update interval based on state."""
@@ -447,7 +525,6 @@ class SessionManager:
                     
             state_code = int(self._state_cache.get("state", 2))
             
-            # Use shorter interval for charging state
             if state_code == 4:  # Charging
                 return UPDATE_INTERVAL_CHARGING
             elif state_code == 7:  # Error
@@ -455,46 +532,79 @@ class SessionManager:
             else:
                 return UPDATE_INTERVAL_IDLE
                     
-        except Exception:
+        except Exception as err:
+            _LOGGER.warning("Error determining update interval: %s", str(err))
             return UPDATE_INTERVAL_IDLE
 
-    @property
-    def available(self) -> bool:
-        """Return if device is available."""
-        return self._available
+    async def validate_current(self, current: float) -> bool:
+        """Validate current against device capabilities."""
+        try:
+            min_current = self._capabilities.get("min_current", 7)
+            max_current = self._capabilities.get("max_current", 16)
+            
+            if not min_current <= current <= max_current:
+                _LOGGER.warning(
+                    "Current value %s outside allowed range [%s, %s]",
+                    current,
+                    min_current,
+                    max_current
+                )
+                return False
+                
+            return True
+            
+        except Exception as err:
+            _LOGGER.error("Error validating current: %s", str(err))
+            return False
 
-    @property
-    def last_successful_connection(self) -> Optional[datetime]:
-        """Return last successful connection time."""
-        return self._last_successful_connection
+    async def reset_counter(self) -> bool:
+        """Reset energy counter with verification."""
+        try:
+            success, result = await self.send_command("rstEM1", 0, verify=False)
+            if not success:
+                _LOGGER.error("Failed to reset counter: %s", result.get("error"))
+                return False
+                
+            # Verify reset
+            await asyncio.sleep(1)
+            state = await self.get_state(force_refresh=True)
+            
+            return float(state.get("IEM1", 0)) == 0
+            
+        except Exception as err:
+            _LOGGER.error("Error resetting counter: %s", str(err))
+            return False
 
-    @property
-    def firmware_version(self) -> Optional[str]:
-        """Return firmware version."""
-        return self._firmware_version
+    async def get_stored_session_data(self) -> dict:
+        """Get stored session data safely."""
+        try:
+            if not self._store:
+                return {}
+                
+            data = await self._store.async_load()
+            return data if data else {}
+            
+        except Exception as err:
+            _LOGGER.error("Error loading stored session data: %s", str(err))
+            return {}
 
-    @property
-    def station_id(self) -> Optional[str]:
-        """Return station ID."""
-        return self._station_id
-
-    @property
-    def model(self) -> str:
-        """Return the model name."""
-        if self._capabilities:
-            return f"Eveus {self._capabilities.get('min_current', 7)}-{self._capabilities.get('max_current', 16)}A"
-        return "Eveus"
-
-    @property
-    def capabilities(self) -> Optional[dict]:
-        """Return device capabilities."""
-        return self._capabilities
-
-    async def close(self) -> None:
-        """Close session manager."""
-        self._available = False
-        self._state_cache = None
+    def should_update(self) -> bool:
+        """Determine if an update is needed based on time and state."""
+        if not self._last_state_update:
+            return True
+            
+        current_time = time.time()
+        time_since_update = current_time - self._last_state_update
         
-        if self._session and not self._session.closed:
-            await self._session.close()
-        
+        try:
+            state_code = int(self._state_cache.get("state", 2))
+            
+            if state_code == 4:  # Charging
+                return time_since_update >= UPDATE_INTERVAL_CHARGING.total_seconds()
+            elif state_code == 7:  # Error
+                return time_since_update >= UPDATE_INTERVAL_ERROR.total_seconds()
+            else:
+                return time_since_update >= UPDATE_INTERVAL_IDLE.total_seconds()
+                
+        except Exception:
+            return time_since_update >= UPDATE_INTERVAL_IDLE.total_seconds()
