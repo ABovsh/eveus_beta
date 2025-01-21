@@ -81,7 +81,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Initialize session manager in the executor
         try:
             session_manager = await hass.async_add_executor_job(
-                lambda: SessionManager(
+                partial(
+                    SessionManager,
                     hass=hass,
                     host=entry.data[CONF_HOST],
                     username=entry.data[CONF_USERNAME],
@@ -97,6 +98,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await session_manager.initialize()
         except Exception as err:
             _LOGGER.error("Failed to initialize session manager: %s", str(err))
+            await session_manager.close()
             raise ConfigEntryNotReady(f"Session manager initialization failed: {err}") from err
 
         # Store data in hass
@@ -108,13 +110,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "entities": {platform: {} for platform in PLATFORMS},
         }
 
-        # Set up platforms
-        try:
-            await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-        except Exception as err:
-            _LOGGER.error("Failed to set up platforms: %s", str(err))
-            await async_unload_entry(hass, entry)
-            raise ConfigEntryNotReady(f"Platform setup failed: {err}") from err
+        # Set up each platform individually with error handling
+        setup_tasks = []
+        for platform in PLATFORMS:
+            try:
+                setup_tasks.append(
+                    hass.config_entries.async_forward_entry_setup(entry, platform)
+                )
+            except Exception as err:
+                _LOGGER.error("Error setting up platform %s: %s", platform, str(err))
+                raise
+
+        if setup_tasks:
+            await asyncio.gather(*setup_tasks)
 
         # Register update listener
         entry.async_on_unload(entry.add_update_listener(async_reload_entry))
@@ -123,19 +131,49 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     except Exception as err:
         _LOGGER.error("Error setting up Eveus integration: %s", str(err))
+        
+        # Clean up if setup failed
+        if entry.entry_id in hass.data.get(DOMAIN, {}):
+            session_manager = hass.data[DOMAIN][entry.entry_id].get("session_manager")
+            if session_manager:
+                await session_manager.close()
+            hass.data[DOMAIN].pop(entry.entry_id)
+            
         raise ConfigEntryNotReady(str(err)) from err
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
+    """Unload a config entry with proper cleanup."""
+    if entry.entry_id not in hass.data.get(DOMAIN, {}):
+        return True
+
     try:
-        # Unload platforms
-        unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+        # Unload platforms individually
+        unload_tasks = []
+        for platform in PLATFORMS:
+            try:
+                unload_tasks.append(
+                    hass.config_entries.async_forward_entry_unload(entry, platform)
+                )
+            except Exception as err:
+                _LOGGER.error(
+                    "Error unloading platform %s: %s",
+                    platform,
+                    str(err)
+                )
 
+        # Wait for all unload tasks
+        if unload_tasks:
+            results = await asyncio.gather(*unload_tasks, return_exceptions=True)
+            unload_ok = all(
+                result is True for result in results
+                if not isinstance(result, Exception)
+            )
+        else:
+            unload_ok = True
+
+        # Clean up session manager
         if unload_ok:
-            # Get session manager
             session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
-
-            # Close session manager
             try:
                 await session_manager.close()
             except Exception as err:
