@@ -1155,22 +1155,3 @@ async def async_setup_entry(
     except Exception as err:
         _LOGGER.error("Error setting up sensors: %s", str(err))
         raise HomeAssistantError(f"Sensor setup failed: {err}") from err
-
-   # Add entities first
-   async_add_entities(sensors, update_before_add=True)
-
-   # Setup initial update
-   if not hass.is_running:
-       hass.bus.async_listen_once(
-           EVENT_HOMEASSISTANT_START,
-           async_update_sensors
-       )
-   else:
-       await async_update_sensors()
-
-   # Schedule periodic updates
-   async_track_time_interval(
-       hass,
-       async_update_sensors,
-       interval
-   )
