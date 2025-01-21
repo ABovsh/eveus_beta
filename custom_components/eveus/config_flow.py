@@ -7,8 +7,9 @@ from typing import Any, Final
 from functools import partial
 
 import aiohttp
-import async_timeout
+from aiohttp import ClientTimeout
 import voluptuous as vol
+from contextlib import AsyncExitStack
 
 from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
@@ -16,7 +17,8 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import aiohttp_client
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.aiohttp_client import async_create_clientsession, async_get_clientsession
+from homeassistant.helpers.asyncio import timeout
 
 from .const import (
     DOMAIN,
@@ -92,43 +94,44 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
 
     # Test connection and get device info
     try:
-        session = aiohttp_client.async_get_clientsession(hass)
+        session = async_get_clientsession(hass)
         auth = aiohttp.BasicAuth(data[CONF_USERNAME], data[CONF_PASSWORD])
         
-        async with async_timeout.timeout(COMMAND_TIMEOUT):
-            async with session.post(
-                f"http://{data[CONF_HOST]}{API_ENDPOINT_MAIN}",
-                auth=auth,
-                ssl=False,
-            ) as response:
-                if response.status == 401:
-                    raise InvalidAuth
+        async with timeout(COMMAND_TIMEOUT):
+            try:
+                async with session.post(
+                    f"http://{data[CONF_HOST]}{API_ENDPOINT_MAIN}",
+                    auth=auth,
+                    ssl=False,
+                    timeout=ClientTimeout(total=COMMAND_TIMEOUT)
+                ) as response:
+                    if response.status == 401:
+                        raise InvalidAuth
+                        
+                    response.raise_for_status()
+                    result = await response.json()
                     
-                response.raise_for_status()
-                result = await response.json()
-                
-                if not isinstance(result, dict):
-                    raise CannotConnect("Invalid response format")
-                
-                # Get device info with dynamic current range
-                device_info = {
-                    "title": f"Eveus ({data[CONF_HOST]})",
-                    "firmware_version": result.get("verFWMain", "Unknown").strip(),
-                    "station_id": result.get("stationId", "Unknown").strip(),
-                    "min_current": float(result.get("minCurrent", 7)),
-                    "max_current": float(result.get("curDesign", 16)),
-                }
-                
-                return device_info
+                    if not isinstance(result, dict):
+                        raise CannotConnect("Invalid response format")
+                    
+                    # Get device info with dynamic current range
+                    device_info = {
+                        "title": f"Eveus ({data[CONF_HOST]})",
+                        "firmware_version": result.get("verFWMain", "Unknown").strip(),
+                        "station_id": result.get("stationId", "Unknown").strip(),
+                        "min_current": float(result.get("minCurrent", 7)),
+                        "max_current": float(result.get("curDesign", 16)),
+                    }
+                    
+                    return device_info
+
+            except aiohttp.ClientError as err:
+                _LOGGER.error("Connection error: %s", str(err))
+                raise CannotConnect(f"Connection error: {err}")
 
     except asyncio.TimeoutError:
+        _LOGGER.error("Connection timeout")
         raise CannotConnect("Connection timeout")
-    except aiohttp.ClientResponseError as err:
-        if err.status == 401:
-            raise InvalidAuth
-        raise CannotConnect(f"Connection error: {err}")
-    except (aiohttp.ClientError, ValueError) as err:
-        raise CannotConnect(f"Connection failed: {err}")
     except Exception as err:
         _LOGGER.exception("Unexpected error: %s", err)
         raise CannotConnect(f"Unexpected error: {err}")
