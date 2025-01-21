@@ -1039,19 +1039,23 @@ class TimeToTargetSocSensor(BaseEveusSensor):
                "charging_active": False,
            }
 
+# In sensor.py
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Eveus sensors with improved error handling."""
-    session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
-    
+    """Set up Eveus sensors."""
     try:
-        # Create sensor instances
+        session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
+
+        # Create sensors list
+        sensors = []
         sensor_classes = [
             (EveusCommunicationSensor, "Communication"),
-            (EveusVoltageSensor, "Voltage")
+            (EveusVoltageSensor, "Voltage"),
+            (EveusCurrentSensor, "Current"),
             (EveusPowerSensor, "Power"),
             (EveusCurrentSetSensor, "Current Set"),
             (EveusSessionEnergySensor, "Session Energy"),
@@ -1074,7 +1078,7 @@ async def async_setup_entry(
             (TimeToTargetSocSensor, "Time to Target"),
         ]
 
-        sensors = []
+        # Initialize sensors with error handling
         for sensor_class, name in sensor_classes:
             try:
                 sensor = sensor_class(session_manager, name)
@@ -1086,7 +1090,7 @@ async def async_setup_entry(
             _LOGGER.error("No sensors could be created")
             return
 
-        # Store references
+        # Store entity references
         try:
             hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
                 sensor.unique_id: sensor for sensor in sensors
@@ -1120,17 +1124,16 @@ async def async_setup_entry(
                                 str(err)
                             )
                     
-                    # Delay between batches
                     if i + batch_size < len(sensors):
                         await asyncio.sleep(0.1)
 
             except Exception as err:
                 _LOGGER.error("Failed to update sensors: %s", str(err))
 
-        # Add entities and set up updates
+        # Add entities and setup updates
         async_add_entities(sensors, update_before_add=True)
 
-        # Initial update
+        # Setup initial update
         if hass.is_running:
             await async_update_sensors()
         else:
