@@ -1,4 +1,5 @@
 """The Eveus integration."""
+
 from __future__ import annotations
 
 import asyncio
@@ -34,6 +35,36 @@ PLATFORMS: Final = [
     Platform.SWITCH,
     Platform.NUMBER,
 ]
+
+# Define required helper entities and their valid ranges
+REQUIRED_HELPERS = {
+    HELPER_EV_BATTERY_CAPACITY: (10, 160),  # kWh
+    HELPER_EV_INITIAL_SOC: (0, 100),  # %
+    HELPER_EV_SOC_CORRECTION: (0, 10),  # %
+    HELPER_EV_TARGET_SOC: (0, 100),  # %
+}
+
+async def async_validate_helper_entities(hass: HomeAssistant) -> tuple[bool, list[str]]:
+    """Validate required helper entities."""
+    missing_helpers = []
+    for helper_id, (min_val, max_val) in REQUIRED_HELPERS.items():
+        state = hass.states.get(helper_id)
+        if not state:
+            missing_helpers.append(f"Missing helper: {helper_id}")
+            continue
+           
+        try:
+            value = float(state.state)
+            if not min_val <= value <= max_val:
+                missing_helpers.append(
+                    f"{helper_id}: Value {value} outside range [{min_val}, {max_val}]"
+                )
+        except (ValueError, TypeError):
+            missing_helpers.append(
+                f"{helper_id}: Invalid value '{state.state}'"
+            )
+           
+    return len(missing_helpers) == 0, missing_helpers
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the Eveus component."""
