@@ -40,10 +40,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Eveus from a config entry."""
     try:
-        # Load session manager using executor to prevent blocking
+        # Load session manager non-blocking
         session_manager = await hass.async_add_executor_job(
-            partial(
-                SessionManager,
+            lambda: SessionManager(
                 hass=hass,
                 host=entry.data[CONF_HOST],
                 username=entry.data[CONF_USERNAME],
@@ -55,19 +54,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Initialize session manager
         await session_manager.initialize()
 
+        # Store in hass.data
+        hass.data.setdefault(DOMAIN, {})
         hass.data[DOMAIN][entry.entry_id] = {
             "session_manager": session_manager,
             "title": entry.title,
             "options": entry.options.copy(),
-            "entities": {
-                "sensor": {},
-                "switch": {},
-                "number": {},
-            },
+            "entities": {platform: {} for platform in PLATFORMS},
         }
 
-        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-        entry.async_on_unload(entry.add_update_listener(async_reload_entry))
+        # Set up platforms non-blocking
+        for platform in PLATFORMS:
+            hass.async_create_task(
+                hass.config_entries.async_forward_entry_setup(entry, platform)
+            )
 
         return True
 
