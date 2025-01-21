@@ -15,6 +15,7 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.event import async_track_time_interval, async_call_later
 from homeassistant.util import dt as dt_util
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -33,6 +34,9 @@ from homeassistant.const import (
 
 from .const import (
     DOMAIN,
+    UPDATE_INTERVAL_CHARGING,
+    UPDATE_INTERVAL_IDLE,
+    UPDATE_INTERVAL_ERROR,
     CHARGING_STATES,
     ERROR_STATES,
     NORMAL_SUBSTATES,
@@ -59,14 +63,6 @@ from .const import (
     HELPER_EV_INITIAL_SOC,
     HELPER_EV_SOC_CORRECTION,
     HELPER_EV_TARGET_SOC,
-    TEMP_WARNING_BOX,
-    TEMP_CRITICAL_BOX,
-    TEMP_WARNING_PLUG,
-    TEMP_CRITICAL_PLUG,
-    BATTERY_VOLTAGE_WARNING,
-    BATTERY_VOLTAGE_CRITICAL,
-    BATTERY_VOLTAGE_MIN,
-    BATTERY_VOLTAGE_MAX,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -85,9 +81,9 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
         """Initialize the sensor with proper unique ID."""
         self._session_manager = session_manager
         self._attr_name = name
-        # Ensure consistent unique ID format
-        self._attr_unique_id = f"{session_manager._host}_{name.lower().replace(' ', '_')}"
-        # Use consistent entity ID format
+        # Standardize unique_id format
+        self._attr_unique_id = f"eveus_{self._session_manager._host}_{name.lower().replace(' ', '_')}"
+        # Standardize entity_id format
         self.entity_id = f"sensor.eveus_{name.lower().replace(' ', '_')}"
         self._previous_value = None
         self._restored = False
@@ -1092,13 +1088,9 @@ async def async_setup_entry(
             return
 
         # Store entity references
-        try:
-            hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
-                sensor.unique_id: sensor for sensor in sensors
-            }
-        except Exception as err:
-            _LOGGER.error("Error storing sensor references: %s", str(err))
-            raise
+        hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
+            sensor.unique_id: sensor for sensor in sensors
+        }
 
         # Define update coordinator
         async def async_update_sensors(*_) -> None:
@@ -1125,14 +1117,13 @@ async def async_setup_entry(
                                 str(err)
                             )
                     
-                    if i + batch_size < len(sensors):
-                        await asyncio.sleep(0.1)
+                    await asyncio.sleep(0.1)
 
             except Exception as err:
                 _LOGGER.error("Failed to update sensors: %s", str(err))
 
         # Add entities and setup updates
-        async_add_entities(sensors, update_before_add=True)
+        async_add_entities(sensors)
 
         # Initialize sensors
         if hass.is_running:
