@@ -7,9 +7,8 @@ from typing import Any, Final
 from functools import partial
 
 import aiohttp
-from aiohttp import ClientTimeout
 import voluptuous as vol
-from contextlib import AsyncExitStack
+from async_timeout import timeout
 
 from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
@@ -17,8 +16,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import aiohttp_client
-from homeassistant.helpers.aiohttp_client import async_create_clientsession, async_get_clientsession
-from homeassistant.helpers.asyncio import timeout
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
     DOMAIN,
@@ -80,6 +78,7 @@ async def validate_helper_values(hass: HomeAssistant) -> tuple[bool, list[str]]:
            
    return len(invalid_helpers) == 0, invalid_helpers
 
+# Update the validate_input function:
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     """Validate the user input with comprehensive checks."""
     
@@ -103,15 +102,17 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
                     f"http://{data[CONF_HOST]}{API_ENDPOINT_MAIN}",
                     auth=auth,
                     ssl=False,
-                    timeout=ClientTimeout(total=COMMAND_TIMEOUT)
+                    timeout=aiohttp.ClientTimeout(total=COMMAND_TIMEOUT)
                 ) as response:
                     if response.status == 401:
+                        _LOGGER.error("Authentication failed")
                         raise InvalidAuth
                         
                     response.raise_for_status()
                     result = await response.json()
                     
                     if not isinstance(result, dict):
+                        _LOGGER.error("Invalid response format")
                         raise CannotConnect("Invalid response format")
                     
                     # Get device info with dynamic current range
