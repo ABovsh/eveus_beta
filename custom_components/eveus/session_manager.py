@@ -1,22 +1,20 @@
 """Optimized session manager for Eveus integration."""
+
 from __future__ import annotations
 
-import logging
 import asyncio
+import logging
 import time
 from typing import Any, Optional
 from datetime import datetime
 from collections import deque
 
-import aiohttp
-from aiohttp import ClientTimeout, ClientError, ClientResponse
-import async_timeout
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.event import async_track_time_interval
+import async_timeout
 
 from .const import (
     DOMAIN,
@@ -69,11 +67,27 @@ class SessionManager:
         self._username = username
         self._password = password
         self._entry_id = entry_id
-        self._model = "Eveus"
+        self._base_url = f"http://{self._host}"
         
-        # Device info
-        self._firmware_version = None
-        self._station_id = None
+        # Session management
+        self._session = None
+        self._command_timestamps = deque(maxlen=MAX_COMMANDS_PER_MINUTE)
+        self._last_command_time = 0
+        self._state_cache = None
+        self._last_state_update = 0
+        self._available = True
+
+        # Locks
+        self._session_lock = asyncio.Lock()
+        self._command_lock = asyncio.Lock()
+        self._state_lock = asyncio.Lock()
+
+        # Error handling
+        self._error_count = 0
+        self._retry_delay = RETRY_BASE_DELAY
+        self._last_successful_connection = None
+        
+        # Device capabilities
         self._capabilities = {
             "min_current": 7.0,
             "max_current": 16.0,
@@ -81,46 +95,36 @@ class SessionManager:
             "station_id": "Unknown",
             "supports_one_charge": True,
         }
-        
-        # Connection management
-        self._base_url = f"http://{self._host}"
-        self._session: Optional[aiohttp.ClientSession] = None
-        self._session_lock = asyncio.Lock()
-        self._command_lock = asyncio.Lock()
-        self._command_timestamps = deque(maxlen=MAX_COMMANDS_PER_MINUTE)
-        self._last_command_time = 0
-        
-        # State management
-        self._state_cache = {}
-        self._last_state_update = 0
-        self._state_lock = asyncio.Lock()
-        self._available = True
-        self._error_count = 0
-        self._retry_delay = RETRY_BASE_DELAY
-        self._last_successful_connection = None
-        
+
         # Entity tracking
         self._registered_entities = set()
         self._entity_batch_size = 5
         self._entity_update_delay = 0.1
         
         # Persistent storage
-        self._store: Optional[Store] = None
+        self._store = Store(hass, 1, f"{DOMAIN}_{entry_id}_session")
         self._stored_data = None
 
-        # Timeouts
-        self._timeout = ClientTimeout(
-            total=COMMAND_TIMEOUT,
-            connect=3,
-            sock_connect=3,
-            sock_read=5
-        )
+    async def _get_session(self) -> None:
+        """Get the aiohttp ClientSession from Home Assistant."""
+        if not self._session:
+            self._session = async_get_clientsession(self.hass)
+            self._session._default_auth = (self._username, self._password)
+        return self._session
+
+    async def close(self) -> None:
+        """Clean up resources without closing the session."""
+        self._available = False
+        self._state_cache = None
+        self._command_timestamps.clear()
+        self._last_command_time = 0
+        self._error_count = 0
+        self._session = None  # Just remove our reference
 
     async def initialize(self) -> None:
         """Initialize the session manager."""
         try:
-            # Initialize store
-            self._store = Store(self.hass, 1, f"{DOMAIN}_{self._entry_id}_session")
+            # Load stored data
             self._stored_data = await self._store.async_load() or {}
             
             # Get initial state and capabilities
