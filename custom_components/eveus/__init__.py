@@ -37,10 +37,19 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.data.setdefault(DOMAIN, {})
     return True
 
+# In __init__.py
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Eveus from a config entry."""
     try:
-        # Load session manager non-blocking
+        # Validate helper entities
+        valid_helpers, missing = await validate_helper_entities(hass)
+        if not valid_helpers:
+            raise ConfigEntryNotReady(
+                f"Missing required helper entities: {', '.join(missing)}"
+            )
+
+        # Initialize session manager
         session_manager = await hass.async_add_executor_job(
             lambda: SessionManager(
                 hass=hass,
@@ -51,10 +60,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
         )
 
-        # Initialize session manager
         await session_manager.initialize()
 
-        # Store in hass.data
+        # Store session manager and initialize data structure
         hass.data.setdefault(DOMAIN, {})
         hass.data[DOMAIN][entry.entry_id] = {
             "session_manager": session_manager,
@@ -63,11 +71,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "entities": {platform: {} for platform in PLATFORMS},
         }
 
-        # Set up platforms non-blocking
-        for platform in PLATFORMS:
-            hass.async_create_task(
-                hass.config_entries.async_forward_entry_setup(entry, platform)
-            )
+        # Set up platforms using the new recommended method
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
         return True
 
