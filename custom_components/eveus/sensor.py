@@ -1039,8 +1039,6 @@ class TimeToTargetSocSensor(BaseEveusSensor):
                "charging_active": False,
            }
 
-# In sensor.py
-
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -1048,9 +1046,13 @@ async def async_setup_entry(
 ) -> None:
     """Set up Eveus sensors."""
     try:
+        if DOMAIN not in hass.data or entry.entry_id not in hass.data[DOMAIN]:
+            _LOGGER.error("Integration not initialized properly")
+            return
+
         session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
 
-        # Create sensors list
+        # Create sensors list with error handling
         sensors = []
         sensor_classes = [
             (EveusCommunicationSensor, "Communication"),
@@ -1078,7 +1080,6 @@ async def async_setup_entry(
             (TimeToTargetSocSensor, "Time to Target"),
         ]
 
-        # Initialize sensors with error handling
         for sensor_class, name in sensor_classes:
             try:
                 sensor = sensor_class(session_manager, name)
@@ -1099,9 +1100,9 @@ async def async_setup_entry(
             _LOGGER.error("Error storing sensor references: %s", str(err))
             raise
 
-        # Define update function
+        # Define update coordinator
         async def async_update_sensors(*_) -> None:
-            """Update sensors with error handling."""
+            """Update all sensors with error handling."""
             if not hass.is_running:
                 return
 
@@ -1133,7 +1134,7 @@ async def async_setup_entry(
         # Add entities and setup updates
         async_add_entities(sensors, update_before_add=True)
 
-        # Setup initial update
+        # Initialize sensors
         if hass.is_running:
             await async_update_sensors()
         else:
@@ -1143,15 +1144,17 @@ async def async_setup_entry(
             )
 
         # Schedule regular updates
-        async_track_time_interval(
-            hass,
-            async_update_sensors,
-            UPDATE_INTERVAL_IDLE
+        entry.async_on_unload(
+            async_track_time_interval(
+                hass,
+                async_update_sensors,
+                UPDATE_INTERVAL_IDLE
+            )
         )
 
     except Exception as err:
-        _LOGGER.error("Failed to set up Eveus sensors: %s", str(err))
-        raise
+        _LOGGER.error("Error setting up sensors: %s", str(err))
+        raise HomeAssistantError(f"Sensor setup failed: {err}") from err
 
    # Add entities first
    async_add_entities(sensors, update_before_add=True)
