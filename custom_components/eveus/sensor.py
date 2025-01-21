@@ -1044,16 +1044,14 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Eveus sensors with enhanced error handling."""
+    """Set up Eveus sensors with improved error handling."""
     session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
     
     try:
-        # Create sensor instances with error catching
-        sensors = []
+        # Create sensor instances
         sensor_classes = [
             (EveusCommunicationSensor, "Communication"),
-            (EveusVoltageSensor, "Voltage"),
-            (EveusCurrentSensor, "Current"),
+            (EveusVoltageSensor, "Voltage")
             (EveusPowerSensor, "Power"),
             (EveusCurrentSetSensor, "Current Set"),
             (EveusSessionEnergySensor, "Session Energy"),
@@ -1076,21 +1074,19 @@ async def async_setup_entry(
             (TimeToTargetSocSensor, "Time to Target"),
         ]
 
+        sensors = []
         for sensor_class, name in sensor_classes:
             try:
-                sensors.append(sensor_class(session_manager, name))
+                sensor = sensor_class(session_manager, name)
+                sensors.append(sensor)
             except Exception as err:
-                _LOGGER.error(
-                    "Error creating sensor %s: %s",
-                    name,
-                    str(err)
-                )
+                _LOGGER.error("Error creating sensor %s: %s", name, str(err))
 
         if not sensors:
             _LOGGER.error("No sensors could be created")
             return
 
-        # Store entity references
+        # Store references
         try:
             hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
                 sensor.unique_id: sensor for sensor in sensors
@@ -1099,37 +1095,20 @@ async def async_setup_entry(
             _LOGGER.error("Error storing sensor references: %s", str(err))
             raise
 
-        # Determine update interval
-        initial_interval = UPDATE_INTERVAL_IDLE
-        try:
-            state = await session_manager.get_state(force_refresh=True)
-            charging_state = int(state.get("state", 2))
-            initial_interval = (
-                UPDATE_INTERVAL_CHARGING if charging_state == 4
-                else UPDATE_INTERVAL_ERROR if charging_state == 7
-                else UPDATE_INTERVAL_IDLE
-            )
-        except Exception as err:
-            _LOGGER.warning(
-                "Error determining initial update interval: %s. Using default.",
-                str(err)
-            )
-
+        # Define update function
         async def async_update_sensors(*_) -> None:
-            """Update all sensors with comprehensive error handling."""
+            """Update sensors with error handling."""
             if not hass.is_running:
                 return
 
             try:
-                # Get state once for all sensors
                 state = await session_manager.get_state(force_refresh=True)
                 
                 # Update sensors in batches
                 batch_size = 5
                 for i in range(0, len(sensors), batch_size):
                     batch = sensors[i:i + batch_size]
-                    update_tasks = []
-
+                    
                     for sensor in batch:
                         try:
                             sensor._handle_state_update(state)
@@ -1141,49 +1120,30 @@ async def async_setup_entry(
                                 str(err)
                             )
                     
-                    # Small delay between batches
+                    # Delay between batches
                     if i + batch_size < len(sensors):
                         await asyncio.sleep(0.1)
-
-                # Update interval based on current state
-                try:
-                    charging_state = int(state.get("state", 2))
-                    new_interval = (
-                        UPDATE_INTERVAL_CHARGING if charging_state == 4
-                        else UPDATE_INTERVAL_ERROR if charging_state == 7
-                        else UPDATE_INTERVAL_IDLE
-                    )
-
-                    # If interval changed, register new update interval
-                    if new_interval != initial_interval:
-                        async_track_time_interval(
-                            hass,
-                            async_update_sensors,
-                            new_interval
-                        )
-                except Exception as err:
-                    _LOGGER.error("Error adjusting update interval: %s", str(err))
 
             except Exception as err:
                 _LOGGER.error("Failed to update sensors: %s", str(err))
 
-        # Add entities with initial state
+        # Add entities and set up updates
         async_add_entities(sensors, update_before_add=True)
 
-        # Setup initial update
+        # Initial update
         if hass.is_running:
             await async_update_sensors()
         else:
             hass.bus.async_listen_once(
-                "homeassistant_start",
+                EVENT_HOMEASSISTANT_START,
                 async_update_sensors
             )
 
-        # Register regular updates
-        return async_track_time_interval(
+        # Schedule regular updates
+        async_track_time_interval(
             hass,
             async_update_sensors,
-            initial_interval
+            UPDATE_INTERVAL_IDLE
         )
 
     except Exception as err:
