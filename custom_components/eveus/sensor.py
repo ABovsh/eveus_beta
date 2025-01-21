@@ -1039,44 +1039,58 @@ class TimeToTargetSocSensor(BaseEveusSensor):
                "charging_active": False,
            }
 
-# In sensor.py - Update the async_setup_entry function
-
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Eveus sensors."""
+    """Set up Eveus sensors with enhanced error handling."""
+    session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
+    
     try:
-        session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
-
-        sensors = [
-            EveusCommunicationSensor(session_manager, "Communication"),
-            EveusVoltageSensor(session_manager, "Voltage"),
-            EveusCurrentSensor(session_manager, "Current"),
-            EveusPowerSensor(session_manager, "Power"),
-            EveusCurrentSetSensor(session_manager, "Current Set"),
-            EveusSessionEnergySensor(session_manager, "Session Energy"),
-            EveusTotalEnergySensor(session_manager, "Total Energy"),
-            EveusStateSensor(session_manager, "State"),
-            EveusSubstateSensor(session_manager, "Substate"),
-            EveusEnabledSensor(session_manager, "Enabled"),
-            EveusGroundSensor(session_manager, "Ground"),
-            EveusBoxTemperatureSensor(session_manager, "Box Temperature"),
-            EveusPlugTemperatureSensor(session_manager, "Plug Temperature"),
-            EveusBatteryVoltageSensor(session_manager, "Battery Voltage"),
-            EveusSystemTimeSensor(session_manager, "System Time"),
-            EveusSessionTimeSensor(session_manager, "Session Time"),
-            EveusCounterAEnergySensor(session_manager, "Counter A Energy"),
-            EveusCounterBEnergySensor(session_manager, "Counter B Energy"),
-            EveusCounterACostSensor(session_manager, "Counter A Cost"),
-            EveusCounterBCostSensor(session_manager, "Counter B Cost"),
-            EVSocKwhSensor(session_manager, "SOC Energy"),
-            EVSocPercentSensor(session_manager, "SOC Percent"),
-            TimeToTargetSocSensor(session_manager, "Time to Target"),
+        # Create sensor instances with error catching
+        sensors = []
+        sensor_classes = [
+            (EveusCommunicationSensor, "Communication"),
+            (EveusVoltageSensor, "Voltage"),
+            (EveusCurrentSensor, "Current"),
+            (EveusPowerSensor, "Power"),
+            (EveusCurrentSetSensor, "Current Set"),
+            (EveusSessionEnergySensor, "Session Energy"),
+            (EveusTotalEnergySensor, "Total Energy"),
+            (EveusStateSensor, "State"),
+            (EveusSubstateSensor, "Substate"),
+            (EveusEnabledSensor, "Enabled"),
+            (EveusGroundSensor, "Ground"),
+            (EveusBoxTemperatureSensor, "Box Temperature"),
+            (EveusPlugTemperatureSensor, "Plug Temperature"),
+            (EveusBatteryVoltageSensor, "Battery Voltage"),
+            (EveusSystemTimeSensor, "System Time"),
+            (EveusSessionTimeSensor, "Session Time"),
+            (EveusCounterAEnergySensor, "Counter A Energy"),
+            (EveusCounterBEnergySensor, "Counter B Energy"),
+            (EveusCounterACostSensor, "Counter A Cost"),
+            (EveusCounterBCostSensor, "Counter B Cost"),
+            (EVSocKwhSensor, "SOC Energy"),
+            (EVSocPercentSensor, "SOC Percent"),
+            (TimeToTargetSocSensor, "Time to Target"),
         ]
 
-        # Store entity references with proper error handling
+        for sensor_class, name in sensor_classes:
+            try:
+                sensors.append(sensor_class(session_manager, name))
+            except Exception as err:
+                _LOGGER.error(
+                    "Error creating sensor %s: %s",
+                    name,
+                    str(err)
+                )
+
+        if not sensors:
+            _LOGGER.error("No sensors could be created")
+            return
+
+        # Store entity references
         try:
             hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
                 sensor.unique_id: sensor for sensor in sensors
@@ -1085,17 +1099,24 @@ async def async_setup_entry(
             _LOGGER.error("Error storing sensor references: %s", str(err))
             raise
 
-        # Create update interval based on current state
+        # Determine update interval
+        initial_interval = UPDATE_INTERVAL_IDLE
         try:
             state = await session_manager.get_state(force_refresh=True)
             charging_state = int(state.get("state", 2))
-            interval = UPDATE_INTERVAL_CHARGING if charging_state == 4 else UPDATE_INTERVAL_IDLE
+            initial_interval = (
+                UPDATE_INTERVAL_CHARGING if charging_state == 4
+                else UPDATE_INTERVAL_ERROR if charging_state == 7
+                else UPDATE_INTERVAL_IDLE
+            )
         except Exception as err:
-            _LOGGER.warning("Error determining update interval: %s. Using default.", str(err))
-            interval = UPDATE_INTERVAL_IDLE
+            _LOGGER.warning(
+                "Error determining initial update interval: %s. Using default.",
+                str(err)
+            )
 
         async def async_update_sensors(*_) -> None:
-            """Update all sensors with enhanced error handling."""
+            """Update all sensors with comprehensive error handling."""
             if not hass.is_running:
                 return
 
@@ -1103,11 +1124,12 @@ async def async_setup_entry(
                 # Get state once for all sensors
                 state = await session_manager.get_state(force_refresh=True)
                 
-                # Update entities in batches with error handling
+                # Update sensors in batches
                 batch_size = 5
                 for i in range(0, len(sensors), batch_size):
                     batch = sensors[i:i + batch_size]
-                    
+                    update_tasks = []
+
                     for sensor in batch:
                         try:
                             sensor._handle_state_update(state)
@@ -1119,47 +1141,54 @@ async def async_setup_entry(
                                 str(err)
                             )
                     
-                    await asyncio.sleep(0.1)
+                    # Small delay between batches
+                    if i + batch_size < len(sensors):
+                        await asyncio.sleep(0.1)
+
+                # Update interval based on current state
+                try:
+                    charging_state = int(state.get("state", 2))
+                    new_interval = (
+                        UPDATE_INTERVAL_CHARGING if charging_state == 4
+                        else UPDATE_INTERVAL_ERROR if charging_state == 7
+                        else UPDATE_INTERVAL_IDLE
+                    )
+
+                    # If interval changed, register new update interval
+                    if new_interval != initial_interval:
+                        async_track_time_interval(
+                            hass,
+                            async_update_sensors,
+                            new_interval
+                        )
+                except Exception as err:
+                    _LOGGER.error("Error adjusting update interval: %s", str(err))
 
             except Exception as err:
                 _LOGGER.error("Failed to update sensors: %s", str(err))
 
-        # Add entities with update before add
+        # Add entities with initial state
         async_add_entities(sensors, update_before_add=True)
 
         # Setup initial update
-        if not hass.is_running:
+        if hass.is_running:
+            await async_update_sensors()
+        else:
             hass.bus.async_listen_once(
-                EVENT_HOMEASSISTANT_START,
+                "homeassistant_start",
                 async_update_sensors
             )
-        else:
-            await async_update_sensors()
 
-        # Schedule periodic updates
-        async_track_time_interval(
+        # Register regular updates
+        return async_track_time_interval(
             hass,
             async_update_sensors,
-            interval
+            initial_interval
         )
 
     except Exception as err:
-        _LOGGER.error("Error setting up sensors: %s", str(err))
+        _LOGGER.error("Failed to set up Eveus sensors: %s", str(err))
         raise
-
-       # Adjust update interval based on charging state
-       try:
-           charging_state = int(state.get("state", 2))
-           new_interval = timedelta(seconds=10 if charging_state == 4 else 120)
-           
-           if new_interval != interval:
-               async_track_time_interval(
-                   hass,
-                   async_update_sensors,
-                   new_interval
-               )
-       except Exception as err:
-           _LOGGER.error("Failed to adjust update interval: %s", err)
 
    # Add entities first
    async_add_entities(sensors, update_before_add=True)
