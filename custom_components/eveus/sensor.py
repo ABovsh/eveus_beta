@@ -76,49 +76,38 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# In sensor.py, update the BaseEveusSensor class:
+
 class BaseEveusSensor(SensorEntity, RestoreEntity):
     """Base sensor with improved error handling and registration."""
 
-    _attr_has_entity_name: Final = True
-    _attr_should_poll = False
-    _attr_entity_registry_enabled_default = True
-    _translation_prefix = "sensor"
-    _max_retry_attempts = 3
-    _retry_delay = 5.0
-
-    def __init__(self, session_manager, name: str) -> None:
-        """Initialize the sensor with proper unique ID."""
-        self._session_manager = session_manager
-        self._attr_name = name
-        # Standardize unique_id format
-        self._attr_unique_id = f"eveus_{self._session_manager._host}_{name.lower().replace(' ', '_')}"
-        # Standardize entity_id format
-        self.entity_id = f"sensor.eveus_{name.lower().replace(' ', '_')}"
-        self._previous_value = None
-        self._restored = False
-        self._error_count = 0
-        self._last_update = None
-        self.hass = session_manager.hass
-        
     async def async_added_to_hass(self) -> None:
         """Handle entity added to Home Assistant."""
         await super().async_added_to_hass()
         
         # Restore previous state
         if last_state := await self.async_get_last_state():
-            self._attr_native_value = last_state.state
-            self._previous_value = last_state.state
-            self._restored = True
-            
-            # Restore attributes if available
-            if last_state.attributes:
-                self._attr_extra_state_attributes = dict(last_state.attributes)
+            try:
+                self._attr_native_value = last_state.state
+                self._previous_value = last_state.state
+                self._restored = True
+                
+                # Restore attributes if available
+                if last_state.attributes:
+                    self._attr_extra_state_attributes = dict(last_state.attributes)
+            except Exception as err:
+                _LOGGER.warning("Error restoring state: %s", err)
 
         # Register entity with session manager
         await self._session_manager.register_entity(self)
         
-        # Request initial state
-        await self._update_state()
+        # Get initial state
+        try:
+            state = await self._session_manager.get_state()
+            self._handle_state_update(state)
+            self.async_write_ha_state()
+        except Exception as err:
+            _LOGGER.error("Error getting initial state: %s", err)
 
     async def async_will_remove_from_hass(self) -> None:
         """Handle entity removal."""
