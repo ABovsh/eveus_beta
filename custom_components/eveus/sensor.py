@@ -872,42 +872,42 @@ class EVSocKwhSensor(BaseEveusSensor):
         self._attr_state_class = SensorStateClass.TOTAL
         self._attr_suggested_display_precision = 1
 
-   def _handle_state_update(self, state: dict) -> None:
-       """Calculate and update SOC in kWh."""
-       try:
-           initial_soc = float(self.hass.states.get(HELPER_EV_INITIAL_SOC).state)
-           max_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
-           energy_charged = float(state.get(ATTR_COUNTER_A_ENERGY, 0))
-           correction = float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state)
+    def _handle_state_update(self, state: dict) -> None:  # Fixed indentation
+        """Calculate and update SOC in kWh."""
+        try:
+            initial_soc = float(self.hass.states.get(HELPER_EV_INITIAL_SOC).state)
+            max_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
+            energy_charged = float(state.get(ATTR_COUNTER_A_ENERGY, 0))
+            correction = float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state)
 
-           # Validate inputs
-           if not (0 <= initial_soc <= 100 and max_capacity > 0 and 0 <= correction <= 10):
-               _LOGGER.error("Invalid input parameters for SOC calculation")
-               return
+            # Validate inputs
+            if not (0 <= initial_soc <= 100 and max_capacity > 0 and 0 <= correction <= 10):
+                _LOGGER.error("Invalid input parameters for SOC calculation")
+                return
 
-           initial_kwh = (initial_soc / 100) * max_capacity
-           efficiency = (1 - correction / 100)
-           charged_kwh = energy_charged * efficiency
-           total_kwh = initial_kwh + charged_kwh
+            initial_kwh = (initial_soc / 100) * max_capacity
+            efficiency = (1 - correction / 100)
+            charged_kwh = energy_charged * efficiency
+            total_kwh = initial_kwh + charged_kwh
 
-           # Ensure result is within valid range
-           self._attr_native_value = max(0, min(total_kwh, max_capacity))
+            # Ensure result is within valid range
+            self._attr_native_value = max(0, min(total_kwh, max_capacity))
 
-           # Store calculation details in attributes
-           self._attr_extra_state_attributes = {
-               **self.extra_state_attributes,
-               "initial_soc_kwh": round(initial_kwh, 2),
-               "energy_charged": round(energy_charged, 2),
-               "efficiency": round(efficiency, 3),
-               "charging_losses": round(energy_charged * (correction / 100), 2),
-               "max_capacity": max_capacity,
-           }
+            # Store calculation details in attributes
+            self._attr_extra_state_attributes = {
+                **self.extra_state_attributes,
+                "initial_soc_kwh": round(initial_kwh, 2),
+                "energy_charged": round(energy_charged, 2),
+                "efficiency": round(efficiency, 3),
+                "charging_losses": round(energy_charged * (correction / 100), 2),
+                "max_capacity": max_capacity,
+            }
 
-       except (TypeError, ValueError, AttributeError) as err:
-           self._error_count += 1
-           _LOGGER.error("Error calculating SOC: %s", str(err))
-           if not self._restored:
-               self._attr_native_value = None
+        except (TypeError, ValueError, AttributeError) as err:
+            self._error_count += 1
+            _LOGGER.error("Error calculating SOC: %s", str(err))
+            if not self._restored:
+                self._attr_native_value = None
 
 class EVSocPercentSensor(BaseEveusSensor):
     """EV State of Charge percentage sensor implementation."""
@@ -919,57 +919,57 @@ class EVSocPercentSensor(BaseEveusSensor):
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_suggested_display_precision = 0
 
-   def _handle_state_update(self, state: dict) -> None:
-       """Calculate and update SOC percentage."""
-       try:
-           battery_capacity = self.hass.states.get(HELPER_EV_BATTERY_CAPACITY)
-           if not battery_capacity or battery_capacity.state in ('unknown', 'unavailable'):
-               raise ValueError("Battery capacity helper unavailable")
+    def _handle_state_update(self, state: dict) -> None:  # Fixed indentation
+        """Calculate and update SOC percentage."""
+        try:
+            battery_capacity = self.hass.states.get(HELPER_EV_BATTERY_CAPACITY)
+            if not battery_capacity or battery_capacity.state in ('unknown', 'unavailable'):
+                raise ValueError("Battery capacity helper unavailable")
 
-           initial_soc = self.hass.states.get(HELPER_EV_INITIAL_SOC)
-           if not initial_soc or initial_soc.state in ('unknown', 'unavailable'):
-               raise ValueError("Initial SOC helper unavailable")
+            initial_soc = self.hass.states.get(HELPER_EV_INITIAL_SOC)
+            if not initial_soc or initial_soc.state in ('unknown', 'unavailable'):
+                raise ValueError("Initial SOC helper unavailable")
 
-           energy_charged = float(state.get(ATTR_COUNTER_A_ENERGY, 0))
+            energy_charged = float(state.get(ATTR_COUNTER_A_ENERGY, 0))
+            
+            correction = self.hass.states.get(HELPER_EV_SOC_CORRECTION)
+            if not correction or correction.state in ('unknown', 'unavailable'):
+                raise ValueError("SOC correction helper unavailable")
+
+            # Calculate SOC
+            max_capacity = float(battery_capacity.state)
+            initial_soc_value = float(initial_soc.state)
+            correction_factor = float(correction.state)
+
+            # Calculate energy added considering losses
+            efficiency = (1 - correction_factor / 100)
+            energy_added = energy_charged * efficiency
+
+            # Calculate total energy and percentage
+            initial_energy = (initial_soc_value / 100) * max_capacity
+            total_energy = initial_energy + energy_added
+            percentage = (total_energy / max_capacity) * 100
+
+            # Ensure percentage is within valid range
+            self._attr_native_value = max(0, min(round(percentage), 100))
            
-           correction = self.hass.states.get(HELPER_EV_SOC_CORRECTION)
-           if not correction or correction.state in ('unknown', 'unavailable'):
-               raise ValueError("SOC correction helper unavailable")
+            # Add detailed attributes
+            self._attr_extra_state_attributes = {
+                **self.extra_state_attributes,
+                "initial_soc": initial_soc_value,
+                "energy_charged": round(energy_charged, 2),
+                "energy_added": round(energy_added, 2),
+                "efficiency": round(efficiency * 100, 1),
+                "max_capacity": max_capacity,
+                "current_energy": round(total_energy, 2),
+                "available_capacity": round(max_capacity - total_energy, 2)
+            }
 
-           # Calculate SOC
-           max_capacity = float(battery_capacity.state)
-           initial_soc_value = float(initial_soc.state)
-           correction_factor = float(correction.state)
-
-           # Calculate energy added considering losses
-           efficiency = (1 - correction_factor / 100)
-           energy_added = energy_charged * efficiency
-
-           # Calculate total energy and percentage
-           initial_energy = (initial_soc_value / 100) * max_capacity
-           total_energy = initial_energy + energy_added
-           percentage = (total_energy / max_capacity) * 100
-
-           # Ensure percentage is within valid range
-           self._attr_native_value = max(0, min(round(percentage), 100))
-           
-           # Add detailed attributes
-           self._attr_extra_state_attributes = {
-               **self.extra_state_attributes,
-               "initial_soc": initial_soc_value,
-               "energy_charged": round(energy_charged, 2),
-               "energy_added": round(energy_added, 2),
-               "efficiency": round(efficiency * 100, 1),
-               "max_capacity": max_capacity,
-               "current_energy": round(total_energy, 2),
-               "available_capacity": round(max_capacity - total_energy, 2)
-           }
-
-       except Exception as err:
-           self._error_count += 1
-           _LOGGER.error("Error calculating SOC percentage: %s", str(err))
-           if not self._restored:
-               self._attr_native_value = None
+        except Exception as err:
+            self._error_count += 1
+            _LOGGER.error("Error calculating SOC percentage: %s", str(err))
+            if not self._restored:
+                self._attr_native_value = None
 
 class TimeToTargetSocSensor(BaseEveusSensor):
     """Time to target SOC sensor implementation."""
