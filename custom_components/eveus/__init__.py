@@ -5,6 +5,7 @@ import asyncio
 import logging
 from typing import Final
 
+from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_HOST,
@@ -12,6 +13,8 @@ from homeassistant.const import (
     CONF_PASSWORD,
     Platform,
 )
+from homeassistant.helpers.event import async_track_time_interval  # Add this
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.storage import Store
