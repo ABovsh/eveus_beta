@@ -90,14 +90,12 @@ async def async_setup_platform(hass: HomeAssistant, entry: ConfigEntry, async_ad
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Eveus from a config entry."""
     try:
-        # Validate helper entities
-        valid_helpers, missing = await async_validate_helper_entities(hass)
-        if not valid_helpers:
-            error_msg = f"Missing or invalid helper entities: {', '.join(missing)}"
-            _LOGGER.error(error_msg)
-            raise ConfigEntryNotReady(error_msg)
+        if DOMAIN not in hass.data:
+            hass.data[DOMAIN] = {}
+            
+        if entry.entry_id in hass.data[DOMAIN]:
+            return True
 
-        # Initialize session manager
         session_manager = SessionManager(
             hass=hass,
             host=entry.data[CONF_HOST],
@@ -113,8 +111,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.error("Failed to initialize session manager: %s", str(err))
             raise ConfigEntryNotReady from err
 
-        # Store data in hass.data
-        hass.data.setdefault(DOMAIN, {})
         hass.data[DOMAIN][entry.entry_id] = {
             "session_manager": session_manager,
             "title": entry.title,
@@ -122,11 +118,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "entities": {platform: {} for platform in PLATFORMS},
         }
 
-        # Set up each platform
-        for platform in PLATFORMS:
-            hass.async_create_task(
-                hass.config_entries.async_forward_entry_setup(entry, platform)
-            )
+        # Use async_forward_entry_setups instead of async_forward_entry_setup
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
         # Set up periodic updates
         async def async_update(now=None):
@@ -136,7 +129,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             except Exception as err:
                 _LOGGER.error("Error updating device: %s", str(err))
 
-        # Register update interval
         entry.async_on_unload(
             async_track_time_interval(
                 hass,
