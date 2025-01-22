@@ -1,20 +1,19 @@
-# File: custom_components/eveus/sensor.py
-"""Support for Eveus sensors with improved error handling and state management."""
+"""Support for Eveus sensors with improved error handling."""
 from __future__ import annotations
 
-import time
 import logging
 import asyncio
+import time
 from datetime import datetime, timedelta
 from typing import Any, Final
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddEntitiesCallback, entity_platform
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.restore_state import RestoreEntity
-from homeassistant.helpers.event import async_track_time_interval, async_call_later
-from homeassistant.helpers import entity_platform
+from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.typing import StateType
 from homeassistant.util import dt as dt_util
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.components.sensor import (
@@ -31,6 +30,8 @@ from homeassistant.const import (
     UnitOfTime,
     PERCENTAGE,
     EVENT_HOMEASSISTANT_START,
+)
+
 from .const import (
     DOMAIN,
     UPDATE_INTERVAL_CHARGING,
