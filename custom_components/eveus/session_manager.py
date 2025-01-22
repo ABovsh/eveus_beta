@@ -492,7 +492,7 @@ class SessionManager:
             return
     
         try:
-            # Get current state once
+            # Get current state once with increased timeout
             state = await self.get_state(force_refresh=True)
             
             # Update entities in batches
@@ -500,12 +500,20 @@ class SessionManager:
             for i in range(0, len(entities), self._entity_batch_size):
                 batch = entities[i:i + self._entity_batch_size]
                 
+                update_tasks = []
                 for entity in batch:
                     if hasattr(entity, '_handle_state_update'):
                         try:
                             entity._handle_state_update(state)
-                            entity.async_write_ha_state()
+                            # Force state update
+                            if hasattr(entity, 'async_write_ha_state'):
+                                entity.async_write_ha_state()
+                                
+                            # Mark entity as available
+                            entity._attr_available = True
+                            
                         except Exception as err:
+                            entity._attr_available = False
                             _LOGGER.error(
                                 "Error updating entity %s: %s",
                                 getattr(entity, 'name', 'Unknown'),
@@ -526,6 +534,12 @@ class SessionManager:
             self._error_count += 1
             if self._error_count >= 3:
                 self._available = False
+                # Mark all entities as unavailable
+                for entity in self._registered_entities:
+                    if hasattr(entity, '_attr_available'):
+                        entity._attr_available = False
+                        if hasattr(entity, 'async_write_ha_state'):
+                            entity.async_write_ha_state()
 
     def get_update_interval(self) -> timedelta:
         """Get appropriate update interval based on state."""
