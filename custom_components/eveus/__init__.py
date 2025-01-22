@@ -1,10 +1,8 @@
 """The Eveus integration."""
-
 from __future__ import annotations
 
 import asyncio
 import logging
-from functools import partial
 from typing import Final
 
 from homeassistant.config_entries import ConfigEntry
@@ -17,7 +15,6 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.storage import Store
-from homeassistant.helpers import device_registry as dr
 
 from .const import (
     DOMAIN,
@@ -44,28 +41,6 @@ REQUIRED_HELPERS = {
     HELPER_EV_TARGET_SOC: (0, 100),  # %
 }
 
-async def async_validate_helper_entities(hass: HomeAssistant) -> tuple[bool, list[str]]:
-    """Validate required helper entities."""
-    missing_helpers = []
-    for helper_id, (min_val, max_val) in REQUIRED_HELPERS.items():
-        state = hass.states.get(helper_id)
-        if not state:
-            missing_helpers.append(f"Missing helper: {helper_id}")
-            continue
-           
-        try:
-            value = float(state.state)
-            if not min_val <= value <= max_val:
-                missing_helpers.append(
-                    f"{helper_id}: Value {value} outside range [{min_val}, {max_val}]"
-                )
-        except (ValueError, TypeError):
-            missing_helpers.append(
-                f"{helper_id}: Invalid value '{state.state}'"
-            )
-           
-    return len(missing_helpers) == 0, missing_helpers
-
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the Eveus component."""
     hass.data.setdefault(DOMAIN, {})
@@ -74,14 +49,15 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Eveus from a config entry."""
     try:
-        # Validate helper entities
-        valid_helpers, missing = await async_validate_helper_entities(hass)
-        if not valid_helpers:
-            error_msg = f"Missing or invalid helper entities: {', '.join(missing)}"
-            _LOGGER.error(error_msg)
-            raise ConfigEntryNotReady(error_msg)
+        # Load platform files lazily using get_platform
+        for platform in PLATFORMS:
+            platform_module = await hass.async_add_executor_job(
+                __import__, f"custom_components.eveus.{platform}", None, None, ["setup_entry"]
+            )
+            if not hasattr(platform_module, "async_setup_entry"):
+                _LOGGER.error(f"Platform {platform} lacks async_setup_entry")
+                continue
 
-        # Create session manager
         session_manager = SessionManager(
             hass=hass,
             host=entry.data[CONF_HOST],
@@ -97,7 +73,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.error("Failed to initialize session manager: %s", str(err))
             raise ConfigEntryNotReady from err
 
-        # Store in hass.data
         hass.data[DOMAIN][entry.entry_id] = {
             "session_manager": session_manager,
             "title": entry.title,
@@ -105,8 +80,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "entities": {platform: {} for platform in PLATFORMS},
         }
 
-        # Set up platforms
-        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        # Forward entry setup to platforms
+        for platform in PLATFORMS:
+            try:
+                await hass.config_entries.async_forward_entry_setup(entry, platform)
+            except Exception as err:
+                _LOGGER.error(f"Error setting up platform {platform}: {err}")
+                return False
 
         return True
 
@@ -120,7 +100,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
         if unload_ok and entry.entry_id in hass.data[DOMAIN]:
             session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
-            await session_manager.close()  # This now just cleans up resources
+            await session_manager.close()
             hass.data[DOMAIN].pop(entry.entry_id)
         return unload_ok
 
