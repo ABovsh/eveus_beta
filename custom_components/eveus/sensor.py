@@ -79,7 +79,8 @@ _LOGGER = logging.getLogger(__name__)
 # In sensor.py, update the BaseEveusSensor class:
 
 class BaseEveusSensor(SensorEntity, RestoreEntity):
-    """Base sensor with improved error handling and registration."""
+    _max_retry_attempts: int = 3
+    _retry_delay: float = 5.0
 
     _attr_has_entity_name: Final = True
     _attr_should_poll = False
@@ -185,7 +186,7 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional state attributes."""
-        return {
+        attrs = {
             "error_count": self._error_count,
             "last_update": dt_util.as_local(
                 dt_util.utc_from_timestamp(self._last_update)
@@ -889,6 +890,18 @@ class EVSocKwhSensor(BaseEveusSensor):
         self._attr_state_class = SensorStateClass.TOTAL
         self._attr_suggested_display_precision = 1
 
+    def _get_helper_value(self, entity_id: str, default: float = 0.0) -> float:
+    """Get helper value with validation."""
+    try:
+        state = self.hass.states.get(entity_id)
+        if not state or state.state in ('unknown', 'unavailable'):
+            _LOGGER.warning(f"Helper {entity_id} unavailable, using default {default}")
+            return default
+        return float(state.state)
+    except (ValueError, TypeError) as err:
+        _LOGGER.error(f"Error getting helper {entity_id} value: {err}")
+        return default
+        
     def _handle_state_update(self, state: dict) -> None:  # Fixed indentation
         """Calculate and update SOC in kWh."""
         try:
