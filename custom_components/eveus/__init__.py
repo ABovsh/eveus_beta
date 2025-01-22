@@ -49,15 +49,6 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Eveus from a config entry."""
     try:
-        # Load platform files lazily using get_platform
-        for platform in PLATFORMS:
-            platform_module = await hass.async_add_executor_job(
-                __import__, f"custom_components.eveus.{platform}", None, None, ["setup_entry"]
-            )
-            if not hasattr(platform_module, "async_setup_entry"):
-                _LOGGER.error(f"Platform {platform} lacks async_setup_entry")
-                continue
-
         session_manager = SessionManager(
             hass=hass,
             host=entry.data[CONF_HOST],
@@ -80,13 +71,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "entities": {platform: {} for platform in PLATFORMS},
         }
 
-        # Forward entry setup to platforms
-        for platform in PLATFORMS:
+        # Use the new async_forward_entry_setups
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+        # Set up periodic updates
+        async def async_update(now=None):
+            """Update device state."""
             try:
-                await hass.config_entries.async_forward_entry_setup(entry, platform)
+                await session_manager.async_update()
             except Exception as err:
-                _LOGGER.error(f"Error setting up platform {platform}: {err}")
-                return False
+                _LOGGER.error("Error updating device: %s", str(err))
+
+        # Initial update
+        await async_update()
+
+        # Schedule periodic updates
+        entry.async_on_unload(
+            async_track_time_interval(
+                hass,
+                async_update,
+                timedelta(seconds=30)
+            )
+        )
 
         return True
 
