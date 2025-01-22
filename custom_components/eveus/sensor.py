@@ -973,36 +973,37 @@ class EVSocPercentSensor(BaseEveusSensor):
 
 class TimeToTargetSocSensor(BaseEveusSensor):
     """Time to target SOC sensor implementation."""
+
     def __init__(self, session_manager, name: str) -> None:
         """Initialize the sensor."""
         super().__init__(session_manager, name)
 
-   def _handle_state_update(self, state: dict) -> None:
-       """Calculate and update time to target SOC."""
-       try:
-           # Check if charging
-           state_code = int(state.get(ATTR_STATE, -1))
-           if state_code != 4:  # Not charging
-               charging_state = CHARGING_STATES.get(state_code, "Unknown")
-               self._attr_native_value = f"Not charging ({charging_state})"
-               self._attr_extra_state_attributes = {
-                   **self.extra_state_attributes,
-                   "state": charging_state,
-                   "charging_active": False,
-               }
-               return
+    def _handle_state_update(self, state: dict) -> None:
+        """Calculate and update time to target SOC."""
+        try:
+            # Check if charging
+            state_code = int(state.get(ATTR_STATE, -1))
+            if state_code != 4:  # Not charging
+                charging_state = CHARGING_STATES.get(state_code, "Unknown")
+                self._attr_native_value = f"Not charging ({charging_state})"
+                self._attr_extra_state_attributes = {
+                    **self.extra_state_attributes,
+                    "state": charging_state,
+                    "charging_active": False,
+                }
+                return
 
-           # Get current and target values
-           soc_state = self.hass.states.get(f"sensor.{self._session_manager._host}_soc_percent")
-           if not soc_state or soc_state.state in ('unknown', 'unavailable'):
-               self._attr_native_value = "Unknown SOC state"
-               return
+            # Get current and target values
+            soc_state = self.hass.states.get(f"sensor.{self._session_manager._host}_soc_percent")
+            if not soc_state or soc_state.state in ('unknown', 'unavailable'):
+                self._attr_native_value = "Unknown SOC state"
+                return
 
-           current_soc = float(soc_state.state)
-           target_soc_helper = self.hass.states.get(HELPER_EV_TARGET_SOC)
-           if not target_soc_helper or target_soc_helper.state in ('unknown', 'unavailable'):
-               self._attr_native_value = "Unknown target SOC"
-               return
+            current_soc = float(soc_state.state)
+            target_soc_helper = self.hass.states.get(HELPER_EV_TARGET_SOC)
+            if not target_soc_helper or target_soc_helper.state in ('unknown', 'unavailable'):
+                self._attr_native_value = "Unknown target SOC"
+                return
 
            target_soc = float(target_soc_helper.state)
 
@@ -1066,15 +1067,15 @@ class TimeToTargetSocSensor(BaseEveusSensor):
                "power_sufficient": True,
            }
 
-       except Exception as err:
-           self._error_count += 1
-           _LOGGER.error("Error calculating time to target: %s", str(err))
-           self._attr_native_value = "Calculation error"
-           self._attr_extra_state_attributes = {
-               **self.extra_state_attributes,
-               "error": str(err),
-               "charging_active": False,
-           }
+        except Exception as err:
+            self._error_count += 1
+            _LOGGER.error("Error calculating time to target: %s", str(err))
+            self._attr_native_value = "Calculation error"
+            self._attr_extra_state_attributes = {
+                **self.extra_state_attributes,
+                "error": str(err),
+                "charging_active": False,
+            }
 
 async def async_setup_entry(
     hass: HomeAssistant,
