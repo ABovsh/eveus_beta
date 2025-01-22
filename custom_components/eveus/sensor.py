@@ -1080,6 +1080,7 @@ async def async_setup_entry(
             return
 
         session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
+        platform = entity_platform.async_get_current_platform()
 
         # Create sensors list with error handling
         sensors = []
@@ -1112,6 +1113,8 @@ async def async_setup_entry(
         for sensor_class, name in sensor_classes:
             try:
                 sensor = sensor_class(session_manager, name)
+                # Explicitly set platform
+                sensor.platform = platform
                 sensors.append(sensor)
             except Exception as err:
                 _LOGGER.error("Error creating sensor %s: %s", name, str(err))
@@ -1125,56 +1128,7 @@ async def async_setup_entry(
             sensor.unique_id: sensor for sensor in sensors
         }
 
-        # Define update coordinator
-        async def async_update_sensors(*_) -> None:
-            """Update all sensors with error handling."""
-            if not hass.is_running:
-                return
-
-            try:
-                state = await session_manager.get_state(force_refresh=True)
-                
-                # Update sensors in batches
-                batch_size = 5
-                for i in range(0, len(sensors), batch_size):
-                    batch = sensors[i:i + batch_size]
-                    
-                    for sensor in batch:
-                        try:
-                            sensor._handle_state_update(state)
-                            sensor.async_write_ha_state()
-                        except Exception as err:
-                            _LOGGER.error(
-                                "Error updating sensor %s: %s",
-                                sensor.name,
-                                str(err)
-                            )
-                    
-                    await asyncio.sleep(0.1)
-
-            except Exception as err:
-                _LOGGER.error("Failed to update sensors: %s", str(err))
-
-        # Add entities and setup updates
         async_add_entities(sensors)
-
-        # Initialize sensors
-        if hass.is_running:
-            await async_update_sensors()
-        else:
-            hass.bus.async_listen_once(
-                EVENT_HOMEASSISTANT_START,
-                async_update_sensors
-            )
-
-        # Schedule regular updates
-        entry.async_on_unload(
-            async_track_time_interval(
-                hass,
-                async_update_sensors,
-                UPDATE_INTERVAL_IDLE
-            )
-        )
 
     except Exception as err:
         _LOGGER.error("Error setting up sensors: %s", str(err))
