@@ -484,15 +484,18 @@ class EveusEnergyCostSensor(BaseNumericSensor):
        return attrs
 
 class EveusCounterACostSensor(EveusEnergyCostSensor):
-   """Counter A cost sensor implementation."""
-   _attribute = ATTR_COUNTER_A_COST
+    """Counter A cost sensor implementation."""
+    def __init__(self, session_manager, name: str) -> None:
+        """Initialize the sensor."""
+        super().__init__(session_manager, name)
+        self._attribute = ATTR_COUNTER_A_COST
 
 class EveusCounterBCostSensor(EveusEnergyCostSensor):
-   """Counter B cost sensor implementation."""
-   _attribute = ATTR_COUNTER_B_COST
-
-# Class update in sensor.py:
-# In custom_components/eveus/sensor.py
+    """Counter B cost sensor implementation."""
+    def __init__(self, session_manager, name: str) -> None:
+        """Initialize the sensor."""
+        super().__init__(session_manager, name)
+        self._attribute = ATTR_COUNTER_B_COST
 
 class EveusCommunicationSensor(BaseEveusSensor):
     """Enhanced communication quality sensor with time tracking."""
@@ -860,12 +863,14 @@ class EveusSessionTimeSensor(BaseEveusSensor):
            self._attr_native_value = 0
 
 class EVSocKwhSensor(BaseEveusSensor):
-   """EV State of Charge energy sensor implementation."""
-
-   _attr_device_class = SensorDeviceClass.ENERGY
-   _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
-   _attr_state_class = SensorStateClass.TOTAL
-   _attr_suggested_display_precision = 1
+    """EV State of Charge energy sensor implementation."""
+    def __init__(self, session_manager, name: str) -> None:
+        """Initialize the sensor."""
+        super().__init__(session_manager, name)
+        self._attr_device_class = SensorDeviceClass.ENERGY
+        self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+        self._attr_state_class = SensorStateClass.TOTAL
+        self._attr_suggested_display_precision = 1
 
    def _handle_state_update(self, state: dict) -> None:
        """Calculate and update SOC in kWh."""
@@ -905,12 +910,14 @@ class EVSocKwhSensor(BaseEveusSensor):
                self._attr_native_value = None
 
 class EVSocPercentSensor(BaseEveusSensor):
-   """EV State of Charge percentage sensor implementation."""
-
-   _attr_device_class = SensorDeviceClass.BATTERY
-   _attr_native_unit_of_measurement = PERCENTAGE
-   _attr_state_class = SensorStateClass.MEASUREMENT
-   _attr_suggested_display_precision = 0
+    """EV State of Charge percentage sensor implementation."""
+    def __init__(self, session_manager, name: str) -> None:
+        """Initialize the sensor."""
+        super().__init__(session_manager, name)
+        self._attr_device_class = SensorDeviceClass.BATTERY
+        self._attr_native_unit_of_measurement = PERCENTAGE
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_suggested_display_precision = 0
 
    def _handle_state_update(self, state: dict) -> None:
        """Calculate and update SOC percentage."""
@@ -965,7 +972,10 @@ class EVSocPercentSensor(BaseEveusSensor):
                self._attr_native_value = None
 
 class TimeToTargetSocSensor(BaseEveusSensor):
-   """Time to target SOC sensor implementation."""
+    """Time to target SOC sensor implementation."""
+    def __init__(self, session_manager, name: str) -> None:
+        """Initialize the sensor."""
+        super().__init__(session_manager, name)
 
    def _handle_state_update(self, state: dict) -> None:
        """Calculate and update time to target SOC."""
