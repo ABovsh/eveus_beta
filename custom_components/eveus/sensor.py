@@ -1005,67 +1005,67 @@ class TimeToTargetSocSensor(BaseEveusSensor):
                 self._attr_native_value = "Unknown target SOC"
                 return
 
-           target_soc = float(target_soc_helper.state)
+            target_soc = float(target_soc_helper.state)
 
-           if current_soc >= target_soc:
-               self._attr_native_value = "Target reached"
-               self._attr_extra_state_attributes = {
-                   **self.extra_state_attributes,
-                   "target_reached": True,
-                   "current_soc": current_soc,
-                   "target_soc": target_soc,
-               }
-               return
+            if current_soc >= target_soc:
+                self._attr_native_value = "Target reached"
+                self._attr_extra_state_attributes = {
+                    **self.extra_state_attributes,
+                    "target_reached": True,
+                    "current_soc": current_soc,
+                    "target_soc": target_soc,
+                }
+                return
 
-           power_meas = float(state.get(ATTR_POWER, 0))
-           if power_meas < 100:  # Minimum power threshold
-               self._attr_native_value = f"Insufficient power ({power_meas:.0f}W)"
-               self._attr_extra_state_attributes = {
-                   **self.extra_state_attributes,
-                   "power_too_low": True,
-                   "current_power": power_meas,
-               }
-               return
+            power_meas = float(state.get(ATTR_POWER, 0))
+            if power_meas < 100:  # Minimum power threshold
+                self._attr_native_value = f"Insufficient power ({power_meas:.0f}W)"
+                self._attr_extra_state_attributes = {
+                    **self.extra_state_attributes,
+                    "power_too_low": True,
+                    "current_power": power_meas,
+                }
+                return
 
-           # Calculate remaining time
-           battery_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
-           correction = float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state)
+            # Calculate remaining time
+            battery_capacity = float(self.hass.states.get(HELPER_EV_BATTERY_CAPACITY).state)
+            correction = float(self.hass.states.get(HELPER_EV_SOC_CORRECTION).state)
 
-           remaining_kwh = (target_soc - current_soc) * battery_capacity / 100
-           efficiency = (1 - correction / 100)
-           power_kw = power_meas * efficiency / 1000
-           total_minutes = round(remaining_kwh / power_kw * 60)
+            remaining_kwh = (target_soc - current_soc) * battery_capacity / 100
+            efficiency = (1 - correction / 100)
+            power_kw = power_meas * efficiency / 1000
+            total_minutes = round(remaining_kwh / power_kw * 60)
 
-           # Format time string
-           if total_minutes < 1:
-               self._attr_native_value = "Less than 1m"
-           else:
-               days = int(total_minutes // 1440)
-               hours = int((total_minutes % 1440) // 60)
-               minutes = int(total_minutes % 60)
+            # Format time string
+            if total_minutes < 1:
+                self._attr_native_value = "Less than 1m"
+            else:
+                days = int(total_minutes // 1440)
+                hours = int((total_minutes % 1440) // 60)
+                minutes = int(total_minutes % 60)
 
-               parts = []
-               if days > 0:
-                   parts.append(f"{days}d")
-               if hours > 0:
-                   parts.append(f"{hours}h")
-               if minutes > 0:
-                   parts.append(f"{minutes}m")
-                   
-               self._attr_native_value = " ".join(parts)
+                parts = []
+                if days > 0:
+                    parts.append(f"{days}d")
+                if hours > 0:
+                    parts.append(f"{hours}h")
+                if minutes > 0:
+                    parts.append(f"{minutes}m")
+                    
+                self._attr_native_value = " ".join(parts)
 
-           # Store calculation details in attributes
-           self._attr_extra_state_attributes = {
-               **self.extra_state_attributes,
-               "current_soc": current_soc,
-               "target_soc": target_soc,
-               "charging_power": power_meas,
-               "efficiency": efficiency,
-               "remaining_kwh": round(remaining_kwh, 2),
-               "estimated_minutes": total_minutes,
-               "charging_active": True,
-               "power_sufficient": True,
-           }
+            # Store calculation details in attributes
+            self._attr_extra_state_attributes = {
+                **self.extra_state_attributes,
+                "current_soc": current_soc,
+                "target_soc": target_soc,
+                "charging_power": power_meas,
+                "efficiency": efficiency,
+                "remaining_kwh": round(remaining_kwh, 2),
+                "estimated_minutes": total_minutes,
+                "charging_active": True,
+                "power_sufficient": True,
+            }
 
         except Exception as err:
             self._error_count += 1
@@ -1076,7 +1076,7 @@ class TimeToTargetSocSensor(BaseEveusSensor):
                 "error": str(err),
                 "charging_active": False,
             }
-
+            
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
