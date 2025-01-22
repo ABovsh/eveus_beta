@@ -1091,7 +1091,7 @@ async def async_setup_entry(
 
         # Create sensors list with error handling
         sensors = []
-        sensor_classes = [
+        for sensor_class, name in [
             (EveusCommunicationSensor, "Communication"),
             (EveusVoltageSensor, "Voltage"),
             (EveusCurrentSensor, "Current"),
@@ -1115,9 +1115,7 @@ async def async_setup_entry(
             (EVSocKwhSensor, "SOC Energy"),
             (EVSocPercentSensor, "SOC Percent"),
             (TimeToTargetSocSensor, "Time to Target"),
-        ]
-
-        for sensor_class, name in sensor_classes:
+        ]:
             try:
                 sensor = sensor_class(session_manager, name)
                 sensors.append(sensor)
