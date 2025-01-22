@@ -52,6 +52,13 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Eveus from a config entry."""
     try:
+        if DOMAIN not in hass.data:
+            hass.data[DOMAIN] = {}
+            
+        if entry.entry_id in hass.data[DOMAIN]:
+            # Integration already setup
+            return True
+
         session_manager = SessionManager(
             hass=hass,
             host=entry.data[CONF_HOST],
@@ -74,7 +81,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "entities": {platform: {} for platform in PLATFORMS},
         }
 
-        # Use the new async_forward_entry_setups
+        # Use async_forward_entry_setups for all platforms at once
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
         # Set up periodic updates
@@ -85,15 +92,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             except Exception as err:
                 _LOGGER.error("Error updating device: %s", str(err))
 
-        # Initial update
-        await async_update()
-
         # Schedule periodic updates
         entry.async_on_unload(
             async_track_time_interval(
                 hass,
                 async_update,
-                timedelta(seconds=30)
+                UPDATE_INTERVAL_IDLE
             )
         )
 
