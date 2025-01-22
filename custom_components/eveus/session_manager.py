@@ -1,7 +1,4 @@
 """Optimized session manager for Eveus integration."""
-# File: custom_components/eveus/session_manager.py 
-# Replace the entire file with this content
-
 from __future__ import annotations
 
 import asyncio
@@ -11,13 +8,15 @@ from typing import Any, Optional
 from datetime import datetime
 from collections import deque
 
+import aiohttp
 from aiohttp import ClientError, ClientTimeout
+import async_timeout
+
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-import async_timeout
 
 from .const import (
     DOMAIN,
