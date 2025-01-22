@@ -81,6 +81,23 @@ _LOGGER = logging.getLogger(__name__)
 class BaseEveusSensor(SensorEntity, RestoreEntity):
     """Base sensor with improved error handling and registration."""
 
+    _attr_has_entity_name: Final = True
+    _attr_should_poll = False
+    _attr_entity_registry_enabled_default = True
+    
+    def __init__(self, session_manager, name: str) -> None:
+        """Initialize the sensor."""
+        super().__init__()  # This is crucial
+        self._session_manager = session_manager
+        self._attr_name = name
+        self._attr_unique_id = f"eveus_{self._session_manager._host}_{name.lower().replace(' ', '_')}"
+        self.entity_id = f"sensor.eveus_{name.lower().replace(' ', '_')}"
+        self._previous_value = None
+        self._restored = False
+        self._error_count = 0
+        self._last_update = None
+        self.hass = session_manager.hass
+
     async def async_added_to_hass(self) -> None:
         """Handle entity added to Home Assistant."""
         await super().async_added_to_hass()
@@ -866,7 +883,7 @@ class EVSocKwhSensor(BaseEveusSensor):
     """EV State of Charge energy sensor implementation."""
     def __init__(self, session_manager, name: str) -> None:
         """Initialize the sensor."""
-        super().__init__(session_manager, name)
+        super().__init__(session_manager, name)  # Call parent class constructor properly
         self._attr_device_class = SensorDeviceClass.ENERGY
         self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
         self._attr_state_class = SensorStateClass.TOTAL
