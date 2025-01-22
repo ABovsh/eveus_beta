@@ -14,6 +14,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.event import async_track_time_interval, async_call_later
+from homeassistant.helpers import entity_platform
 from homeassistant.util import dt as dt_util
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.components.sensor import (
@@ -30,8 +31,6 @@ from homeassistant.const import (
     UnitOfTime,
     PERCENTAGE,
     EVENT_HOMEASSISTANT_START,
-)
-
 from .const import (
     DOMAIN,
     UPDATE_INTERVAL_CHARGING,
@@ -63,6 +62,14 @@ from .const import (
     BATTERY_VOLTAGE_MAX,
     BATTERY_VOLTAGE_WARNING,
     BATTERY_VOLTAGE_CRITICAL,
+    TEMP_WARNING_BOX,
+    TEMP_CRITICAL_BOX,
+    TEMP_WARNING_PLUG,
+    TEMP_CRITICAL_PLUG,
+    HELPER_EV_BATTERY_CAPACITY,
+    HELPER_EV_INITIAL_SOC,
+    HELPER_EV_SOC_CORRECTION,
+    HELPER_EV_TARGET_SOC,
 )
 
 _LOGGER = logging.getLogger(__name__)
