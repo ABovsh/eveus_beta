@@ -31,11 +31,11 @@ MAX_COMMANDS_PER_MINUTE: Final = 30
 COMMAND_COOLDOWN: Final = 2.0  # seconds
 
 # Error handling
-MAX_RETRIES: Final = 3
-RETRY_BASE_DELAY: Final = 1.0  # seconds
+COMMAND_TIMEOUT: Final = 10.0  # Increased from 5.0
+STATE_CACHE_TTL: Final = 5.0   # Increased from 2.0
+MAX_RETRIES: Final = 5         # Increased from 3
+RETRY_BASE_DELAY: Final = 2.0  # Increased from 1.0
 MAX_RETRY_DELAY: Final = 30.0  # seconds
-COMMAND_TIMEOUT: Final = 5.0
-STATE_CACHE_TTL: Final = 2.0  # seconds
 
 # API Endpoints
 API_ENDPOINT_MAIN: Final = "/main"
