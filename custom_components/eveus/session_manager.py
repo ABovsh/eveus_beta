@@ -124,27 +124,27 @@ class SessionManager:
         self._session = None  # Just remove our reference
 
     async def initialize(self) -> None:
-            """Initialize the session manager."""
-            try:
-                # Load stored data using executor
-                self._stored_data = await self._store.async_load() or {}
-                
-                # Get initial state and capabilities
-                state = await self.get_state(force_refresh=True)
-                await self._update_capabilities(state)
-                
-                _LOGGER.debug(
-                    "Session manager initialized for %s (Current range: %s-%sA, FW: %s)",
-                    self._host,
-                    self._capabilities.get("min_current"),
-                    self._capabilities.get("max_current"),
-                    self._firmware_version
-                )
-                
-            except Exception as err:
-                _LOGGER.error("Failed to initialize session manager: %s", str(err))
-                self._available = False
-                raise
+        """Initialize the session manager."""
+        try:
+            # Restore any saved session data
+            await self._restore_session_data()
+            
+            # Get initial state and capabilities
+            state = await self.get_state(force_refresh=True)
+            await self._update_capabilities(state)
+            
+            _LOGGER.debug(
+                "Session manager initialized for %s (Current range: %s-%sA, FW: %s)",
+                self._host,
+                self._capabilities.get("min_current"),
+                self._capabilities.get("max_current"),
+                self._firmware_version
+            )
+            
+        except Exception as err:
+            _LOGGER.error("Failed to initialize session manager: %s", str(err))
+            self._available = False
+            raise
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create an HTTP session."""
@@ -413,23 +413,61 @@ class SessionManager:
         """Unregister an entity from batch updates."""
         self._registered_entities.discard(entity)
 
-    async def _store_session_data(self, state: dict) -> None:
-        """Store persistent session data."""
-        if not self._store:
-            return
+async def _store_session_data(self, state: dict) -> None:
+    """Store persistent session data."""
+    try:
+        # Create store if not exists
+        if not hasattr(self, '_store'):
+            self._store = Store(
+                self.hass,
+                1,  # version
+                f"{DOMAIN}_{self._entry_id}_session"
+            )
             
+        # Prepare data to store
+        session_data = {
+            "last_update": dt_util.utcnow().isoformat(),
+            "charging_state": state.get("state"),
+            "session_energy": state.get("sessionEnergy"),
+            "session_time": state.get("sessionTime"),
+            "total_energy": state.get("totalEnergy"),
+            "counter_a": state.get("IEM1"),
+            "counter_b": state.get("IEM2"),
+        }
+            
+        # Store data
+        await self._store.async_save(session_data)
+        
+    except Exception as err:
+        _LOGGER.error("Failed to store session data: %s", str(err))
+
+    async def _restore_session_data(self) -> None:
+        """Restore session data from storage."""
         try:
-            session_data = {
-                key: state.get(key)
-                for key in PERSISTENT_SESSION_DATA
-                if key in state
-            }
-            session_data["last_update"] = dt_util.utcnow().isoformat()
-            
-            await self._store.async_save(session_data)
-            
+            if not hasattr(self, '_store'):
+                self._store = Store(
+                    self.hass,
+                    1,  # version
+                    f"{DOMAIN}_{self._entry_id}_session"
+                )
+                
+            stored = await self._store.async_load()
+            if stored:
+                _LOGGER.debug("Restored session data: %s", stored)
+                
+                # Update state cache with stored values if current state is empty
+                if not self._state_cache:
+                    self._state_cache = {}
+                    self._state_cache.update({
+                        "sessionEnergy": stored.get("session_energy"),
+                        "sessionTime": stored.get("session_time"),
+                        "totalEnergy": stored.get("total_energy"),
+                        "IEM1": stored.get("counter_a"),
+                        "IEM2": stored.get("counter_b"),
+                    })
+                    
         except Exception as err:
-            _LOGGER.error("Failed to store session data: %s", str(err))
+            _LOGGER.error("Failed to restore session data: %s", str(err))
 
     @property
     def available(self) -> bool:
