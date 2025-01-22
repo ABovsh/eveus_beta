@@ -19,8 +19,9 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
-    SensorStateClass,
+    SensorStateClass
 )
+
 from homeassistant.const import (
     UnitOfElectricPotential,
     UnitOfElectricCurrent,
@@ -29,9 +30,10 @@ from homeassistant.const import (
     UnitOfTemperature,
     UnitOfTime,
     PERCENTAGE,
-    EVENT_HOMEASSISTANT_START,
+    EVENT_HOMEASSISTANT_START
 )
 
+# Local imports kept separate for clarity
 from .const import (
     DOMAIN,
     UPDATE_INTERVAL_CHARGING,
@@ -70,7 +72,7 @@ from .const import (
     HELPER_EV_BATTERY_CAPACITY,
     HELPER_EV_INITIAL_SOC,
     HELPER_EV_SOC_CORRECTION,
-    HELPER_EV_TARGET_SOC,
+    HELPER_EV_TARGET_SOC
 )
 
 _LOGGER = logging.getLogger(__name__)
