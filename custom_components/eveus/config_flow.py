@@ -17,9 +17,6 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-# Change this line specifically:
-from homeassistant.util.timeout import timeout
-
 from .const import (
     DOMAIN,
     COMMAND_TIMEOUT,
@@ -98,39 +95,38 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
         session = async_get_clientsession(hass)
         auth = aiohttp.BasicAuth(data[CONF_USERNAME], data[CONF_PASSWORD])
         
-        async with timeout(COMMAND_TIMEOUT):
-            try:
-                async with session.post(
-                    f"http://{data[CONF_HOST]}{API_ENDPOINT_MAIN}",
-                    auth=auth,
-                    ssl=False,
-                    timeout=aiohttp.ClientTimeout(total=COMMAND_TIMEOUT)
-                ) as response:
-                    if response.status == 401:
-                        _LOGGER.error("Authentication failed")
-                        raise InvalidAuth
-                        
-                    response.raise_for_status()
-                    result = await response.json()
+        try:
+            async with session.post(
+                f"http://{data[CONF_HOST]}{API_ENDPOINT_MAIN}",
+                auth=auth,
+                ssl=False,
+                timeout=aiohttp.ClientTimeout(total=COMMAND_TIMEOUT)
+            ) as response:
+                if response.status == 401:
+                    _LOGGER.error("Authentication failed")
+                    raise InvalidAuth
                     
-                    if not isinstance(result, dict):
-                        _LOGGER.error("Invalid response format")
-                        raise CannotConnect("Invalid response format")
-                    
-                    # Get device info with dynamic current range
-                    device_info = {
-                        "title": f"Eveus ({data[CONF_HOST]})",
-                        "firmware_version": result.get("verFWMain", "Unknown").strip(),
-                        "station_id": result.get("stationId", "Unknown").strip(),
-                        "min_current": float(result.get("minCurrent", 7)),
-                        "max_current": float(result.get("curDesign", 16)),
-                    }
-                    
-                    return device_info
+                response.raise_for_status()
+                result = await response.json()
+                
+                if not isinstance(result, dict):
+                    _LOGGER.error("Invalid response format")
+                    raise CannotConnect("Invalid response format")
+                
+                # Get device info with dynamic current range
+                device_info = {
+                    "title": f"Eveus ({data[CONF_HOST]})",
+                    "firmware_version": result.get("verFWMain", "Unknown").strip(),
+                    "station_id": result.get("stationId", "Unknown").strip(),
+                    "min_current": float(result.get("minCurrent", 7)),
+                    "max_current": float(result.get("curDesign", 16)),
+                }
+                
+                return device_info
 
-            except aiohttp.ClientError as err:
-                _LOGGER.error("Connection error: %s", str(err))
-                raise CannotConnect(f"Connection error: {err}")
+        except aiohttp.ClientError as err:
+            _LOGGER.error("Connection error: %s", str(err))
+            raise CannotConnect(f"Connection error: {err}")
 
     except asyncio.TimeoutError:
         _LOGGER.error("Connection timeout")
@@ -138,7 +134,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     except Exception as err:
         _LOGGER.exception("Unexpected error: %s", err)
         raise CannotConnect(f"Unexpected error: {err}")
-
+        
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
    """Handle a config flow for Eveus."""
 
