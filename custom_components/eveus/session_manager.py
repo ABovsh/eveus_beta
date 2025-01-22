@@ -465,11 +465,9 @@ class SessionManager:
             if self._state_cache.get("state") == 4:  # Charging
                 await self._store_session_data(self._state_cache)
             
-            # Close HTTP session
-            if self._session and not self._session.closed:
-                await self._session.close()
-                self._session = None
-                
+            # Don't close the session, just remove our reference
+            self._session = None
+                    
         except Exception as err:
             _LOGGER.error("Error during session manager cleanup: %s", str(err))
         
