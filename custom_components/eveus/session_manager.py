@@ -219,9 +219,9 @@ class SessionManager:
                 
         except (TypeError, ValueError) as err:
             raise ValidationError(f"Data validation failed: {err}")
-
+  
     async def get_state(self, force_refresh: bool = False) -> dict[str, Any]:
-        """Get current state with caching and validation."""
+        """Get current state with improved connection handling."""
         async with self._state_lock:
             current_time = time.time()
             
@@ -232,7 +232,7 @@ class SessionManager:
                 and current_time - self._last_state_update < STATE_CACHE_TTL
             ):
                 return self._state_cache.copy()
-
+    
             # Get fresh state with retries
             retry_count = 0
             last_error = None
@@ -240,10 +240,15 @@ class SessionManager:
             while retry_count < MAX_RETRIES:
                 try:
                     session = await self._get_session()
-                    async with async_timeout.timeout(COMMAND_TIMEOUT):
+                    
+                    # Use longer timeout for initial connection
+                    timeout = COMMAND_TIMEOUT * 2 if retry_count == 0 else COMMAND_TIMEOUT
+                    
+                    async with async_timeout.timeout(timeout):
                         async with session.post(
                             f"{self._base_url}{API_ENDPOINT_MAIN}",
                             ssl=False,
+                            timeout=aiohttp.ClientTimeout(total=timeout)
                         ) as response:
                             response.raise_for_status()
                             data = await response.json()
@@ -263,18 +268,23 @@ class SessionManager:
                             
                 except asyncio.TimeoutError as err:
                     last_error = f"Timeout getting state: {err}"
-                except ClientError as err:
+                    _LOGGER.debug(
+                        "Connection timeout (attempt %d/%d): %s",
+                        retry_count + 1,
+                        MAX_RETRIES,
+                        str(err)
+                    )
+                except aiohttp.ClientError as err:
                     last_error = f"Client error: {err}"
-                except ValidationError as err:
-                    last_error = f"Validation error: {err}"
                 except Exception as err:
                     last_error = f"Unexpected error: {err}"
                 
                 retry_count += 1
                 if retry_count < MAX_RETRIES:
-                    await asyncio.sleep(self._retry_delay)
-                    self._retry_delay = min(self._retry_delay * 2, MAX_RETRY_DELAY)
-            
+                    # Exponential backoff
+                    delay = min(self._retry_delay * (2 ** retry_count), MAX_RETRY_DELAY)
+                    await asyncio.sleep(delay)
+                    
             # Update error tracking
             self._error_count += 1
             self._available = self._error_count < 3
