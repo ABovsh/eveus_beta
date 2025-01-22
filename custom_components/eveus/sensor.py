@@ -9,7 +9,7 @@ from typing import Any, Final
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.helpers.entity_platform import AddEntitiesCallback, entity_platform
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.event import async_track_time_interval
@@ -33,7 +33,6 @@ from homeassistant.const import (
     EVENT_HOMEASSISTANT_START
 )
 
-# Local imports kept separate for clarity
 from .const import (
     DOMAIN,
     UPDATE_INTERVAL_CHARGING,
@@ -1090,7 +1089,6 @@ async def async_setup_entry(
             return
 
         session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
-        platform = entity_platform.async_get_current_platform()
 
         # Create sensors list with error handling
         sensors = []
@@ -1123,8 +1121,6 @@ async def async_setup_entry(
         for sensor_class, name in sensor_classes:
             try:
                 sensor = sensor_class(session_manager, name)
-                # Explicitly set platform
-                sensor.platform = platform
                 sensors.append(sensor)
             except Exception as err:
                 _LOGGER.error("Error creating sensor %s: %s", name, str(err))
@@ -1138,6 +1134,7 @@ async def async_setup_entry(
             sensor.unique_id: sensor for sensor in sensors
         }
 
+        # Add entities
         async_add_entities(sensors)
 
     except Exception as err:
