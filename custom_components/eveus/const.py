@@ -6,9 +6,9 @@ from typing import Final, Set
 DOMAIN: Final = "eveus"
 
 # Update intervals
-UPDATE_INTERVAL_CHARGING: Final = timedelta(seconds=10)
-UPDATE_INTERVAL_IDLE: Final = timedelta(seconds=60)
-UPDATE_INTERVAL_ERROR: Final = timedelta(seconds=30)
+UPDATE_INTERVAL_CHARGING = timedelta(seconds=10)
+UPDATE_INTERVAL_IDLE = timedelta(seconds=60)
+UPDATE_INTERVAL_ERROR = timedelta(seconds=20)
 
 # Configuration
 CONF_MODEL: Final = "model"
