@@ -39,22 +39,11 @@ PLATFORMS: Final = [
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Eveus from a config entry."""
     try:
-        # Load platform modules in executor to avoid blocking
-        platform_modules = {}
-        for platform in PLATFORMS:
-            try:
-                module_name = f"custom_components.eveus.{platform}"
-                module = await hass.async_add_executor_job(
-                    importlib.import_module, module_name
-                )
-                platform_modules[platform] = module
-            except ImportError as err:
-                _LOGGER.error(
-                    "Error importing platform %s: %s",
-                    platform,
-                    str(err)
-                )
-                continue
+        if DOMAIN not in hass.data:
+            hass.data[DOMAIN] = {}
+            
+        if entry.entry_id in hass.data[DOMAIN]:
+            return True
 
         session_manager = SessionManager(
             hass=hass,
@@ -71,7 +60,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.error("Failed to initialize session manager: %s", str(err))
             raise ConfigEntryNotReady from err
 
-        hass.data.setdefault(DOMAIN, {})
         hass.data[DOMAIN][entry.entry_id] = {
             "session_manager": session_manager,
             "title": entry.title,
@@ -79,18 +67,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "entities": {platform: {} for platform in PLATFORMS},
         }
 
-        # Forward entry setup using loaded modules
-        for platform in PLATFORMS:
-            if platform in platform_modules:
-                try:
-                    if hasattr(platform_modules[platform], "async_setup_entry"):
-                        await platform_modules[platform].async_setup_entry(hass, entry)
-                except Exception as err:
-                    _LOGGER.error(
-                        "Error setting up platform %s: %s",
-                        platform,
-                        str(err)
-                    )
+        # Forward entry setup to platforms using the correct method
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
         # Set up periodic updates
         async def async_update(now=None):
@@ -113,3 +91,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception as err:
         _LOGGER.error("Error setting up Eveus integration: %s", str(err))
         raise ConfigEntryNotReady from err
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload a config entry."""
+    try:
+        # Unload platforms properly
+        unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+        
+        if unload_ok:
+            if DOMAIN in hass.data and entry.entry_id in hass.data[DOMAIN]:
+                session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
+                await session_manager.close()
+                hass.data[DOMAIN].pop(entry.entry_id)
+
+        return unload_ok
+
+    except Exception as err:
+        _LOGGER.error("Error unloading entry: %s", str(err))
+        return False
+
+async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Handle an options update."""
+    await async_unload_entry(hass, entry)
+    await async_setup_entry(hass, entry)
