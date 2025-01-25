@@ -62,99 +62,122 @@ _LOGGER = logging.getLogger(__name__)
 _executor = ThreadPoolExecutor(max_workers=2)
 
 class EveusUpdater:
-   """Handle Eveus data updates."""
+    """Handle Eveus data updates."""
 
-   def __init__(self, host: str, username: str, password: str, hass: HomeAssistant) -> None:
-       self._host = host
-       self._username = username
-       self._password = password
-       self._hass = hass
-       self._data = {}
-       self._available = True
-       self._session = None
-       self._sensors = []
-       self._update_task = None
-       self._last_update = time.time()
-       self._update_lock = asyncio.Lock()
-       self._error_count = 0
-       self._max_errors = 3
+    def __init__(self, host: str, username: str, password: str, hass: HomeAssistant) -> None:
+        self._host = host
+        self._username = username
+        self._password = password
+        self._hass = hass
+        self._data = {}
+        self._available = True
+        self._session = None
+        self._sensors = []
+        self._update_task = None
+        self._last_update = time.time()
+        self._update_lock = asyncio.Lock()
+        self._error_count = 0
+        self._max_errors = 3
+        self._retry_interval = 5
 
-   def register_sensor(self, sensor: "BaseEveusSensor") -> None:
-       self._sensors.append(sensor)
+    def register_sensor(self, sensor: "BaseEveusSensor") -> None:
+        self._sensors.append(sensor)
 
-   @property
-   def data(self) -> dict:
-       return self._data
+    @property
+    def data(self) -> dict:
+        return self._data
 
-   @property
-   def available(self) -> bool:
-       return self._available
+    @property
+    def available(self) -> bool:
+        return self._available
 
-   @property
-   def last_update(self) -> float:
-       return self._last_update
+    @property
+    def last_update(self) -> float:
+        return self._last_update
 
-   async def async_start_updates(self) -> None:
-       if self._update_task is None:
-           self._update_task = asyncio.create_task(self._update_loop())
+    async def async_start_updates(self) -> None:
+        if self._update_task is None:
+            self._update_task = asyncio.create_task(self._update_loop())
 
-   async def _update_loop(self) -> None:
-       while True:
-           try:
-               async with asyncio.timeout(10):
-                   await self._update()
-               await asyncio.sleep(SCAN_INTERVAL.total_seconds())
-           except asyncio.CancelledError:
-               break
-           except (asyncio.TimeoutError, aiohttp.ClientError) as err:
-               _LOGGER.error("Update timeout: %s", str(err))
-               await asyncio.sleep(SCAN_INTERVAL.total_seconds())
-           except Exception as err:
-               _LOGGER.error("Update error: %s", str(err))
-               await asyncio.sleep(SCAN_INTERVAL.total_seconds())
+    async def _update_loop(self) -> None:
+        retry_count = 0
+        while True:
+            try:
+                async with asyncio.timeout(10):
+                    await self._update()
+                    retry_count = 0  # Reset retry count on successful update
+                await asyncio.sleep(SCAN_INTERVAL.total_seconds())
+                
+            except asyncio.CancelledError:
+                break
+                
+            except (asyncio.TimeoutError, aiohttp.ClientError) as err:
+                retry_count += 1
+                retry_delay = min(self._retry_interval * retry_count, 60)  # Max 60s delay
+                _LOGGER.error("Update timeout/connection error: %s. Retrying in %s seconds", 
+                             str(err), retry_delay)
+                await asyncio.sleep(retry_delay)
+                
+            except Exception as err:
+                _LOGGER.error("Update error: %s", str(err))
+                await asyncio.sleep(SCAN_INTERVAL.total_seconds())
 
-   async def _get_session(self) -> aiohttp.ClientSession:
-       if self._session is None or self._session.closed:
-           timeout = aiohttp.ClientTimeout(total=10)
-           connector = aiohttp.TCPConnector(limit=1, force_close=True)
-           self._session = aiohttp.ClientSession(timeout=timeout, connector=connector)
-       return self._session
+    async def _get_session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            timeout = aiohttp.ClientTimeout(total=10, connect=5)
+            connector = aiohttp.TCPConnector(limit=1, force_close=True, enable_cleanup_closed=True)
+            self._session = aiohttp.ClientSession(timeout=timeout, connector=connector)
+        return self._session
 
-   async def _update(self) -> None:
-       try:
-           session = await self._get_session()
-           async with session.post(
-               f"http://{self._host}/main",
-               auth=aiohttp.BasicAuth(self._username, self._password),
-               timeout=10
-           ) as response:
-               response.raise_for_status()
-               self._data = await response.json()
-               self._available = True
-               self._last_update = time.time()
-               self._error_count = 0
+    async def _update(self) -> None:
+        async with self._update_lock:
+            try:
+                session = await self._get_session()
+                async with session.post(
+                    f"http://{self._host}/main",
+                    auth=aiohttp.BasicAuth(self._username, self._password)
+                ) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                    
+                    if not isinstance(data, dict):
+                        raise ValueError("Invalid data format received")
+                        
+                    self._data = data
+                    self._available = True
+                    self._last_update = time.time()
+                    self._error_count = 0
 
-               for sensor in self._sensors:
-                   try:
-                       sensor.async_write_ha_state()
-                   except Exception as err:
-                       _LOGGER.error("Sensor update error: %s", str(err))
+                    for sensor in self._sensors:
+                        if hasattr(sensor, 'async_write_ha_state'):
+                            try:
+                                sensor.async_write_ha_state()
+                            except Exception as err:
+                                _LOGGER.error("Error updating sensor %s: %s", 
+                                            getattr(sensor, 'name', 'unknown'), str(err))
 
-       except (asyncio.TimeoutError, aiohttp.ClientError) as err:
-           self._error_count += 1
-           self._available = self._error_count < self._max_errors
-           _LOGGER.error("Data update error: %s", str(err))
+            except (asyncio.TimeoutError, aiohttp.ClientError) as err:
+                self._error_count += 1
+                self._available = self._error_count < self._max_errors
+                raise
 
-   async def async_shutdown(self) -> None:
-       if self._update_task:
-           self._update_task.cancel()
-           try:
-               await self._update_task
-           except asyncio.CancelledError:
-               pass
+            except Exception as err:
+                self._error_count += 1
+                self._available = self._error_count < self._max_errors
+                _LOGGER.error("Data update error: %s", str(err))
 
-       if self._session and not self._session.closed:
-           await self._session.close()
+    async def async_shutdown(self) -> None:
+        """Shutdown updater and cleanup resources."""
+        if self._update_task:
+            self._update_task.cancel()
+            try:
+                async with asyncio.timeout(5):
+                    await self._update_task
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+
+        if self._session and not self._session.closed:
+            await self._session.close()
 
 class BaseEveusSensor(SensorEntity, RestoreEntity):
    """Base implementation for Eveus sensors."""
