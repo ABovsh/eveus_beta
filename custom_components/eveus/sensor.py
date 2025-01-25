@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 import aiohttp
 from functools import partial
+from concurrent.futures import ThreadPoolExecutor
 
 from homeassistant.core import HomeAssistant 
 from homeassistant.config_entries import ConfigEntry
@@ -58,6 +59,7 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+_executor = ThreadPoolExecutor(max_workers=2)
 
 class EveusUpdater:
    """Class to handle Eveus data updates."""
@@ -272,12 +274,12 @@ class StateSensor(BaseEveusSensor):
    """Base state sensor."""
    _attr_entity_category = EntityCategory.DIAGNOSTIC
    
-   def __init__(self, updater: EveusUpdector, name: str, key: str,
+   def __init__(self, updater: EveusUpdater, name: str, key: str,
                 state_map: dict, icon: str = "mdi:information"):
        """Initialize state sensor."""
        super().__init__(updater)
        self._attr_name = name
-       self._attr_unique_id = f"{updator._host}_{key}"
+       self._attr_unique_id = f"{updater._host}_{key}"
        self._key = key
        self._state_map = state_map
        self._attr_icon = icon
@@ -442,11 +444,11 @@ async def async_setup_entry(
 if "entities" not in hass.data[DOMAIN][entry.entry_id]:
        hass.data[DOMAIN][entry.entry_id]["entities"] = {}
 
-   hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
-       sensor.unique_id: sensor for sensor in sensors
-   }
+hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
+   sensor.unique_id: sensor for sensor in sensors
+}
 
-   async_add_entities(sensors)
+async_add_entities(sensors)
 
 class EVSocKwhSensor(BaseEveusSensor):
    """EV State of Charge energy sensor."""
