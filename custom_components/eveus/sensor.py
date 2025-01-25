@@ -185,17 +185,20 @@ class EveusUpdater:
 
 class BaseEveusSensor(SensorEntity, RestoreEntity):
    """Base implementation for Eveus sensors."""
-
-   _attr_has_entity_name = True
-   _attr_should_poll = False
-   _attr_entity_registry_enabled_default = True
-   _attr_entity_registry_visible_default = True
-
+   
    def __init__(self, updater: EveusUpdater) -> None:
-       """Initialize the sensor."""
+       super().__init__()
        self._updater = updater
        self._updater.register_sensor(self)
        self._previous_value = None
+       self._attr_has_entity_name = True
+       self._attr_should_poll = False
+       self._attr_entity_registry_enabled_default = True
+       self._attr_entity_registry_visible_default = True
+       self._attr_native_unit_of_measurement = None
+       self._attr_native_value = None
+       self._attr_device_class = None
+       self._attr_state_class = None
 
    async def async_added_to_hass(self) -> None:
        """Handle entity which will be added."""
@@ -243,6 +246,21 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
    def available(self) -> bool:
        """Return if entity is available."""
        return self._updater.available
+
+   @property
+   def unit_of_measurement(self) -> str | None:
+       """Return unit of measurement."""
+       return self._attr_native_unit_of_measurement
+
+   @property
+   def state_class(self) -> str | None:
+       """Return state class."""
+       return self._attr_state_class
+
+   @property
+   def device_class(self) -> str | None:
+       """Return device class."""
+       return self._attr_device_class
 
 class NumericSensor(BaseEveusSensor):
     """Base class for numeric sensors."""
