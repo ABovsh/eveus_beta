@@ -1,68 +1,91 @@
-# File: custom_components/eveus/switch.py
-"""Support for Eveus switches with improved error handling."""
+"""Support for Eveus switches."""
 from __future__ import annotations
 
 import logging
 import asyncio
-from typing import Any, Final
+import time
+import aiohttp
+from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import EntityCategory
-from homeassistant.helpers.restore_state import RestoreEntity
-from homeassistant.helpers.event import async_track_time_interval
-from homeassistant.util import dt as dt_util
-
-from .const import (
-    DOMAIN,
-    CMD_EVSE_ENABLED,
-    CMD_ONE_CHARGE,
-    CMD_RESET_COUNTER,
-    UPDATE_INTERVAL_CHARGING,
-    UPDATE_INTERVAL_IDLE,
+from homeassistant.const import (
+    CONF_HOST,
+    CONF_USERNAME,
+    CONF_PASSWORD,
 )
+
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-class BaseEveusSwitch(SwitchEntity, RestoreEntity):
-    """Base class for Eveus switches with error handling."""
+# Constants
+MAX_RETRIES = 3
+RETRY_DELAY = 2
+COMMAND_TIMEOUT = 5
+UPDATE_TIMEOUT = 10
+MIN_UPDATE_INTERVAL = 2
+MIN_COMMAND_INTERVAL = 1
 
-    _attr_has_entity_name: Final = True
-    _attr_should_poll = False
-    _max_retry_attempts = 3
-    _retry_delay = 5.0
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up Eveus switches based on config entry."""
+    host = entry.data[CONF_HOST]
+    username = entry.data[CONF_USERNAME]
+    password = entry.data[CONF_PASSWORD]
 
-    def __init__(self, session_manager) -> None:
-        """Initialize switch with improved error handling."""
-        self._session_manager = session_manager
+    switches = [
+        EveusStopChargingSwitch(host, username, password),
+        EveusOneChargeSwitch(host, username, password),
+        EveusResetCounterASwitch(host, username, password),
+    ]
+
+    # Initialize entities dict if needed
+    if "entities" not in hass.data[DOMAIN][entry.entry_id]:
+        hass.data[DOMAIN][entry.entry_id]["entities"] = {}
+
+    # Store switch references with unique_id as key
+    hass.data[DOMAIN][entry.entry_id]["entities"]["switch"] = {
+        switch.unique_id: switch for switch in switches
+    }
+
+    async_add_entities(switches)
+
+class BaseEveusSwitch(SwitchEntity):
+    """Base class for Eveus switches."""
+
+    def __init__(self, host: str, username: str, password: str) -> None:
+        """Initialize the switch."""
+        self._host = host
+        self._username = username
+        self._password = password
+        self._available = True
+        self._session = None
         self._is_on = False
-        self._attr_unique_id = f"eveus_{self._session_manager._host}_{self.name.lower().replace(' ', '_')}"
-        self.entity_id = f"switch.eveus_{self.name.lower().replace(' ', '_')}"
+        self._attr_has_entity_name = True
+        self._command_lock = asyncio.Lock()
+        self._update_lock = asyncio.Lock()
+        self._last_command_time = 0
+        self._last_update = time.time()
+        self._state_data = {}
         self._error_count = 0
-        self._last_update = None
-        self._restored = False
-        self.hass = session_manager.hass
+        self._max_errors = 3
 
-    async def async_added_to_hass(self) -> None:
-        """Handle entity added to HA."""
-        await super().async_added_to_hass()
-        
-        if last_state := await self.async_get_last_state():
-            self._is_on = last_state.state == "on"
-            self._restored = True
-
-        await self._session_manager.register_entity(self)
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Handle entity removal."""
-        await self._session_manager.unregister_entity(self)
+    @property
+    def unique_id(self) -> str:
+        """Return a unique ID."""
+        return f"{self._host}_{self.name}"
 
     @property
     def available(self) -> bool:
         """Return if entity is available."""
-        return self._session_manager.available
+        return self._available
 
     @property
     def is_on(self) -> bool:
@@ -73,213 +96,248 @@ class BaseEveusSwitch(SwitchEntity, RestoreEntity):
     def device_info(self) -> dict[str, Any]:
         """Return device information."""
         return {
-            "identifiers": {(DOMAIN, self._session_manager._host)},
-            "name": "Eveus",
+            "identifiers": {(DOMAIN, self._host)},
+            "name": "Eveus EV Charger",
             "manufacturer": "Eveus",
-            "model": "Eveus",
-            "sw_version": self._session_manager.firmware_version,
-            "hw_version": f"Current range: {self._session_manager.capabilities['min_current']}-{self._session_manager.capabilities['max_current']}A",
-            "configuration_url": f"http://{self._session_manager._host}",
+            "model": f"Eveus ({self._host})",
         }
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return additional state attributes."""
-        attrs = {
-            "error_count": self._error_count,
-            "restored": self._restored,
-        }
-        if self._last_update is not None:
-            if isinstance(self._last_update, (int, float)):
-                attrs["last_update"] = dt_util.utc_from_timestamp(self._last_update).isoformat()
-            else:
-                attrs["last_update"] = self._last_update.isoformat()
-        return attrs
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create client session with proper configuration."""
+        if self._session is None or self._session.closed:
+            timeout = aiohttp.ClientTimeout(total=10, connect=5)
+            connector = aiohttp.TCPConnector(limit=1, force_close=True)
+            self._session = aiohttp.ClientSession(timeout=timeout, connector=connector)
+        return self._session
 
-    async def _execute_command(self, command: bool) -> None:
-        """Execute turn on/off command with retry logic."""
-        method = self._execute_turn_on if command else self._execute_turn_off
-        attempts = 0
-        
-        while attempts < self._max_retry_attempts:
-            try:
-                success, result = await method()
-                if success:
-                    self._is_on = command
-                    self._error_count = 0
-                    self._last_update = dt_util.utcnow()
-                    self.async_write_ha_state()
-                    return
-                    
-                attempts += 1
-                self._error_count += 1
-                _LOGGER.error(
-                    "Failed to turn %s %s (attempt %d/%d): %s",
-                    "on" if command else "off",
-                    self.name,
-                    attempts,
-                    self._max_retry_attempts,
-                    result.get("error", "Unknown error")
-                )
-                
-                if attempts < self._max_retry_attempts:
-                    await asyncio.sleep(self._retry_delay)
-                    
-            except Exception as err:
-                attempts += 1
-                self._error_count += 1
-                _LOGGER.error(
-                    "Error turning %s %s (attempt %d/%d): %s",
-                    "on" if command else "off",
-                    self.name,
-                    attempts,
-                    self._max_retry_attempts,
-                    str(err)
-                )
-                if attempts < self._max_retry_attempts:
-                    await asyncio.sleep(self._retry_delay)
+    async def _send_command(self, command: str, value: int, verify_command: bool = True) -> bool:
+        """Send command with improved retry logic and rate limiting."""
+        current_time = time.time()
+        if current_time - self._last_command_time < MIN_COMMAND_INTERVAL:
+            await asyncio.sleep(MIN_COMMAND_INTERVAL)
 
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn on with retry logic."""
-        await self._execute_command(True)
+        async with self._command_lock:
+            for attempt in range(MAX_RETRIES):
+                try:
+                    session = await self._get_session()
+                    async with session.post(
+                        f"http://{self._host}/pageEvent",
+                        auth=aiohttp.BasicAuth(self._username, self._password),
+                        headers={"Content-type": "application/x-www-form-urlencoded"},
+                        data=f"pageevent={command}&{command}={value}",
+                        timeout=COMMAND_TIMEOUT,
+                    ) as response:
+                        response.raise_for_status()
+                        response_text = await response.text()
+                        
+                        if "error" in response_text.lower():
+                            raise ValueError(f"Error in response: {response_text}")
 
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn off with retry logic."""
-        await self._execute_command(False)
+                        if verify_command:
+                            # Verify command via main endpoint
+                            async with session.post(
+                                f"http://{self._host}/main",
+                                auth=aiohttp.BasicAuth(self._username, self._password),
+                                timeout=COMMAND_TIMEOUT,
+                            ) as verify_response:
+                                verify_response.raise_for_status()
+                                verify_data = await verify_response.json()
+                                if not self._validate_command_response(verify_data, command, value):
+                                    raise ValueError("Command verification failed")
 
-    async def _execute_turn_on(self) -> tuple[bool, dict]:
-        """Execute turn on command."""
-        raise NotImplementedError
+                        self._available = True
+                        self._last_command_time = current_time
+                        self._error_count = 0
+                        _LOGGER.debug(
+                            "Successfully sent command %s=%s to %s",
+                            command,
+                            value,
+                            self._host,
+                        )
+                        return True
 
-    async def _execute_turn_off(self) -> tuple[bool, dict]:
-        """Execute turn off command."""
-        raise NotImplementedError
+                except aiohttp.ClientError as err:
+                    if "Connection reset by peer" in str(err) or "Server disconnected" in str(err):
+                        if attempt + 1 < MAX_RETRIES:
+                            await asyncio.sleep(RETRY_DELAY * (2 ** attempt))
+                            continue
+                    raise
+
+                except Exception as error:
+                    if attempt + 1 >= MAX_RETRIES:
+                        self._error_count += 1
+                        self._available = False if self._error_count >= self._max_errors else True
+                        _LOGGER.error(
+                            "Failed to send command after %d attempts to %s: %s",
+                            MAX_RETRIES,
+                            self._host,
+                            str(error),
+                        )
+                        return False
+                    await asyncio.sleep(RETRY_DELAY * (attempt + 1))
+
+            return False
+
+    def _validate_command_response(self, response_data: dict, command: str, value: int) -> bool:
+        """Validate command response data."""
+        if not isinstance(response_data, dict):
+            return False
+
+        try:
+            if command == "evseEnabled":
+                return response_data.get("evseEnabled") == value
+            elif command == "oneCharge":
+                return response_data.get("oneCharge") == value
+            elif command == "rstEM1":
+                return True  # Reset commands don't need validation
+        except Exception as err:
+            _LOGGER.debug("Validation error for command %s: %s", command, str(err))
+            return False
+
+        return False
+
+    async def async_update(self) -> None:
+        """Update device state with retries."""
+        current_time = time.time()
+        if self._last_update and current_time - self._last_update < MIN_UPDATE_INTERVAL:
+            return
+
+        async with self._update_lock:
+            for attempt in range(MAX_RETRIES):
+                try:
+                    session = await self._get_session()
+                    async with session.post(
+                        f"http://{self._host}/main",
+                        auth=aiohttp.BasicAuth(self._username, self._password),
+                        timeout=UPDATE_TIMEOUT,
+                    ) as response:
+                        response.raise_for_status()
+                        self._state_data = await response.json()
+                        self._available = True
+                        self._error_count = 0
+                        self._last_update = current_time
+                        return
+
+                except aiohttp.ClientError as err:
+                    if "Connection reset by peer" in str(err) or "Server disconnected" in str(err):
+                        if attempt + 1 < MAX_RETRIES:
+                            await asyncio.sleep(RETRY_DELAY * (2 ** attempt))
+                            continue
+                    self._error_count += 1
+                    self._available = False if self._error_count >= self._max_errors else True
+                    _LOGGER.error("Error updating state for %s: %s", self.name, str(err))
+                    break
+
+                except Exception as err:
+                    self._error_count += 1
+                    self._available = False if self._error_count >= self._max_errors else True
+                    _LOGGER.error("Unexpected error updating state for %s: %s", self.name, str(err))
+                    break
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Clean up resources when entity is removed."""
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
 
 class EveusStopChargingSwitch(BaseEveusSwitch):
-    """Charging control switch."""
+    """Representation of Eveus charging control switch."""
 
     _attr_name = "Stop Charging"
     _attr_icon = "mdi:ev-station"
     _attr_entity_category = EntityCategory.CONFIG
-    _attribute = CMD_EVSE_ENABLED
 
-    async def _execute_turn_on(self) -> tuple[bool, dict]:
-        """Execute charging enable."""
-        return await self._session_manager.send_command(
-            CMD_EVSE_ENABLED,
-            1,
-            verify=True
-        )
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn on charging."""
+        if await self._send_command("evseEnabled", 1):
+            self._is_on = True
 
-    async def _execute_turn_off(self) -> tuple[bool, dict]:
-        """Execute charging disable."""
-        return await self._session_manager.send_command(
-            CMD_EVSE_ENABLED,
-            0,
-            verify=True
-        )
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn off charging."""
+        if await self._send_command("evseEnabled", 0):
+            self._is_on = False
+
+    async def async_update(self) -> None:
+        """Update state."""
+        await super().async_update()
+        if self._available and "evseEnabled" in self._state_data:
+            self._is_on = self._state_data["evseEnabled"] == 1
 
 class EveusOneChargeSwitch(BaseEveusSwitch):
-    """One charge mode switch."""
+    """Representation of Eveus one charge switch."""
 
     _attr_name = "One Charge"
     _attr_icon = "mdi:lightning-bolt"
     _attr_entity_category = EntityCategory.CONFIG
-    _attribute = CMD_ONE_CHARGE
 
-    async def _execute_turn_on(self) -> tuple[bool, dict]:
+    async def async_turn_on(self, **kwargs: Any) -> None:
         """Enable one charge mode."""
-        return await self._session_manager.send_command(
-            CMD_ONE_CHARGE,
-            1,
-            verify=True
-        )
+        if await self._send_command("oneCharge", 1):
+            self._is_on = True
 
-    async def _execute_turn_off(self) -> tuple[bool, dict]:
+    async def async_turn_off(self, **kwargs: Any) -> None:
         """Disable one charge mode."""
-        return await self._session_manager.send_command(
-            CMD_ONE_CHARGE,
-            0,
-            verify=True
-        )
+        if await self._send_command("oneCharge", 0):
+            self._is_on = False
+
+    async def async_update(self) -> None:
+        """Update state."""
+        await super().async_update()
+        if self._available and "oneCharge" in self._state_data:
+            self._is_on = self._state_data["oneCharge"] == 1
 
 class EveusResetCounterASwitch(BaseEveusSwitch):
-    """Reset counter switch."""
+    """Representation of Eveus reset counter A switch."""
 
     _attr_name = "Reset Counter A"
     _attr_icon = "mdi:counter"
     _attr_entity_category = EntityCategory.CONFIG
-    _attribute = CMD_RESET_COUNTER
 
-    async def _execute_turn_on(self) -> tuple[bool, dict]:
-        """Reset counter."""
-        return await self._session_manager.send_command(
-            CMD_RESET_COUNTER,
-            0,
-            verify=False
-        )
-
-    async def _execute_turn_off(self) -> tuple[bool, dict]:
-        """Reset command for off state."""
-        return await self._execute_turn_on()
-
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-) -> None:
-    """Set up Eveus switches."""
-    session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
-
-    switches = [
-        EveusStopChargingSwitch(session_manager),
-        EveusOneChargeSwitch(session_manager),
-        EveusResetCounterASwitch(session_manager),
-    ]
-
-    hass.data[DOMAIN][entry.entry_id]["entities"]["switch"] = {
-        switch.unique_id: switch for switch in switches
-    }
-
-    async def async_update_switches(*_) -> None:
-        """Update switches with error handling."""
-        if not hass.is_running:
-            return
-
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Reset counter A."""
+        # Match the exact command format from working YAML implementation
         try:
-            # Get current state
-            state = await session_manager.get_state(force_refresh=True)
-            
-            # Update switches
-            for switch in switches:
-                try:
-                    if state.get(switch._attribute) is not None:
-                        switch._is_on = bool(int(state.get(switch._attribute, 0)))
-                        switch._last_update = dt_util.utcnow()
-                        switch.async_write_ha_state()
-                except Exception as err:
-                    _LOGGER.error(
-                        "Error updating switch %s: %s",
-                        switch.name,
-                        str(err)
-                    )
-                await asyncio.sleep(0.1)
+            session = await self._get_session()
+            async with session.post(
+                f"http://{self._host}/pageEvent",
+                auth=aiohttp.BasicAuth(self._username, self._password),
+                headers={"Content-type": "application/x-www-form-urlencoded"},
+                data="pageevent=rstEM1&rstEM1=0",
+                timeout=COMMAND_TIMEOUT,
+            ) as response:
+                response.raise_for_status()
+                self._is_on = False  # Always false as it's a momentary switch
+        except Exception as error:
+            _LOGGER.error("Failed to reset counter: %s", str(error))
+            self._available = False
 
-        except Exception as err:
-            _LOGGER.error("Failed to update switches: %s", str(err))
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Reset command for off state - matches on command for consistency."""
+        try:
+            session = await self._get_session()
+            async with session.post(
+                f"http://{self._host}/pageEvent",
+                auth=aiohttp.BasicAuth(self._username, self._password),
+                headers={"Content-type": "application/x-www-form-urlencoded"},
+                data="pageevent=rstEM1&rstEM1=0",
+                timeout=COMMAND_TIMEOUT,
+            ) as response:
+                response.raise_for_status()
+                self._is_on = False
+        except Exception as error:
+            _LOGGER.error("Failed to reset counter: %s", str(error))
+            self._available = False
 
-    async_add_entities(switches)
-
-    if hass.is_running:
-        await async_update_switches()
-    else:
-        hass.bus.async_listen_once(
-            "homeassistant_start",
-            async_update_switches
-        )
-
-    async_track_time_interval(
-        hass,
-        async_update_switches,
-        UPDATE_INTERVAL_IDLE
-    )
+    async def async_update(self) -> None:
+        """Update state."""
+        await super().async_update()
+        if self._available:
+            try:
+                iem1_value = self._state_data.get("IEM1")
+                if iem1_value in (None, "null", "", "undefined", "ERROR"):
+                    self._is_on = False
+                else:
+                    # Convert to float and check if non-zero
+                    self._is_on = float(iem1_value) != 0
+            except (TypeError, ValueError):
+                self._is_on = False
