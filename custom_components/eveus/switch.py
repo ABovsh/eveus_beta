@@ -1,5 +1,7 @@
+# switch.py
 """Support for Eveus switches."""
 from __future__ import annotations
+
 import logging
 import asyncio
 import time
@@ -72,15 +74,15 @@ class BaseEveusSwitch(SwitchEntity):
    async def _get_session(self) -> aiohttp.ClientSession:
        """Get/create session."""
        if self._session is None or self._session.closed:
-           self._session = aiohttp.ClientSession(
-               timeout=aiohttp.ClientTimeout(total=10),
-               connector=aiohttp.TCPConnector(limit=1, force_close=True)
-           )
+           timeout = aiohttp.ClientTimeout(total=COMMAND_TIMEOUT)
+           connector = aiohttp.TCPConnector(limit=1, force_close=True)
+           self._session = aiohttp.ClientSession(timeout=timeout, connector=connector)
        return self._session
 
    async def _send_command(self, command: str, value: int, verify: bool = True) -> bool:
        """Send command with retry logic."""
-       if time.time() - self._last_command_time < MIN_COMMAND_INTERVAL:
+       current_time = time.time()
+       if current_time - self._last_command_time < MIN_COMMAND_INTERVAL:
            await asyncio.sleep(MIN_COMMAND_INTERVAL)
 
        async with self._command_lock:
@@ -95,8 +97,10 @@ class BaseEveusSwitch(SwitchEntity):
                        timeout=COMMAND_TIMEOUT
                    ) as response:
                        response.raise_for_status()
-                       if "error" in await response.text().lower():
-                           raise ValueError("Error in response")
+                       response_text = await response.text()
+                       
+                       if "error" in response_text.lower():
+                           raise ValueError(f"Error in response: {response_text}")
 
                        if verify:
                            verify_data = await self._verify_command(session, command, value)
@@ -104,13 +108,13 @@ class BaseEveusSwitch(SwitchEntity):
                                raise ValueError("Command verification failed")
 
                        self._available = True
-                       self._last_command_time = time.time()
+                       self._last_command_time = current_time
                        self._error_count = 0
                        return True
 
                except aiohttp.ClientError as err:
                    if attempt + 1 < MAX_RETRIES and any(x in str(err) for x in ["Connection reset", "Server disconnected"]):
-                       await asyncio.sleep(RETRY_DELAY * (2 ** attempt)) 
+                       await asyncio.sleep(RETRY_DELAY * (2 ** attempt))
                        continue
                    raise
 
@@ -132,12 +136,13 @@ class BaseEveusSwitch(SwitchEntity):
                auth=aiohttp.BasicAuth(self._username, self._password),
                timeout=COMMAND_TIMEOUT
            ) as response:
+               response.raise_for_status()
                data = await response.json()
                if command == "evseEnabled":
                    return data.get("evseEnabled") == value
                elif command == "oneCharge":
                    return data.get("oneCharge") == value
-               return True # Reset commands don't need verification
+               return True
        except Exception as err:
            _LOGGER.debug("Verification error: %s", str(err))
            return False
@@ -146,6 +151,7 @@ class BaseEveusSwitch(SwitchEntity):
        """Clean up resources."""
        if self._session and not self._session.closed:
            await self._session.close()
+           self._session = None
 
 class EveusStopChargingSwitch(BaseEveusSwitch):
    """Charging control switch."""
@@ -168,8 +174,10 @@ class EveusStopChargingSwitch(BaseEveusSwitch):
            session = await self._get_session()
            async with session.post(
                f"http://{self._host}/main",
-               auth=aiohttp.BasicAuth(self._username, self._password)
+               auth=aiohttp.BasicAuth(self._username, self._password),
+               timeout=COMMAND_TIMEOUT
            ) as response:
+               response.raise_for_status()
                data = await response.json()
                self._is_on = data.get("evseEnabled") == 1
                self._available = True
@@ -197,8 +205,10 @@ class EveusOneChargeSwitch(BaseEveusSwitch):
            session = await self._get_session()
            async with session.post(
                f"http://{self._host}/main",
-               auth=aiohttp.BasicAuth(self._username, self._password)
+               auth=aiohttp.BasicAuth(self._username, self._password),
+               timeout=COMMAND_TIMEOUT
            ) as response:
+               response.raise_for_status()
                data = await response.json()
                self._is_on = data.get("oneCharge") == 1
                self._available = True
@@ -226,8 +236,10 @@ class EveusResetCounterASwitch(BaseEveusSwitch):
            session = await self._get_session()
            async with session.post(
                f"http://{self._host}/main",
-               auth=aiohttp.BasicAuth(self._username, self._password)
+               auth=aiohttp.BasicAuth(self._username, self._password),
+               timeout=COMMAND_TIMEOUT
            ) as response:
+               response.raise_for_status()
                data = await response.json()
                try:
                    iem1 = float(data.get("IEM1", 0))
