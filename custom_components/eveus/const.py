@@ -1,80 +1,47 @@
 # File: custom_components/eveus/const.py
+
 """Constants for the Eveus integration."""
 from datetime import timedelta
-from typing import Final, Set
 
-DOMAIN: Final = "eveus"
+DOMAIN = "eveus"
+SCAN_INTERVAL = timedelta(seconds=30)
 
-# Update intervals
-UPDATE_INTERVAL_CHARGING = timedelta(seconds=10)
-UPDATE_INTERVAL_IDLE = timedelta(seconds=60)
-UPDATE_INTERVAL_ERROR = timedelta(seconds=20)
+# Model constants
+MODEL_16A = "16A"
+MODEL_32A = "32A"
+MODELS = [MODEL_16A, MODEL_32A]
+MODEL_MAX_CURRENT = {
+    MODEL_16A: 16,
+    MODEL_32A: 32,
+}
+MIN_CURRENT = 8
 
 # Configuration
-CONF_MODEL: Final = "model"
+CONF_MODEL = "model"
 
-# Temperature thresholds
-TEMP_WARNING_BOX: Final = 60
-TEMP_CRITICAL_BOX: Final = 80
-TEMP_WARNING_PLUG: Final = 50
-TEMP_CRITICAL_PLUG: Final = 65
-
-# Battery voltage thresholds
-BATTERY_VOLTAGE_MIN: Final = 2.0
-BATTERY_VOLTAGE_MAX: Final = 3.3
-BATTERY_VOLTAGE_WARNING: Final = 2.7
-BATTERY_VOLTAGE_CRITICAL: Final = 2.5
-
-# API rate limiting
-MIN_COMMAND_INTERVAL: Final = 1.0  # seconds
-MAX_COMMANDS_PER_MINUTE: Final = 30
-COMMAND_COOLDOWN: Final = 2.0  # seconds
-
-# Error handling
-COMMAND_TIMEOUT: Final = 10.0  # Increased from 5.0
-STATE_CACHE_TTL: Final = 5.0   # Increased from 2.0
-MAX_RETRIES: Final = 5         # Increased from 3
-RETRY_BASE_DELAY: Final = 2.0  # Increased from 1.0
-MAX_RETRY_DELAY: Final = 30.0  # seconds
-
-# API Endpoints
-API_ENDPOINT_MAIN: Final = "/main"
-API_ENDPOINT_EVENT: Final = "/pageEvent"
-
-# Required helper entities
-HELPER_EV_BATTERY_CAPACITY: Final = "input_number.ev_battery_capacity"
-HELPER_EV_INITIAL_SOC: Final = "input_number.ev_initial_soc"
-HELPER_EV_SOC_CORRECTION: Final = "input_number.ev_soc_correction"
-HELPER_EV_TARGET_SOC: Final = "input_number.ev_target_soc"
-
-# Command Parameters
-CMD_EVSE_ENABLED: Final = "evseEnabled"
-CMD_ONE_CHARGE: Final = "oneCharge"
-CMD_RESET_COUNTER: Final = "rstEM1"
-
-# State attributes
-ATTR_VOLTAGE: Final = "voltMeas1"
-ATTR_CURRENT: Final = "curMeas1"
-ATTR_POWER: Final = "powerMeas"
-ATTR_SESSION_ENERGY: Final = "sessionEnergy"
-ATTR_TOTAL_ENERGY: Final = "totalEnergy"
-ATTR_SESSION_TIME: Final = "sessionTime"
-ATTR_STATE: Final = "state"
-ATTR_SUBSTATE: Final = "subState"
-ATTR_CURRENT_SET: Final = "currentSet"
-ATTR_ENABLED: Final = "evseEnabled"
-ATTR_TEMPERATURE_BOX: Final = "temperature1"
-ATTR_TEMPERATURE_PLUG: Final = "temperature2"
-ATTR_SYSTEM_TIME: Final = "systemTime"
-ATTR_COUNTER_A_ENERGY: Final = "IEM1"
-ATTR_COUNTER_B_ENERGY: Final = "IEM2"
-ATTR_COUNTER_A_COST: Final = "IEM1_money"
-ATTR_COUNTER_B_COST: Final = "IEM2_money"
-ATTR_GROUND: Final = "ground"
-ATTR_BATTERY_VOLTAGE: Final = "vBat"
+# API Attributes
+ATTR_VOLTAGE = "voltMeas1"
+ATTR_CURRENT = "curMeas1"
+ATTR_POWER = "powerMeas"
+ATTR_SESSION_ENERGY = "sessionEnergy"
+ATTR_TOTAL_ENERGY = "totalEnergy"
+ATTR_SESSION_TIME = "sessionTime"
+ATTR_STATE = "state"
+ATTR_SUBSTATE = "subState"
+ATTR_CURRENT_SET = "currentSet"
+ATTR_ENABLED = "evseEnabled"
+ATTR_TEMPERATURE_BOX = "temperature1"
+ATTR_TEMPERATURE_PLUG = "temperature2"
+ATTR_SYSTEM_TIME = "systemTime"
+ATTR_COUNTER_A_ENERGY = "IEM1"
+ATTR_COUNTER_B_ENERGY = "IEM2"
+ATTR_COUNTER_A_COST = "IEM1_money"
+ATTR_COUNTER_B_COST = "IEM2_money"
+ATTR_GROUND = "ground"
+ATTR_BATTERY_VOLTAGE = "vBat"
 
 # State Mappings
-CHARGING_STATES: Final = {
+CHARGING_STATES = {
     0: "Startup",
     1: "System Test",
     2: "Standby",
@@ -85,7 +52,7 @@ CHARGING_STATES: Final = {
     7: "Error"
 }
 
-ERROR_STATES: Final = {
+ERROR_STATES = {
     0: "No Error",
     1: "Grounding Error",
     2: "Current Leak High",
@@ -103,7 +70,7 @@ ERROR_STATES: Final = {
     14: "High Voltage"
 }
 
-NORMAL_SUBSTATES: Final = {
+NORMAL_SUBSTATES = {
     0: "No Limits",
     1: "Limited by User",
     2: "Energy Limit",
@@ -115,39 +82,4 @@ NORMAL_SUBSTATES: Final = {
     8: "Schedule 2 Energy Limit",
     9: "Waiting for Activation",
     10: "Paused by Adaptive Mode"
-}
-
-# Required state fields validation
-REQUIRED_STATE_FIELDS: Final[set[str]] = {
-    "evseEnabled",
-    "state",
-    "subState", 
-    "currentSet",
-    "curDesign",
-    "ground",
-    "temperature1",
-    "temperature2",
-    "powerMeas",
-    "voltMeas1",
-    "curMeas1",
-    "sessionEnergy",
-    "totalEnergy",
-    "sessionTime",
-    "IEM1",
-    "IEM2",
-    "IEM1_money",
-    "IEM2_money",
-    "vBat"
-}
-
-# Persistent session storage
-PERSISTENT_SESSION_DATA: Final[set[str]] = {
-    "sessionEnergy",
-    "sessionTime",
-    "sessionMoney",
-    "totalEnergy",
-    "IEM1",
-    "IEM2",
-    "IEM1_money",
-    "IEM2_money"
 }
