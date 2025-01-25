@@ -62,10 +62,9 @@ _LOGGER = logging.getLogger(__name__)
 _executor = ThreadPoolExecutor(max_workers=2)
 
 class EveusUpdater:
-   """Class to handle Eveus data updates."""
+   """Handle Eveus data updates."""
 
    def __init__(self, host: str, username: str, password: str, hass: HomeAssistant) -> None:
-       """Initialize the updater."""
        self._host = host
        self._username = username
        self._password = password
@@ -81,52 +80,47 @@ class EveusUpdater:
        self._max_errors = 3
 
    def register_sensor(self, sensor: "BaseEveusSensor") -> None:
-       """Register a sensor for updates."""
        self._sensors.append(sensor)
 
    @property
    def data(self) -> dict:
-       """Return the latest data."""
        return self._data
 
    @property
    def available(self) -> bool:
-       """Return if updater is available."""
        return self._available
 
    @property
    def last_update(self) -> float:
-       """Return last update time."""
        return self._last_update
 
    async def async_start_updates(self) -> None:
-       """Start the update loop."""
        if self._update_task is None:
            self._update_task = asyncio.create_task(self._update_loop())
 
    async def _update_loop(self) -> None:
-       """Handle updates."""
        while True:
            try:
-               await self._update()
+               async with asyncio.timeout(10):
+                   await self._update()
                await asyncio.sleep(SCAN_INTERVAL.total_seconds())
            except asyncio.CancelledError:
                break
+           except (asyncio.TimeoutError, aiohttp.ClientError) as err:
+               _LOGGER.error("Update timeout: %s", str(err))
+               await asyncio.sleep(SCAN_INTERVAL.total_seconds())
            except Exception as err:
                _LOGGER.error("Update error: %s", str(err))
                await asyncio.sleep(SCAN_INTERVAL.total_seconds())
 
    async def _get_session(self) -> aiohttp.ClientSession:
-       """Get/create client session."""
        if self._session is None or self._session.closed:
-           self._session = aiohttp.ClientSession(
-               timeout=aiohttp.ClientTimeout(total=10),
-               connector=aiohttp.TCPConnector(limit=1, force_close=True)
-           )
+           timeout = aiohttp.ClientTimeout(total=10)
+           connector = aiohttp.TCPConnector(limit=1, force_close=True)
+           self._session = aiohttp.ClientSession(timeout=timeout, connector=connector)
        return self._session
 
    async def _update(self) -> None:
-       """Update data."""
        try:
            session = await self._get_session()
            async with session.post(
@@ -146,19 +140,19 @@ class EveusUpdater:
                    except Exception as err:
                        _LOGGER.error("Sensor update error: %s", str(err))
 
-       except Exception as err:
+       except (asyncio.TimeoutError, aiohttp.ClientError) as err:
            self._error_count += 1
            self._available = self._error_count < self._max_errors
            _LOGGER.error("Data update error: %s", str(err))
 
    async def async_shutdown(self) -> None:
-       """Shutdown the updater."""
        if self._update_task:
            self._update_task.cancel()
            try:
                await self._update_task
            except asyncio.CancelledError:
                pass
+
        if self._session and not self._session.closed:
            await self._session.close()
 
