@@ -313,154 +313,138 @@ class EveusGroundSensor(BaseEveusSensor):
            return "Unknown"
 
 async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+   hass: HomeAssistant,
+   entry: ConfigEntry,
+   async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Eveus sensor platform."""
-    try:
-        # Create updater instance
-        updater = EveusUpdater(
-            host=entry.data[CONF_HOST],
-            username=entry.data[CONF_USERNAME], 
-            password=entry.data[CONF_PASSWORD],
-            hass=hass,
-        )
+   """Set up Eveus sensor platform."""
+   try:
+       updater = EveusUpdater(
+           host=entry.data[CONF_HOST],
+           username=entry.data[CONF_USERNAME],
+           password=entry.data[CONF_PASSWORD],
+           hass=hass,
+       )
 
-    sensors = [
-       # Basic measurements
-       NumericSensor(
-           updater=updater,
-           name="Voltage",
-           key=ATTR_VOLTAGE,
-           unit=UnitOfElectricPotential.VOLT,
-           device_class=SensorDeviceClass.VOLTAGE,
-           icon="mdi:lightning-bolt",
-           precision=0
-       ),
-       NumericSensor(
-           updater=updater,
-           name="Current", 
-           key=ATTR_CURRENT,
-           unit=UnitOfElectricCurrent.AMPERE,
-           device_class=SensorDeviceClass.CURRENT,
-           icon="mdi:current-ac",
-           precision=1
-       ),
-       NumericSensor(
-           updater=updater,
-           name="Power",
-           key=ATTR_POWER,
-           unit=UnitOfPower.WATT,
-           device_class=SensorDeviceClass.POWER,
-           icon="mdi:flash",
-           precision=0
-       ),
-       NumericSensor(
-           updater=updater,
-           name="Current Set",
-           key=ATTR_CURRENT_SET,
-           unit=UnitOfElectricCurrent.AMPERE,
-           device_class=SensorDeviceClass.CURRENT,
-           icon="mdi:current-ac",
-           precision=0
-       ),
+       sensors = [
+           NumericSensor(
+               updater=updater,
+               name="Voltage",
+               key=ATTR_VOLTAGE,
+               unit=UnitOfElectricPotential.VOLT,
+               device_class=SensorDeviceClass.VOLTAGE,
+               icon="mdi:lightning-bolt",
+               precision=0
+           ),
+           NumericSensor(
+               updater=updater,
+               name="Current", 
+               key=ATTR_CURRENT,
+               unit=UnitOfElectricCurrent.AMPERE,
+               device_class=SensorDeviceClass.CURRENT,
+               icon="mdi:current-ac",
+               precision=1
+           ),
+           NumericSensor(
+               updater=updater,
+               name="Power",
+               key=ATTR_POWER,
+               unit=UnitOfPower.WATT,
+               device_class=SensorDeviceClass.POWER,
+               icon="mdi:flash",
+               precision=0
+           ),
+           NumericSensor(
+               updater=updater,
+               name="Current Set",
+               key=ATTR_CURRENT_SET,
+               unit=UnitOfElectricCurrent.AMPERE,
+               device_class=SensorDeviceClass.CURRENT,
+               icon="mdi:current-ac",
+               precision=0
+           ),
+           EnergySensor(updater, "Session Energy", ATTR_SESSION_ENERGY),
+           EnergySensor(updater, "Total Energy", ATTR_TOTAL_ENERGY),
+           EnergySensor(updater, "Counter A Energy", ATTR_COUNTER_A_ENERGY),
+           EnergySensor(updater, "Counter B Energy", ATTR_COUNTER_B_ENERGY),
+           NumericSensor(
+               updater=updater,
+               name="Counter A Cost",
+               key=ATTR_COUNTER_A_COST,
+               unit="₴",
+               icon="mdi:currency-uah",
+               precision=0
+           ),
+           NumericSensor(
+               updater=updater,
+               name="Counter B Cost", 
+               key=ATTR_COUNTER_B_COST,
+               unit="₴",
+               icon="mdi:currency-uah",
+               precision=0
+           ),
+           NumericSensor(
+               updater=updater,
+               name="Box Temperature",
+               key=ATTR_TEMPERATURE_BOX,
+               unit=UnitOfTemperature.CELSIUS,
+               device_class=SensorDeviceClass.TEMPERATURE,
+               icon="mdi:thermometer",
+               precision=0
+           ),
+           NumericSensor(
+               updater=updater,
+               name="Plug Temperature",
+               key=ATTR_TEMPERATURE_PLUG,
+               unit=UnitOfTemperature.CELSIUS,
+               device_class=SensorDeviceClass.TEMPERATURE,
+               icon="mdi:thermometer-high",
+               precision=0
+           ),
+           NumericSensor(
+               updater=updater,
+               name="Battery Voltage",
+               key=ATTR_BATTERY_VOLTAGE,
+               unit=UnitOfElectricPotential.VOLT,
+               device_class=SensorDeviceClass.VOLTAGE,
+               icon="mdi:battery",
+               precision=1
+           ),
+           StateSensor(updater, "State", ATTR_STATE, CHARGING_STATES),
+           StateSensor(updater, "Substate", ATTR_SUBSTATE, NORMAL_SUBSTATES),
+           EveusGroundSensor(updater),
+           NumericSensor(
+               updater=updater,
+               name="Session Time",
+               key=ATTR_SESSION_TIME,
+               unit=UnitOfTime.SECONDS,
+               device_class=SensorDeviceClass.DURATION,
+               icon="mdi:timer",
+               precision=0
+           ),
+           EVSocKwhSensor(updater),
+           EVSocPercentSensor(updater),
+           TimeToTargetSocSensor(updater),
+       ]
+
+       if DOMAIN not in hass.data:
+           hass.data[DOMAIN] = {}
+           
+       if entry.entry_id not in hass.data[DOMAIN]:
+           hass.data[DOMAIN][entry.entry_id] = {"entities": {}}
+           
+       if "entities" not in hass.data[DOMAIN][entry.entry_id]:
+           hass.data[DOMAIN][entry.entry_id]["entities"] = {}
+           
+       hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
+           sensor.unique_id: sensor for sensor in sensors
+       }
        
-       # Energy sensors
-       EnergySensor(updater, "Session Energy", ATTR_SESSION_ENERGY),
-       EnergySensor(updater, "Total Energy", ATTR_TOTAL_ENERGY),
-       EnergySensor(updater, "Counter A Energy", ATTR_COUNTER_A_ENERGY),
-       EnergySensor(updater, "Counter B Energy", ATTR_COUNTER_B_ENERGY),
+       async_add_entities(sensors)
 
-       # Cost sensors
-       NumericSensor(
-           updater=updater,
-           name="Counter A Cost",
-           key=ATTR_COUNTER_A_COST,
-           unit="₴",
-           icon="mdi:currency-uah",
-           precision=0
-       ),
-       NumericSensor(
-           updater=updater,
-           name="Counter B Cost", 
-           key=ATTR_COUNTER_B_COST,
-           unit="₴",
-           icon="mdi:currency-uah",
-           precision=0
-       ),
-
-       # Temperature sensors
-       NumericSensor(
-           updater=updater,
-           name="Box Temperature",
-           key=ATTR_TEMPERATURE_BOX,
-           unit=UnitOfTemperature.CELSIUS,
-           device_class=SensorDeviceClass.TEMPERATURE,
-           icon="mdi:thermometer",
-           precision=0
-       ),
-       NumericSensor(
-           updater=updater,
-           name="Plug Temperature",
-           key=ATTR_TEMPERATURE_PLUG,
-           unit=UnitOfTemperature.CELSIUS,
-           device_class=SensorDeviceClass.TEMPERATURE,
-           icon="mdi:thermometer-high",
-           precision=0
-       ),
-
-       # Battery voltage
-       NumericSensor(
-           updater=updater,
-           name="Battery Voltage",
-           key=ATTR_BATTERY_VOLTAGE,
-           unit=UnitOfElectricPotential.VOLT,
-           device_class=SensorDeviceClass.VOLTAGE,
-           icon="mdi:battery",
-           precision=1
-       ),
-
-       # State sensors
-       StateSensor(updater, "State", ATTR_STATE, CHARGING_STATES),
-       StateSensor(updater, "Substate", ATTR_SUBSTATE, NORMAL_SUBSTATES),
-       EveusGroundSensor(updater),
-
-       # Time sensors
-       NumericSensor(
-           updater=updater,
-           name="Session Time",
-           key=ATTR_SESSION_TIME,
-           unit=UnitOfTime.SECONDS,
-           device_class=SensorDeviceClass.DURATION,
-           icon="mdi:timer",
-           precision=0
-       ),
-
-       # Custom sensors
-       EVSocKwhSensor(updater),
-       EVSocPercentSensor(updater),
-       TimeToTargetSocSensor(updater),
-   ]
-
-    if DOMAIN not in hass.data:
-        hass.data[DOMAIN] = {}
-        
-    if entry.entry_id not in hass.data[DOMAIN]:
-        hass.data[DOMAIN][entry.entry_id] = {}
-        
-    if "entities" not in hass.data[DOMAIN][entry.entry_id]:
-        hass.data[DOMAIN][entry.entry_id]["entities"] = {}
-        
-    hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
-        sensor.unique_id: sensor for sensor in sensors
-    }
-    
-    async_add_entities(sensors)
-
- except Exception as ex:
-     _LOGGER.error("Error setting up sensor platform: %s", str(ex))
-     raise
+   except Exception as ex:
+       _LOGGER.error("Error setting up sensor platform: %s", str(ex))
+       raise
 
 class EVSocKwhSensor(BaseEveusSensor):
    """EV State of Charge energy sensor."""
