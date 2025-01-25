@@ -327,7 +327,7 @@ async def async_setup_entry(
             hass=hass,
         )
 
-   sensors = [
+    sensors = [
        # Basic measurements
        NumericSensor(
            updater=updater,
@@ -443,23 +443,20 @@ async def async_setup_entry(
        TimeToTargetSocSensor(updater),
    ]
 
-   # Store entity references
-   if DOMAIN not in hass.data:
-      hass.data[DOMAIN] = {}
-      
-   if entry.entry_id not in hass.data[DOMAIN]:
-      hass.data[DOMAIN][entry.entry_id] = {"entities": {}}
-   
-   if "entities" not in hass.data[DOMAIN][entry.entry_id]:
-      hass.data[DOMAIN][entry.entry_id]["entities"] = {}
-   
-   # Store sensor references    
-   hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
-      sensor.unique_id: sensor for sensor in sensors
-   }
-   
-   # Add entities
-   async_add_entities(sensors)
+    if DOMAIN not in hass.data:
+        hass.data[DOMAIN] = {}
+        
+    if entry.entry_id not in hass.data[DOMAIN]:
+        hass.data[DOMAIN][entry.entry_id] = {}
+        
+    if "entities" not in hass.data[DOMAIN][entry.entry_id]:
+        hass.data[DOMAIN][entry.entry_id]["entities"] = {}
+        
+    hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
+        sensor.unique_id: sensor for sensor in sensors
+    }
+    
+    async_add_entities(sensors)
 
  except Exception as ex:
      _LOGGER.error("Error setting up sensor platform: %s", str(ex))
