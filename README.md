@@ -1,28 +1,86 @@
 # Eveus EV Charger Integration for Home Assistant
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
-![Version](https://img.shields.io/badge/version-1.2.0-blue)
+![Version](https://img.shields.io/badge/version-1.1.0-blue)
 ![Stability](https://img.shields.io/badge/stability-stable-green)
-![HomeAssistant](https://img.shields.io/badge/HomeAssistant-2024.1.0-blue)
 
-A comprehensive Home Assistant integration for Eveus EV chargers, providing advanced monitoring, control, and energy management features.
+This custom integration provides comprehensive monitoring and control of Eveus EV chargers in Home Assistant, featuring advanced state tracking, current control, and energy monitoring.
+
+## Prerequisites
+
+### Required Helper Entities
+Before installing the integration, you must create these helper entities in Home Assistant:
+
+1. Go to Settings → Devices & Services → Helpers
+2. Click the "+ CREATE HELPER" button
+3. Choose "Number"
+4. Create each of these helpers with the exact input_number names:
+
+```yaml
+input_number:
+  ev_battery_capacity:
+    name: "EV Battery Capacity"
+    min: 10
+    max: 160
+    step: 1
+    unit_of_measurement: "kWh"
+    mode: slider      # Optional but recommended
+    icon: mdi:car-battery
+    # Initial value should match your EV's battery capacity
+
+  ev_initial_soc:
+    name: "Initial EV State of Charge"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: slider      # Optional but recommended
+    icon: mdi:battery-charging-40
+    # Set this before each charging session
+
+  ev_soc_correction:
+    name: "Charging Efficiency Loss"
+    min: 0
+    max: 10
+    step: 0.1
+    initial: 7.5     # Default efficiency loss
+    unit_of_measurement: "%"
+    mode: slider      # Optional but recommended
+    icon: mdi:chart-bell-curve
+    # Adjust based on your observed charging efficiency
+
+  ev_target_soc:
+    name: "Target SOC"
+    min: 80
+    max: 100
+    step: 10
+    initial: 80      # Default target
+    unit_of_measurement: "%"
+    mode: slider      # Optional but recommended
+    icon: mdi:battery-charging-high
+    # Adjust based on your charging needs
+```
+
+Alternatively, you can add these helpers via YAML by adding the above configuration to your `configuration.yaml`.
+
+> **Important**: The integration will verify these helpers exist during setup and display an error if any are missing or incorrectly configured.
 
 ## Features
 
 ### 🔌 Basic Monitoring
 - Real-time voltage, current, and power monitoring
 - Session and total energy tracking
-- Temperature monitoring for box and plug
+- Temperature monitoring (box and plug)
 - Ground connection safety monitoring
 - Battery voltage monitoring
-- Energy counters with cost tracking
+- Energy counters with cost tracking (in UAH)
 
 ### 🚗 Advanced EV Features
 - Accurate State of Charge monitoring (kWh and percentage)
 - Dynamic time-to-target calculation
 - Charging efficiency calculation
 - Comprehensive session time tracking
-- Automatic error recovery
+- Automatic error recovery with exponential backoff
 
 ### 🎮 Control Features
 - Dynamic charging current control (8-16A or 8-32A based on model)
@@ -31,218 +89,107 @@ A comprehensive Home Assistant integration for Eveus EV chargers, providing adva
 - Counter reset functionality
 - Current adjustment with safety limits
 
-## Prerequisites
-
-### Required Helper Entities
-Before installing the integration, create these helper entities:
-
-1. Navigate to: **Settings** → **Devices & Services** → **Helpers**
-2. Click "+ CREATE HELPER"
-3. Select "Number"
-4. Create each helper with the exact names:
-
-```yaml
-- Name: `EV Battery Capacity`
-- Minimum: 10
-- Maximum: 160
-- Step Size: 1
-- Unit: kWh
-- Mode: slider
-
-- Name: `Initial EV State of Charge`
-- Minimum: 0
-- Maximum: 100
-- Step Size: 1
-- Unit: %
-- Mode: slider
-
-- Name: `SOC Correction Factor`
-- Minimum: 0
-- Maximum: 10
-- Step Size: 0.1
-- Initial: 7.5
-- Unit: %
-- Mode: slider
-
-- Name: `Target SOC`
-- Minimum: 80
-- Maximum: 100
-- Step Size: 10
-- Initial: 80
-- Unit: %
-- Mode: slider
-
-### Integration Setup
-1. Go to **Settings** → **Devices & Services**
-2. Click "+ ADD INTEGRATION"
-3. Search for "Eveus"
-4. Enter required information:
-   - IP Address: Your charger's IP
-   - Username: Your login
-   - Password: Your password
-   - Model: 16A or 32A
-```
-
 ## Installation
 
-### HACS (Recommended)
-1. Add this repository to HACS:
+### Method 1: HACS (Recommended)
+1. Add this repository to HACS as a custom repository:
    ```
-   https://github.com/ABovsh/eveus
+   Repository: https://github.com/ABovsh/eveus
+   Category: Integration
    ```
-2. Search for "Eveus" in HACS store
-3. Click Install
-4. Restart Home Assistant
+2. Click Install
+3. Restart Home Assistant
 
-### Manual
-1. Download this repository
-2. Copy `custom_components/eveus` to your `config/custom_components/` directory
+### Method 2: Manual Installation
+1. Download the repository
+2. Copy the `custom_components/eveus` directory to your Home Assistant's `custom_components` folder
 3. Restart Home Assistant
 
 ## Configuration
 
 ### Initial Setup
-1. Ensure all required helper entities are created
+1. Create all required helper entities as described in Prerequisites
 2. Go to Configuration → Integrations
 3. Click "+ Add Integration"
 4. Search for "Eveus"
-5. Enter:
+5. Enter the following details:
    - IP Address
    - Username
    - Password
-   - Charger Model (16A/32A)
+   - Charger Model (16A or 32A)
 
-### Entity Reference
+### Available Entities
 
 Basic Sensors:
 | Entity | Name | Description | Unit |
 |--------|------|-------------|------|
-| sensor.eveus_voltage | Voltage | Current voltage | V |
-| sensor.eveus_current | Current | Charging current | A |
-| sensor.eveus_power | Power | Charging power | W |
-| sensor.eveus_session_energy | Session Energy | Energy used in session | kWh |
-| sensor.eveus_total_energy | Total Energy | Total energy delivered | kWh |
-| sensor.eveus_counter_a_energy | Counter A Energy | Energy counter A | kWh |
-| sensor.eveus_counter_b_energy | Counter B Energy | Energy counter B | kWh |
-| sensor.eveus_counter_a_cost | Counter A Cost | Cost counter A | ₴ |
-| sensor.eveus_counter_b_cost | Counter B Cost | Cost counter B | ₴ |
+| sensor.eveus_ev_charger_voltage | Voltage | Current voltage | V |
+| sensor.eveus_ev_charger_current | Current | Charging current | A |
+| sensor.eveus_ev_charger_power | Power | Charging power | W |
+| sensor.eveus_ev_charger_session_energy | Session Energy | Energy used in session | kWh |
+| sensor.eveus_ev_charger_total_energy | Total Energy | Total energy delivered | kWh |
+| sensor.eveus_ev_charger_counter_a_energy | Counter A Energy | Energy counter A | kWh |
+| sensor.eveus_ev_charger_counter_b_energy | Counter B Energy | Energy counter B | kWh |
+| sensor.eveus_ev_charger_counter_a_cost | Counter A Cost | Cost counter A | ₴ |
+| sensor.eveus_ev_charger_counter_b_cost | Counter B Cost | Cost counter B | ₴ |
 
 SOC Sensors:
 | Entity | Name | Description | Unit |
 |--------|------|-------------|------|
-| sensor.eveus_soc_energy | SOC Energy | Current battery charge | kWh |
-| sensor.eveus_soc_percent | SOC Percent | Current battery charge | % |
-| sensor.eveus_time_to_target | Time to Target | Time until target SOC | - |
+| sensor.eveus_ev_charger_soc_energy | SOC Energy | Current battery charge | kWh |
+| sensor.eveus_ev_charger_soc_percent | SOC Percent | Current battery charge | % |
+| sensor.eveus_ev_charger_time_to_target | Time to Target | Time until target SOC | - |
 
 Diagnostic Sensors:
 | Entity | Name | Description |
 |--------|------|-------------|
-| sensor.eveus_state | State | Charger state |
-| sensor.eveus_substate | Substate | Detailed status |
-| sensor.eveus_ground | Ground | Ground connection status |
-| sensor.eveus_enabled | Enabled | Charging enabled status |
+| sensor.eveus_ev_charger_state | State | Charger state |
+| sensor.eveus_ev_charger_substate | Substate | Detailed status |
+| sensor.eveus_ev_charger_ground | Ground | Ground connection status |
+| sensor.eveus_ev_charger_enabled | Enabled | Charging enabled status |
 
 Temperature Sensors:
 | Entity | Name | Description | Unit |
 |--------|------|-------------|------|
-| sensor.eveus_box_temperature | Box Temperature | Internal temperature | °C |
-| sensor.eveus_plug_temperature | Plug Temperature | Plug temperature | °C |
+| sensor.eveus_ev_charger_box_temperature | Box Temperature | Internal temperature | °C |
+| sensor.eveus_ev_charger_plug_temperature | Plug Temperature | Plug temperature | °C |
 
 Controls:
 | Entity | Name | Description |
 |--------|------|-------------|
-| number.eveus_charging_current | Charging Current | Control charging current |
-| switch.eveus_stop_charging | Stop Charging | Control charging state |
-| switch.eveus_one_charge | One Charge | Enable one charge mode |
-| switch.eveus_reset_counter_a | Reset Counter A | Reset energy counter |
+| number.eveus_ev_charger_charging_current | Charging Current | Control charging current (8-16A/32A) |
+| switch.eveus_ev_charger_stop_charging | Stop Charging | Control charging state |
+| switch.eveus_ev_charger_one_charge | One Charge | Enable one charge mode |
+| switch.eveus_ev_charger_reset_counter_a | Reset Counter A | Reset energy counter A |
 
-## Usage
+### Usage Tips
+1. Before starting a charging session:
+   - Set the correct EV battery capacity
+   - Set the current state of charge (initial_soc)
+   - Adjust the efficiency correction if needed
+   - Set your desired target SOC
 
-### Before Charging
-1. Set EV battery capacity
-2. Set initial State of Charge
-3. Adjust efficiency correction if needed
-4. Set target SOC
+2. During charging:
+   - Monitor the charging progress via SOC sensors
+   - Use the time to target sensor for completion estimates
+   - Adjust current if needed using the slider
 
-### During Charging
-1. Monitor charging progress via SOC sensors
-2. Use time to target for completion estimate
-3. Adjust current if needed
-4. Monitor temperatures and status
+3. After charging:
+   - Reset Counter A before starting a new session
+   - Record efficiency for future reference
+   - Check total energy usage in session history
 
-### After Charging
-1. Reset Counter A for new session
-2. Check total energy usage
-3. Verify charging efficiency
-
-### Service Calls
-Available services:
-```yaml
-eveus.reset_counter_a:
-  description: Reset energy counter A to zero
-
-eveus.enable_charging:
-  description: Enable charging process
-
-eveus.disable_charging:
-  description: Disable charging process
-
-eveus.set_charging_current:
-  description: Set charging current
-  fields:
-    current:
-      description: Current in amperes (8-32A)
-      example: 16
-```
-
-## Troubleshooting
-
-### Common Issues
-1. Connection Problems:
-   - Verify charger IP address
-   - Check network connectivity
-   - Ensure proper credentials
-
-2. Helper Entity Issues:
-   - Verify all helpers exist
-   - Check value ranges
-   - Ensure proper configuration
-
-3. State Issues:
-   - Check charger status
-   - Verify current settings
-   - Monitor error states
-
-### Debug Logging
-Add to configuration.yaml:
-```yaml
-logger:
-  default: warning
-  logs:
-    custom_components.eveus: debug
-```
+### Troubleshooting
+If you encounter issues:
+1. Check all helper entities are properly configured
+2. Verify network connectivity to the charger
+3. Check the logs for detailed error messages
+4. Restart the integration if needed
 
 ## Support
 
-For bugs and feature requests, open an issue on GitHub: [Issues](https://github.com/ABovsh/eveus/issues)
-
-## Contributing
-
-1. Fork the repository
-2. Create feature branch
-3. Commit changes
-4. Create pull request
+For bugs and feature requests, please open an issue on GitHub.
 
 ## License
 
-This project is licensed under the MIT License - see LICENSE file for details.
-
-## Acknowledgments
-
-- Home Assistant Community
-- HACS Team
-- All contributors
-
-## Version History
-
-See [Changelog](https://github.com/ABovsh/eveus/blob/main/CHANGELOG.md)
+This project is licensed under the MIT License - see the LICENSE file for details.
