@@ -53,7 +53,8 @@ class EveusCurrentNumber(RestoreNumber):
        self._attr_unique_id = f"{host}_charging_current"
        self._attr_native_min_value = float(MIN_CURRENT)
        self._attr_native_max_value = float(MODEL_MAX_CURRENT[model])
-       self._value = min(self._attr_native_max_value, 16.0)
+       self._value = None
+       self._restore_lock = asyncio.Lock()
 
    @property
    def native_value(self) -> float | None:
@@ -70,6 +71,25 @@ class EveusCurrentNumber(RestoreNumber):
            "model": f"Eveus ({self._host})"
        }
 
+   async def _validate_value(self, value: float) -> float | None:
+       """Validate and transform value."""
+       try:
+           if value is None:
+               return None
+           float_val = float(value)
+           if not self._attr_native_min_value <= float_val <= self._attr_native_max_value:
+               _LOGGER.warning(
+                   "Value %s outside allowed range [%s, %s]",
+                   float_val,
+                   self._attr_native_min_value,
+                   self._attr_native_max_value
+               )
+               return None
+           return float_val
+       except (TypeError, ValueError) as err:
+           _LOGGER.warning("Invalid value %s: %s", value, err)
+           return None
+
    async def _get_session(self) -> aiohttp.ClientSession:
        """Get/create session."""
        if self._session is None or self._session.closed:
@@ -82,17 +102,20 @@ class EveusCurrentNumber(RestoreNumber):
    async def async_set_native_value(self, value: float) -> None:
        """Set current value."""
        try:
-           value = int(min(self._attr_native_max_value, max(self._attr_native_min_value, value)))
+           validated_value = await self._validate_value(value)
+           if validated_value is None:
+               return
+
            session = await self._get_session()
            async with session.post(
                f"http://{self._host}/pageEvent",
                auth=aiohttp.BasicAuth(self._username, self._password),
                headers={"Content-type": "application/x-www-form-urlencoded"},
-               data=f"currentSet={value}",
+               data=f"currentSet={int(validated_value)}",
                timeout=10
            ) as response:
                response.raise_for_status()
-               self._value = float(value)
+               self._value = validated_value
        except Exception as err:
            _LOGGER.error("Error setting current: %s", str(err))
 
@@ -107,21 +130,31 @@ class EveusCurrentNumber(RestoreNumber):
            ) as response:
                data = await response.json()
                if "currentSet" in data:
-                   self._value = float(data["currentSet"])
+                   validated_value = await self._validate_value(float(data["currentSet"]))
+                   if validated_value is not None:
+                       self._value = validated_value
        except Exception as err:
            _LOGGER.error("Error updating current: %s", str(err))
 
    async def async_added_to_hass(self) -> None:
        """Handle added to Home Assistant."""
        await super().async_added_to_hass()
-       state = await self.async_get_last_state()
-       if state and state.state not in ('unknown', 'unavailable'):
-           try:
-               restored_value = float(state.state)
-               if self._attr_native_min_value <= restored_value <= self._attr_native_max_value:
-                   self._value = restored_value
-           except (TypeError, ValueError):
-               pass
+
+       async with self._restore_lock:
+           if self._value is not None:
+               return
+
+           state = await self.async_get_last_state()
+           if state and state.state not in ('unknown', 'unavailable'):
+               try:
+                   restored_value = await self._validate_value(float(state.state))
+                   if restored_value is not None:
+                       self._value = restored_value
+                       return
+               except (TypeError, ValueError) as err:
+                   _LOGGER.warning("Could not restore value: %s", err)
+
+           self._value = min(self._attr_native_max_value, 16.0)
 
 async def async_setup_entry(
    hass: HomeAssistant,
