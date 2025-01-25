@@ -81,31 +81,37 @@ class EveusUpdater:
         self._retry_interval = 5
 
     def register_sensor(self, sensor: "BaseEveusSensor") -> None:
+        """Register a sensor for updates."""
         self._sensors.append(sensor)
 
     @property
     def data(self) -> dict:
+        """Return latest data."""
         return self._data
 
     @property
     def available(self) -> bool:
+        """Return availability status."""
         return self._available
 
     @property
     def last_update(self) -> float:
+        """Return last update timestamp."""
         return self._last_update
 
     async def async_start_updates(self) -> None:
+        """Start the update loop."""
         if self._update_task is None:
             self._update_task = asyncio.create_task(self._update_loop())
 
     async def _update_loop(self) -> None:
+        """Handle the update loop."""
         retry_count = 0
         while True:
             try:
                 async with asyncio.timeout(10):
                     await self._update()
-                    retry_count = 0  # Reset retry count on successful update
+                    retry_count = 0
                 await asyncio.sleep(SCAN_INTERVAL.total_seconds())
                 
             except asyncio.CancelledError:
@@ -113,9 +119,8 @@ class EveusUpdater:
                 
             except (asyncio.TimeoutError, aiohttp.ClientError) as err:
                 retry_count += 1
-                retry_delay = min(self._retry_interval * retry_count, 60)  # Max 60s delay
-                _LOGGER.error("Update timeout/connection error: %s. Retrying in %s seconds", 
-                             str(err), retry_delay)
+                retry_delay = min(self._retry_interval * retry_count, 60)
+                _LOGGER.error("Connection error: %s. Retrying in %s seconds", str(err), retry_delay)
                 await asyncio.sleep(retry_delay)
                 
             except Exception as err:
@@ -123,23 +128,28 @@ class EveusUpdater:
                 await asyncio.sleep(SCAN_INTERVAL.total_seconds())
 
     async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create aiohttp session."""
         if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=10, connect=5)
-            connector = aiohttp.TCPConnector(limit=1, force_close=True, enable_cleanup_closed=True)
+            timeout = aiohttp.ClientTimeout(total=10)
+            connector = aiohttp.TCPConnector(limit=1, force_close=True)
             self._session = aiohttp.ClientSession(timeout=timeout, connector=connector)
         return self._session
 
     async def _update(self) -> None:
+        """Update data from the device."""
         async with self._update_lock:
             try:
                 session = await self._get_session()
                 async with session.post(
                     f"http://{self._host}/main",
-                    auth=aiohttp.BasicAuth(self._username, self._password)
+                    auth=aiohttp.BasicAuth(self._username, self._password),
+                    timeout=aiohttp.ClientTimeout(total=10)
                 ) as response:
                     response.raise_for_status()
+                    if response.content_length == 0:
+                        raise ValueError("Empty response received")
+                        
                     data = await response.json()
-                    
                     if not isinstance(data, dict):
                         raise ValueError("Invalid data format received")
                         
@@ -149,25 +159,19 @@ class EveusUpdater:
                     self._error_count = 0
 
                     for sensor in self._sensors:
-                        if hasattr(sensor, 'async_write_ha_state'):
-                            try:
-                                sensor.async_write_ha_state()
-                            except Exception as err:
-                                _LOGGER.error("Error updating sensor %s: %s", 
-                                            getattr(sensor, 'name', 'unknown'), str(err))
+                        try:
+                            sensor.async_write_ha_state()
+                        except Exception as err:
+                            _LOGGER.error("Error updating sensor %s: %s", 
+                                        getattr(sensor, 'name', 'unknown'), str(err))
 
             except (asyncio.TimeoutError, aiohttp.ClientError) as err:
                 self._error_count += 1
                 self._available = self._error_count < self._max_errors
-                raise
-
-            except Exception as err:
-                self._error_count += 1
-                self._available = self._error_count < self._max_errors
-                _LOGGER.error("Data update error: %s", str(err))
+                raise ValueError(f"Connection error: {str(err)}")
 
     async def async_shutdown(self) -> None:
-        """Shutdown updater and cleanup resources."""
+        """Shut down the updater."""
         if self._update_task:
             self._update_task.cancel()
             try:
@@ -243,26 +247,35 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
 class NumericSensor(BaseEveusSensor):
     """Base class for numeric sensors."""
     
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    
     def __init__(self, updater: EveusUpdater, name: str, key: str, 
                 unit: str = None, device_class: str = None,
                 icon: str = None, precision: int = None) -> None:
-        """Initialize numeric sensor."""
         super().__init__(updater)
+        self._key = key
         self._attr_name = name
         self._attr_unique_id = f"{updater._host}_{key}"
         self._attr_native_unit_of_measurement = unit
         self._attr_device_class = device_class
         self._attr_icon = icon
-        self._attr_suggested_display_precision = precision if precision is not None else 2
-        self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._key = key
+        self._attr_suggested_display_precision = precision
+        self._attr_has_entity_name = True
+
+    @property 
+    def native_unit_of_measurement(self):
+        """Return the unit of measurement."""
+        return self._attr_native_unit_of_measurement
 
     @property
     def native_value(self) -> float | None:
+        """Return the state of the sensor."""
         try:
             value = float(self._updater.data.get(self._key, 0))
             self._previous_value = value
-            return round(value, self._attr_suggested_display_precision)
+            if self._attr_suggested_display_precision is not None:
+                return round(value, self._attr_suggested_display_precision)
+            return value
         except (TypeError, ValueError):
             return self._previous_value
 
