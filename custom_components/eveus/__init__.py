@@ -1,4 +1,3 @@
-"""The Eveus integration."""
 from __future__ import annotations
 import logging
 import asyncio
@@ -18,7 +17,7 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.SENSOR, Platform.SWITCH, Platform.NUMBER]
 
 def import_platform_module(platform_name: str):
-    """Import platform module in a separate thread."""
+    """Import platform module."""
     if platform_name == "sensor":
         from . import sensor
         return sensor
@@ -28,6 +27,8 @@ def import_platform_module(platform_name: str):
     elif platform_name == "number":
         from . import number
         return number
+    else:
+        raise ImportError(f"Platform {platform_name} is not supported.")
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the Eveus component."""
