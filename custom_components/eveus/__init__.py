@@ -1,11 +1,8 @@
 """The Eveus integration."""
 from __future__ import annotations
 import logging
-from typing import Any
 import asyncio
-from functools import partial
-
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry 
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
@@ -13,8 +10,18 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from .const import DOMAIN
 
 PLATFORMS = [Platform.SENSOR, Platform.SWITCH, Platform.NUMBER]
-
 _LOGGER = logging.getLogger(__name__)
+
+async def _async_import_platforms():
+   """Import platform modules."""
+   from . import sensor
+   from . import switch 
+   from . import number
+   return {
+       Platform.SENSOR: sensor,
+       Platform.SWITCH: switch,
+       Platform.NUMBER: number
+   }
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
    """Set up Eveus component."""
@@ -23,10 +30,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
    """Set up Eveus from config entry."""
-   hass.data.setdefault(DOMAIN, {})
-   
    try:
-       # Initialize entry data
+       hass.data.setdefault(DOMAIN, {})
        hass.data[DOMAIN][entry.entry_id] = {
            "title": entry.title,
            "options": entry.options.copy(),
@@ -34,8 +39,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
            "cleanup_tasks": set()
        }
 
-       # Forward setup to platforms
-       await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+       platforms = await hass.async_add_executor_job(_async_import_platforms)
+       
+       for platform, module in platforms.items():
+           if hasattr(module, "async_setup_entry"):
+               await module.async_setup_entry(hass, entry)
 
        return True
 
@@ -61,8 +69,6 @@ async def cleanup_resources(hass: HomeAssistant, entry: ConfigEntry) -> None:
    """Clean up resources."""
    entry_data = hass.data[DOMAIN].get(entry.entry_id, {})
    cleanup_tasks = entry_data.get("cleanup_tasks", set())
-
    if cleanup_tasks:
-       _LOGGER.debug("Running cleanup for entry %s", entry.entry_id)
        await asyncio.gather(*cleanup_tasks, return_exceptions=True)
        cleanup_tasks.clear()
