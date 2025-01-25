@@ -241,37 +241,30 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
        return self._updater.available
 
 class NumericSensor(BaseEveusSensor):
-   """Base class for numeric sensors."""
-   
-   _attr_suggested_display_precision = 2
-   _attr_state_class = SensorStateClass.MEASUREMENT
-
-   def __init__(self, updater: EveusUpdater, name: str, key: str, 
+    """Base class for numeric sensors."""
+    
+    def __init__(self, updater: EveusUpdater, name: str, key: str, 
                 unit: str = None, device_class: str = None,
                 icon: str = None, precision: int = None) -> None:
-       """Initialize numeric sensor."""
-       super().__init__(updater)
-       self._attr_name = name
-       self._attr_unique_id = f"{updater._host}_{key}"
-       self._key = key
-       if unit:
-           self._attr_native_unit_of_measurement = unit
-       if device_class:
-           self._attr_device_class = device_class
-       if icon:
-           self._attr_icon = icon
-       if precision is not None:
-           self._attr_suggested_display_precision = precision
+        """Initialize numeric sensor."""
+        super().__init__(updater)
+        self._attr_name = name
+        self._attr_unique_id = f"{updater._host}_{key}"
+        self._attr_native_unit_of_measurement = unit
+        self._attr_device_class = device_class
+        self._attr_icon = icon
+        self._attr_suggested_display_precision = precision if precision is not None else 2
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._key = key
 
-   @property
-   def native_value(self) -> float | None:
-       """Return the sensor value."""
-       try:
-           value = float(self._updater.data.get(self._key, 0))
-           self._previous_value = value
-           return round(value, self._attr_suggested_display_precision)
-       except (TypeError, ValueError):
-           return self._previous_value
+    @property
+    def native_value(self) -> float | None:
+        try:
+            value = float(self._updater.data.get(self._key, 0))
+            self._previous_value = value
+            return round(value, self._attr_suggested_display_precision)
+        except (TypeError, ValueError):
+            return self._previous_value
 
 class EnergySensor(NumericSensor):
    """Base energy sensor."""
