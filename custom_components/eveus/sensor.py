@@ -26,7 +26,7 @@ from homeassistant.const import (
    UnitOfTemperature,
    UnitOfTime,
    CONF_HOST,
-   CONF_USERNAME, 
+   CONF_USERNAME,
    CONF_PASSWORD,
 )
 
@@ -115,7 +115,7 @@ class EveusUpdater:
                await asyncio.sleep(SCAN_INTERVAL.total_seconds())
 
    async def _get_session(self) -> aiohttp.ClientSession:
-       """Get or create client session."""
+       """Get/create client session."""
        if self._session is None or self._session.closed:
            self._session = aiohttp.ClientSession(
                timeout=aiohttp.ClientTimeout(total=10),
@@ -272,12 +272,12 @@ class StateSensor(BaseEveusSensor):
    """Base state sensor."""
    _attr_entity_category = EntityCategory.DIAGNOSTIC
    
-   def __init__(self, updater: EveusUpdater, name: str, key: str,
+   def __init__(self, updater: EveusUpdector, name: str, key: str,
                 state_map: dict, icon: str = "mdi:information"):
        """Initialize state sensor."""
        super().__init__(updater)
        self._attr_name = name
-       self._attr_unique_id = f"{updater._host}_{key}"
+       self._attr_unique_id = f"{updator._host}_{key}"
        self._key = key
        self._state_map = state_map
        self._attr_icon = icon
@@ -288,6 +288,25 @@ class StateSensor(BaseEveusSensor):
        try:
            state = self._updater.data.get(self._key)
            return self._state_map.get(state, "Unknown")
+       except (TypeError, ValueError):
+           return "Unknown"
+
+class EveusGroundSensor(BaseEveusSensor):
+   """Ground connection sensor."""
+   _attr_entity_category = EntityCategory.DIAGNOSTIC
+   _attr_icon = "mdi:power-plug"
+
+   def __init__(self, updater: EveusUpdater) -> None:
+       """Initialize ground sensor."""
+       super().__init__(updater)
+       self._attr_name = "Ground Connection"
+       self._attr_unique_id = f"{updater._host}_ground"
+
+   @property
+   def native_value(self) -> str:
+       """Return ground status."""
+       try:
+           return "Connected" if self._updater.data.get(ATTR_GROUND) == 1 else "Not Connected"
        except (TypeError, ValueError):
            return "Unknown"
 
@@ -401,6 +420,7 @@ async def async_setup_entry(
        # State sensors
        StateSensor(updater, "State", ATTR_STATE, CHARGING_STATES),
        StateSensor(updater, "Substate", ATTR_SUBSTATE, NORMAL_SUBSTATES),
+       EveusGroundSensor(updater),
 
        # Time sensors
        NumericSensor(
@@ -419,7 +439,7 @@ async def async_setup_entry(
        TimeToTargetSocSensor(updater),
    ]
 
-   if "entities" not in hass.data[DOMAIN][entry.entry_id]:
+if "entities" not in hass.data[DOMAIN][entry.entry_id]:
        hass.data[DOMAIN][entry.entry_id]["entities"] = {}
 
    hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
