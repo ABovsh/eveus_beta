@@ -441,14 +441,14 @@ async def async_setup_entry(
        TimeToTargetSocSensor(updater),
    ]
 
-if "entities" not in hass.data[DOMAIN][entry.entry_id]:
-       hass.data[DOMAIN][entry.entry_id]["entities"] = {}
-
-hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
-   sensor.unique_id: sensor for sensor in sensors
-}
-
-async_add_entities(sensors)
+    if "entities" not in hass.data[DOMAIN][entry.entry_id]:
+        hass.data[DOMAIN][entry.entry_id]["entities"] = {}
+        
+    hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
+        sensor.unique_id: sensor for sensor in sensors
+    }
+    
+    async_add_entities(sensors)
 
 class EVSocKwhSensor(BaseEveusSensor):
    """EV State of Charge energy sensor."""
