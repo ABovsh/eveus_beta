@@ -1,5 +1,3 @@
-# File: custom_components/eveus/const.py
-
 """Constants for the Eveus integration."""
 from datetime import timedelta
 
