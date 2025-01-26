@@ -434,16 +434,6 @@ class TimeToTargetSocSensor(TextEntity):
        self._attr_unique_id = f"{updater._host}_time_to_target"
 
    @property
-   def device_info(self) -> dict[str, Any]:
-       """Return device information."""
-       return {
-           "identifiers": {(DOMAIN, self._updater._host)},
-           "name": "Eveus EV Charger",
-           "manufacturer": "Eveus",
-           "model": f"Eveus ({self._updater._host})",
-       }
-
-   @property
    def available(self) -> bool:
        """Return if entity is available."""
        return self._updater.available
