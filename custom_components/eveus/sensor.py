@@ -424,15 +424,19 @@ class TimeToTargetSocSensor(BaseEveusSensor):
         self._attr_name = "Time to Target"
         self._attr_unique_id = f"{updater._host}_time_to_target"
         self._attr_icon = "mdi:timer"
-        self._attr_state_class = None
         self._attr_device_class = SensorDeviceClass.DURATION
+        self._attr_native_unit_of_measurement = UnitOfTime.SECONDS
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_suggested_display_precision = 0
         self._hours_pattern = re.compile(r'(\d+)h')
+        self._formatted_value = "0h"
 
-    def _format_duration(self, total_minutes: int) -> str:
+    def _format_duration(self, total_seconds: int) -> str:
         """Format duration into a human-readable string."""
-        if total_minutes < 1:
+        if total_seconds < 60:
             return "0h"
 
+        total_minutes = total_seconds // 60
         days = int(total_minutes // 1440)
         hours = int((total_minutes % 1440) // 60)
         minutes = int(total_minutes % 60)
@@ -451,11 +455,12 @@ class TimeToTargetSocSensor(BaseEveusSensor):
         return " ".join(parts) if parts else "0h"
 
     @property
-    def native_value(self) -> str | None:
-        """Calculate and return time to target SOC."""
+    def native_value(self) -> int | None:
+        """Return time to target in seconds."""
         try:
             if self._updater.data.get(ATTR_STATE) != 4:
-                return "0h"
+                self._formatted_value = "0h"
+                return 0
 
             current_soc = float(self.hass.states.get("sensor.eveus_ev_charger_soc_percent").state)
             target_soc = float(self.hass.states.get("input_number.ev_target_soc").state)
@@ -464,33 +469,40 @@ class TimeToTargetSocSensor(BaseEveusSensor):
             power_meas = float(self._updater.data.get(ATTR_POWER, 0))
 
             if any(x is None for x in [current_soc, target_soc, battery_capacity, correction, power_meas]):
-                return "0h"
+                self._formatted_value = "0h"
+                return 0
 
             if current_soc >= target_soc:
-                return "0h"
+                self._formatted_value = "0h"
+                return 0
 
             if power_meas < 100:
-                return "0h"
+                self._formatted_value = "0h"
+                return 0
 
             remaining_kwh = (target_soc - current_soc) * battery_capacity / 100
             efficiency = (1 - correction / 100)
             power_kw = power_meas * efficiency / 1000
             
             if power_kw <= 0:
-                return "0h"
+                self._formatted_value = "0h"
+                return 0
                 
-            total_minutes = round((remaining_kwh / power_kw * 60), 0)
-            formatted_time = self._format_duration(total_minutes)
-            
-            # Ensure hours part exists for template matching
-            if not self._hours_pattern.search(formatted_time):
-                formatted_time = "0h"
-                
-            return formatted_time
+            total_seconds = int(round((remaining_kwh / power_kw * 3600), 0))
+            self._formatted_value = self._format_duration(total_seconds)
+            return total_seconds
 
         except (TypeError, ValueError, AttributeError) as err:
             _LOGGER.debug("Error calculating time to target: %s", str(err))
-            return "0h"
+            self._formatted_value = "0h"
+            return 0
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return additional state attributes."""
+        attrs = super().extra_state_attributes
+        attrs["formatted_duration"] = self._formatted_value
+        return attrs
 
 async def async_setup_entry(
     hass: HomeAssistant,
