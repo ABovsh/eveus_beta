@@ -28,13 +28,19 @@ class SessionMixin:
         self._error_count = 0
         self._max_errors = 3
         self._command_lock = asyncio.Lock()
+        self._firmware_version = None
+        self._serial_number = None
         
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create aiohttp session."""
         if self._session is None or self._session.closed:
             timeout = aiohttp.ClientTimeout(total=10)
-            connector = aiohttp.TCPConnector(limit=1, force_close=True)
-            self._session = aiohttp.ClientSession(timeout=timeout, connector=connector)
+            connector = aiohttp.TCPConnector(limit=1, force_close=True, keepalive_timeout=60)
+            self._session = aiohttp.ClientSession(
+                timeout=timeout, 
+                connector=connector,
+                raise_for_status=True
+            )
         return self._session
 
     async def _cleanup_session(self) -> None:
@@ -53,25 +59,29 @@ class DeviceInfoMixin:
         if not host:
             if hasattr(self, '_updater'):
                 host = self._updater._host
+                data = self._updater.data if self._updater.data else {}
             else:
                 return {}
+        else:
+            data = getattr(self, '_data', {})
 
         info = {
             "identifiers": {(DOMAIN, host)},
-            "name": "Eveus EV Charger",
+            "name": f"Eveus EV Charger ({host})",
             "manufacturer": "Eveus",
-            "model": f"Eveus ({host})",
+            "model": "Eveus Smart Charger",
+            "configuration_url": f"http://{host}",
         }
 
         # Add firmware version if available
-        if hasattr(self, '_updater') and self._updater.data:
-            firmware = self._updater.data.get(ATTR_FIRMWARE_VERSION)
-            if firmware:
-                info["sw_version"] = firmware
-                
-            serial = self._updater.data.get(ATTR_SERIAL_NUMBER)
-            if serial:
-                info["hw_version"] = serial
+        firmware = data.get(ATTR_FIRMWARE_VERSION)
+        if firmware:
+            info["sw_version"] = str(firmware)
+            
+        # Add serial number if available    
+        serial = data.get(ATTR_SERIAL_NUMBER)
+        if serial:
+            info["hw_version"] = str(serial)
 
         return info
 
@@ -83,9 +93,11 @@ class ErrorHandlingMixin:
         error_msg = f"{context}: {str(err)}" if context else str(err)
         
         if isinstance(err, (asyncio.TimeoutError, aiohttp.ClientError)):
-            _LOGGER.error("Connection error %s", error_msg)
+            _LOGGER.warning("Connection error %s", error_msg)
             if hasattr(self, '_error_count'):
                 self._error_count += 1
+                if self._error_count >= getattr(self, '_max_errors', 3):
+                    _LOGGER.error("Max errors reached, marking as unavailable")
                 self._available = self._error_count < getattr(self, '_max_errors', 3)
         else:
             _LOGGER.error("Unexpected error %s", error_msg)
