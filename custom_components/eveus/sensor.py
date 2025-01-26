@@ -235,8 +235,8 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
             "name": "Eveus EV Charger",
             "manufacturer": "Eveus",
             "model": f"Eveus ({self._updater._host})",
-            "sw_version": self._updater.data.get("verFWMain", "Unknown"),
-            "hw_version": self._updater.data.get("serialNum", "Unknown"),
+            "sw_version": self._updater.data.get(ATTR_FIRMWARE_VERSION, "Unknown"),
+            "hw_version": self._updater.data.get(ATTR_SERIAL_NUMBER, "Unknown"),
         }
 
     @property
