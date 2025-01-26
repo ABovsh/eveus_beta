@@ -61,18 +61,6 @@ class EveusCurrentNumber(RestoreNumber):
        """Return current value."""
        return self._value
 
-   @property
-   def device_info(self) -> dict[str, Any]:
-       """Return device info."""
-       return {
-           "identifiers": {(DOMAIN, self._host)},
-           "name": "Eveus EV Charger",
-           "manufacturer": "Eveus",
-           "model": f"({self._host})",
-           "sw_version": self._session.data.get("verFWMain", "Unknown") if self._session else "Unknown",
-           "hw_version": self._session.data.get("serialNum", "Unknown") if self._session else "Unknown"
-       }
-
    async def _validate_value(self, value: float) -> float | None:
        """Validate and transform value."""
        try:
