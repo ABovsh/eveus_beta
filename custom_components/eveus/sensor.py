@@ -304,7 +304,73 @@ class EVSocKwhSensor(BaseEveusSensor):
     def __init__(self, updater: EveusUpdater) -> None:
         """Initialize the sensor."""
         super().__init__(updater)
-        return None
+        self._attr_name = "SOC Energy"
+        self._attr_unique_id = f"{updater._host}_soc_kwh"
+        self._attr_device_class = SensorDeviceClass.ENERGY
+        self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+        self._attr_state_class = SensorStateClass.TOTAL
+        self._attr_icon = "mdi:battery-charging"
+        self._attr_suggested_display_precision = 2
+
+    @property
+    def native_value(self) -> float | None:
+        """Calculate and return state of charge in kWh."""
+        try:
+            initial_soc = float(self.hass.states.get("input_number.ev_initial_soc").state)
+            max_capacity = float(self.hass.states.get("input_number.ev_battery_capacity").state)
+            energy_charged = float(self._updater.data.get("IEM1", 0))
+            correction = float(self.hass.states.get("input_number.ev_soc_correction").state)
+
+            if any(x is None for x in [initial_soc, max_capacity, energy_charged, correction]):
+                return None
+
+            if initial_soc < 0 or initial_soc > 100 or max_capacity <= 0:
+                return None
+
+            initial_kwh = (initial_soc / 100) * max_capacity
+            efficiency = (1 - correction / 100)
+            charged_kwh = energy_charged * efficiency
+            total_kwh = initial_kwh + charged_kwh
+            
+            return round(max(0, min(total_kwh, max_capacity)), 2)
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+    @property
+    def unit_of_measurement(self) -> str:
+        """Return the unit of measurement."""
+        return self._attr_native_unit_of_measurement
+
+class EVSocPercentSensor(BaseEveusSensor):
+    """EV State of Charge percentage sensor."""
+    
+    def __init__(self, updater: EveusUpdater) -> None:
+        """Initialize the sensor."""
+        super().__init__(updater)
+        self._attr_name = "SOC Percent"
+        self._attr_unique_id = f"{updater._host}_soc_percent"
+        self._attr_device_class = SensorDeviceClass.BATTERY
+        self._attr_native_unit_of_measurement = "%"
+        self._attr_icon = "mdi:battery-charging"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_suggested_display_precision = 0
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the state of charge percentage."""
+        try:
+            soc_kwh = float(self.hass.states.get("sensor.eveus_ev_charger_soc_energy").state)
+            max_capacity = float(self.hass.states.get("input_number.ev_battery_capacity").state)
+            
+            if any(x is None for x in [soc_kwh, max_capacity]):
+                return None
+                
+            if soc_kwh >= 0 and max_capacity > 0:
+                percentage = round((soc_kwh / max_capacity * 100), 0)
+                return max(0, min(percentage, 100))
+            return None
+        except (TypeError, ValueError, AttributeError):
+            return None
 
 class TimeToTargetSocSensor(TextEntity, DeviceInfoMixin):
     """Time to target SOC text entity."""
