@@ -33,13 +33,7 @@ class SessionMixin:
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create aiohttp session."""
         if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=10)
-            connector = aiohttp.TCPConnector(force_close=False)
-            self._session = aiohttp.ClientSession(
-                timeout=timeout, 
-                connector=connector,
-                raise_for_status=True
-            )
+            self._session = aiohttp.ClientSession()
         return self._session
 
     async def _cleanup_session(self) -> None:
@@ -54,33 +48,28 @@ class DeviceInfoMixin:
     @property
     def device_info(self) -> dict[str, Any]:
         """Return device information."""
+        data = {}
+        if hasattr(self, '_updater'):
+            data = self._updater.data if self._updater.data else {}
+        elif hasattr(self, '_data'):
+            data = self._data
+
         host = getattr(self, '_host', None)
+        if not host and hasattr(self, '_updater'):
+            host = self._updater._host
+
         if not host:
-            if hasattr(self, '_updater'):
-                host = self._updater._host
-                data = self._updater.data if self._updater.data else {}
-            else:
-                return {}
-        else:
-            data = getattr(self, '_data', {})
+            return {}
 
         info = {
             "identifiers": {(DOMAIN, host)},
             "name": "Eveus EV Charger",
             "manufacturer": "Eveus",
             "model": "Eveus Smart Charger",
-            "configuration_url": f"http://{host}"
+            "configuration_url": f"http://{host}",
+            "sw_version": data.get(ATTR_FIRMWARE_VERSION, "Unknown").strip(),
+            "hw_version": data.get(ATTR_SERIAL_NUMBER, "Unknown").strip()
         }
-
-        # Add firmware version if available
-        firmware = data.get(ATTR_FIRMWARE_VERSION)
-        if firmware:
-            info["sw_version"] = str(firmware)
-            
-        # Add serial number if available    
-        serial = data.get(ATTR_SERIAL_NUMBER)
-        if serial:
-            info["hw_version"] = str(serial)
 
         return info
 
@@ -95,9 +84,7 @@ class ErrorHandlingMixin:
             _LOGGER.warning("Connection error %s", error_msg)
             if hasattr(self, '_error_count'):
                 self._error_count += 1
-                if self._error_count >= getattr(self, '_max_errors', 3):
-                    _LOGGER.error("Max errors reached, marking as unavailable")
-                self._available = self._error_count < getattr(self, '_max_errors', 3)
+                self._available = self._error_count < self._max_errors
         else:
             _LOGGER.error("Unexpected error %s", error_msg)
             if hasattr(self, '_available'):
