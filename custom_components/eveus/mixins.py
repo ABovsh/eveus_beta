@@ -10,8 +10,8 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
     DOMAIN,
-    ATTR_FIRMWARE_VERSION,
-    ATTR_SERIAL_NUMBER,
+    ATTR_FIRMWARE_VERSION,  # "verFWMain"
+    ATTR_SERIAL_NUMBER,     # "serialNum"
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -34,64 +34,59 @@ class SessionMixin:
         """Get client session from Home Assistant."""
         return async_get_clientsession(self.hass)
 
-    async def _make_request(self) -> dict:
-        """Make an authenticated request to get device data."""
-        try:
-            session = await self._get_session()
-            async with session.post(
-                f"http://{self._host}/main",
-                auth=aiohttp.BasicAuth(self._username, self._password),
-                timeout=10
-            ) as response:
-                response.raise_for_status()
-                self._data = await response.json()
-                self._error_count = 0
-                self._available = True
-                return self._data
-        except Exception as err:
-            self._error_count += 1
-            self._available = self._error_count < self._max_errors
-            raise err
-
 class DeviceInfoMixin:
     """Mixin for device info."""
     
     @property
     def device_info(self) -> dict[str, Any]:
         """Return device information."""
-        data = {}
-        host = None
-
-        # Get data from updater if available
-        if hasattr(self, '_updater'):
-            data = self._updater.data if self._updater.data else {}
+        # First try to get data from updater
+        if hasattr(self, '_updater') and self._updater and hasattr(self._updater, 'data'):
+            data = self._updater.data or {}
             host = self._updater._host
-        # Get data from self if no updater
+            _LOGGER.debug("Device Info from updater data: %s", data)
         else:
             data = getattr(self, '_data', {})
             host = getattr(self, '_host', None)
+            _LOGGER.debug("Device Info from self data: %s", data)
 
         if not host:
             return {}
 
-        # Get firmware and serial number from data
-        firmware = str(data.get(ATTR_FIRMWARE_VERSION, '')).strip()
-        serial = str(data.get(ATTR_SERIAL_NUMBER, '')).strip()
+        # Debug logging
+        _LOGGER.debug(
+            "Looking for firmware version at '%s': %s", 
+            ATTR_FIRMWARE_VERSION, 
+            data.get(ATTR_FIRMWARE_VERSION)
+        )
+        _LOGGER.debug(
+            "Looking for serial number at '%s': %s", 
+            ATTR_SERIAL_NUMBER, 
+            data.get(ATTR_SERIAL_NUMBER)
+        )
+
+        # Get raw values
+        firmware = data.get(ATTR_FIRMWARE_VERSION)
+        serial = data.get(ATTR_SERIAL_NUMBER)
 
         info = {
             "identifiers": {(DOMAIN, host)},
             "name": "Eveus EV Charger",
             "manufacturer": "Eveus",
             "model": "Eveus Smart Charger",
-            "configuration_url": f"http://{host}",
+            "configuration_url": f"http://{host}"
         }
 
-        # Only add version info if we have actual data
-        if firmware:
-            info["sw_version"] = firmware
-        if serial:
-            info["hw_version"] = serial
+        # Only add if we have actual values
+        if firmware is not None and str(firmware).strip():
+            info["sw_version"] = str(firmware).strip()
+            _LOGGER.debug("Added firmware version: %s", info["sw_version"])
+            
+        if serial is not None and str(serial).strip():
+            info["hw_version"] = str(serial).strip()
+            _LOGGER.debug("Added serial number: %s", info["hw_version"])
 
+        _LOGGER.debug("Final device info: %s", info)
         return info
 
 class ErrorHandlingMixin:
