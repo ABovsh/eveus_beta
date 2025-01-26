@@ -10,7 +10,6 @@ from datetime import datetime
 from homeassistant.const import CONF_HOST
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from .const import DOMAIN
 
@@ -19,11 +18,12 @@ _LOGGER = logging.getLogger(__name__)
 class SessionMixin:
     """Enhanced session mixin with common HTTP functionality."""
     
-    def __init__(self, host: str, username: str, password: str) -> None:
+    def __init__(self, host: str, username: str, password: str, hass: HomeAssistant = None) -> None:
         """Initialize session mixin."""
         self._host = host
         self._username = username
         self._password = password
+        self.hass = hass
         self._available = True
         self._error_count = 0
         self._max_errors = 3
@@ -34,6 +34,8 @@ class SessionMixin:
         
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get client session from Home Assistant."""
+        if not self.hass:
+            raise RuntimeError("HomeAssistant instance not set")
         return async_get_clientsession(self.hass)
 
     async def async_api_call(
@@ -190,7 +192,7 @@ class ErrorHandlingMixin:
                     continue
                 
                 await self.handle_error(err)
-                raise UpdateFailed(f"Failed after {max_retries} attempts: {str(last_error)}")
+                return None
 
 class ValidationMixin:
     """Mixin for input validation."""
