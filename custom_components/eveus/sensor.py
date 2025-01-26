@@ -72,8 +72,10 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
         super().__init__(host=host, username=username, password=password, hass=hass)
         self._sensors = []
         self._update_task = None
+        self._update_lock = asyncio.Lock()
         self._available = True
         self._last_update = datetime.now().timestamp()
+        self._min_update_interval = 5  # Minimum seconds between updates
 
     def register_sensor(self, sensor: "BaseEveusSensor") -> None:
         """Register a sensor for updates."""
@@ -81,30 +83,47 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
 
     async def async_start_updates(self) -> None:
         """Start the update loop."""
-        await self.async_update()
+        try:
+            async with asyncio.timeout(10):  # Timeout for initial update
+                await self.async_update()
+        except asyncio.TimeoutError:
+            _LOGGER.error("Initial update timed out")
+            self._available = False
+        except Exception as err:
+            _LOGGER.error("Error during initial update: %s", str(err))
+            self._available = False
 
     async def async_update(self) -> None:
-        """Update data from device."""
-        try:
-            data = await self.async_api_call("main")
-            if data:
-                self._data = data
-                self._available = True
-                self._last_update = datetime.now().timestamp()
-                self._error_count = 0
+        """Update data from device with rate limiting."""
+        if not self._update_lock.locked():
+            async with self._update_lock:
+                # Check update interval
+                current_time = datetime.now().timestamp()
+                if current_time - self._last_update < self._min_update_interval:
+                    return
 
-                for sensor in self._sensors:
-                    try:
-                        sensor.async_write_ha_state()
-                    except Exception as err:
-                        await self.handle_error(err, f"Error updating sensor {getattr(sensor, 'name', 'unknown')}")
-            else:
-                self._available = False
-                
-        except Exception as err:
-            self._error_count += 1
-            self._available = self._error_count < self._max_errors
-            await self.handle_error(err, "Update failed")
+                try:
+                    data = await self.async_api_call("main")
+                    if data:
+                        self._data = data
+                        self._available = True
+                        self._last_update = current_time
+                        self._error_count = 0
+
+                        # Update sensors without waiting
+                        for sensor in self._sensors:
+                            try:
+                                sensor.async_write_ha_state()
+                            except Exception as err:
+                                _LOGGER.error("Error updating sensor %s: %s", 
+                                    getattr(sensor, 'name', 'unknown'), str(err))
+                    else:
+                        self._available = False
+                        
+                except Exception as err:
+                    self._error_count += 1
+                    self._available = self._error_count < self._max_errors
+                    _LOGGER.error("Update failed: %s", str(err))
 
     @property
     def available(self) -> bool:
@@ -115,7 +134,7 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
     def last_update(self) -> float:
         """Return last update timestamp."""
         return self._last_update
-
+        
 class BaseEveusSensor(DeviceInfoMixin, StateMixin, ValidationMixin, SensorEntity, RestoreEntity):
     """Base implementation for Eveus sensors."""
     def __init__(self, updater: EveusUpdater) -> None:
