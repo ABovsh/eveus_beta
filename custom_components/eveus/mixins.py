@@ -7,16 +7,60 @@ import aiohttp
 from typing import Any, Optional, Callable
 from datetime import datetime
 
-from homeassistant.const import CONF_HOST
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_create_clientsession
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.const import CONF_HOST
 
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
+class ConnectionManager:
+    """Manage API connections with retry and backoff."""
+    def __init__(self):
+        """Initialize connection manager."""
+        self._retry_interval = 5
+        self._backoff_factor = 1.5
+        self._max_retry_interval = 300
+        self._request_timeout = 10
+        self._connection_lock = asyncio.Lock()
+
+    async def execute_request(
+        self,
+        session: aiohttp.ClientSession,
+        method: str,
+        url: str,
+        **kwargs
+    ) -> Any:
+        """Execute request with retry logic."""
+        timeout = aiohttp.ClientTimeout(total=self._request_timeout)
+        kwargs['timeout'] = timeout
+
+        async with self._connection_lock:
+            for attempt in range(3):
+                try:
+                    async with session.request(method, url, **kwargs) as response:
+                        response.raise_for_status()
+                        if response.content_length == 0:
+                            raise ValueError("Empty response received")
+                        return await response.json()
+                except asyncio.TimeoutError:
+                    if attempt == 2:
+                        raise
+                    await asyncio.sleep(self._retry_interval * (self._backoff_factor ** attempt))
+                except (aiohttp.ClientError, ValueError) as err:
+                    if attempt == 2:
+                        raise
+                    _LOGGER.warning(
+                        "Request failed (attempt %d/3): %s",
+                        attempt + 1,
+                        str(err)
+                    )
+                    await asyncio.sleep(self._retry_interval * (self._backoff_factor ** attempt))
+
 class SessionMixin:
-    """Enhanced session mixin with common HTTP functionality."""
+    """Enhanced session mixin with improved connection handling."""
     
     def __init__(self, host: str, username: str, password: str, hass: HomeAssistant = None) -> None:
         """Initialize session mixin."""
@@ -29,72 +73,68 @@ class SessionMixin:
         self._max_errors = 3
         self._command_lock = asyncio.Lock()
         self._data = {}
-        self._last_update = None
-        self._min_update_interval = 1.0  # Minimum seconds between updates
-        
+        self._last_update = datetime.now().timestamp()
+        self._connection_manager = ConnectionManager()
+        self._session: Optional[aiohttp.ClientSession] = None
+
     async def _get_session(self) -> aiohttp.ClientSession:
-        """Get client session from Home Assistant."""
+        """Get or create client session."""
         if not self.hass:
-            raise RuntimeError("HomeAssistant instance not set")
-        return async_get_clientsession(self.hass)
+            raise HomeAssistantError("HomeAssistant instance not set")
+        if not self._session:
+            self._session = async_create_clientsession(self.hass)
+        return self._session
 
     async def async_api_call(
-        self, 
-        endpoint: str, 
-        method: str = "POST", 
+        self,
+        endpoint: str,
+        method: str = "POST",
         data: dict = None,
-        timeout: int = 10,
-        verify_response: Callable = None
+        **kwargs
     ) -> Optional[dict]:
-        """Centralized API call method with error handling and verification."""
+        """Execute API call with improved error handling."""
         try:
             session = await self._get_session()
-            async with session.request(
-                method,
-                f"http://{self._host}/{endpoint}",
-                auth=aiohttp.BasicAuth(self._username, self._password),
-                data=data,
-                timeout=timeout,
-                headers={"Content-type": "application/x-www-form-urlencoded"} if data else None
-            ) as response:
-                response.raise_for_status()
-                
-                if response.content_length == 0:
-                    raise ValueError("Empty response received")
-                
-                result = await response.json()
-                
-                if verify_response:
-                    if not await verify_response(result):
-                        raise ValueError("Response verification failed")
-                
-                self._error_count = 0
-                self._available = True
-                return result
-                
+            url = f"http://{self._host}/{endpoint}"
+            
+            kwargs.update({
+                "auth": aiohttp.BasicAuth(self._username, self._password),
+                "headers": {"Content-type": "application/x-www-form-urlencoded"} if data else None,
+                "data": data
+            })
+
+            result = await self._connection_manager.execute_request(session, method, url, **kwargs)
+            
+            self._error_count = 0
+            self._available = True
+            return result
+
+        except asyncio.CancelledError:
+            self._available = False
+            raise
+
         except Exception as err:
-            await self.handle_error(err)
+            self._error_count += 1
+            self._available = self._error_count < self._max_errors
+            _LOGGER.error("API call failed: %s", str(err))
             return None
 
     async def _cleanup_session(self) -> None:
         """Clean up session resources."""
-        try:
-            session = await self._get_session()
-            if session and not session.closed:
-                await session.close()
-        except Exception as err:
-            _LOGGER.error("Error cleaning up session: %s", err)
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
 
 class UpdaterMixin:
     """Mixin for entity update functionality."""
     
     async def async_update_data(self, full_update: bool = True) -> bool:
         """Common update method with rate limiting and data validation."""
-        if not hasattr(self, '_last_update'):
-            self._last_update = 0
-            
         current_time = datetime.now().timestamp()
-        if current_time - self._last_update < self._min_update_interval:
+        
+        if hasattr(self, '_min_update_interval') and \
+           hasattr(self, '_last_update') and \
+           current_time - self._last_update < self._min_update_interval:
             return True
             
         async with self._command_lock:
@@ -156,6 +196,9 @@ class ErrorHandlingMixin:
         """Handle errors with consistent logging and state management."""
         error_msg = f"{context}: {str(err)}" if context else str(err)
         
+        if isinstance(err, asyncio.CancelledError):
+            return
+
         if isinstance(err, (asyncio.TimeoutError, aiohttp.ClientError)):
             _LOGGER.warning("Connection error %s", error_msg)
             if hasattr(self, '_error_count'):
@@ -180,6 +223,8 @@ class ErrorHandlingMixin:
         for attempt in range(max_retries):
             try:
                 return await func(*args, **kwargs)
+            except asyncio.CancelledError:
+                raise
             except Exception as err:
                 last_error = err
                 if attempt < max_retries - 1:
@@ -193,6 +238,10 @@ class ErrorHandlingMixin:
                 
                 await self.handle_error(err)
                 return None
+
+        if last_error:
+            _LOGGER.error("Failed after %d attempts: %s", max_retries, str(last_error))
+        return None
 
 class ValidationMixin:
     """Mixin for input validation."""
