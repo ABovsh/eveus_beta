@@ -350,9 +350,9 @@ class EVSocKwhSensor(BaseEveusSensor):
         self._attr_unique_id = f"{updater._host}_soc_kwh"
         self._attr_device_class = SensorDeviceClass.ENERGY
         self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+        self._attr_state_class = SensorStateClass.TOTAL
         self._attr_icon = "mdi:battery-charging"
         self._attr_suggested_display_precision = 2
-        self._attr_state_class = SensorStateClass.TOTAL
 
     @property
     def native_value(self) -> float | None:
@@ -377,6 +377,11 @@ class EVSocKwhSensor(BaseEveusSensor):
             return round(max(0, min(total_kwh, max_capacity)), 2)
         except (TypeError, ValueError, AttributeError):
             return None
+
+    @property
+    def unit_of_measurement(self) -> str:
+        """Return the unit of measurement."""
+        return UnitOfEnergy.KILO_WATT_HOUR
 
 class EVSocPercentSensor(BaseEveusSensor):
     """EV State of Charge percentage sensor."""
@@ -418,7 +423,23 @@ class TimeToTargetSocSensor(BaseEveusSensor):
         self._attr_name = "Time to Target"
         self._attr_unique_id = f"{updater._host}_time_to_target"
         self._attr_icon = "mdi:timer"
-        self._attr_state_class = None  # This is a calculated text value
+        self._attr_state_class = None
+
+    def _parse_hours(self, time_str: str) -> int:
+        """Extract hours from time string."""
+        try:
+            if not time_str or time_str in ["Not charging", "Target reached", "Insufficient power", "Calculating..."]:
+                return 0
+            parts = time_str.split()
+            hours = 0
+            for part in parts:
+                if 'd' in part:
+                    hours += int(part.replace('d', '')) * 24
+                elif 'h' in part:
+                    hours += int(part.replace('h', ''))
+            return hours
+        except (ValueError, TypeError):
+            return 0
 
     def _format_duration(self, total_minutes: int) -> str:
         """Format duration into a human-readable string."""
@@ -434,7 +455,7 @@ class TimeToTargetSocSensor(BaseEveusSensor):
             parts.append(f"{days}d")
         if hours > 0:
             parts.append(f"{hours}h")
-        if minutes > 0 or not parts:  # Include minutes if it's the only non-zero value
+        if minutes > 0 or not parts:
             parts.append(f"{minutes}m")
             
         return " ".join(parts)
@@ -443,17 +464,15 @@ class TimeToTargetSocSensor(BaseEveusSensor):
     def native_value(self) -> str | None:
         """Calculate and return time to target SOC."""
         try:
-            if self._updater.data.get(ATTR_STATE) != 4:  # Not charging
+            if self._updater.data.get(ATTR_STATE) != 4:
                 return "Not charging"
 
-            # Get required values
             current_soc = float(self.hass.states.get("sensor.eveus_ev_charger_soc_percent").state)
             target_soc = float(self.hass.states.get("input_number.ev_target_soc").state)
             battery_capacity = float(self.hass.states.get("input_number.ev_battery_capacity").state)
             correction = float(self.hass.states.get("input_number.ev_soc_correction").state)
             power_meas = float(self._updater.data.get(ATTR_POWER, 0))
 
-            # Validate inputs
             if any(x is None for x in [current_soc, target_soc, battery_capacity, correction, power_meas]):
                 return None
 
@@ -463,7 +482,6 @@ class TimeToTargetSocSensor(BaseEveusSensor):
             if power_meas < 100:
                 return "Insufficient power"
 
-            # Calculate time to target
             remaining_kwh = (target_soc - current_soc) * battery_capacity / 100
             efficiency = (1 - correction / 100)
             power_kw = power_meas * efficiency / 1000
@@ -472,7 +490,9 @@ class TimeToTargetSocSensor(BaseEveusSensor):
                 return "Calculating..."
                 
             total_minutes = round((remaining_kwh / power_kw * 60), 0)
-            return self._format_duration(total_minutes)
+            formatted_time = self._format_duration(total_minutes)
+            _ = self._parse_hours(formatted_time)  # Validate formatting
+            return formatted_time
 
         except (TypeError, ValueError, AttributeError) as err:
             _LOGGER.debug("Error calculating time to target: %s", str(err))
