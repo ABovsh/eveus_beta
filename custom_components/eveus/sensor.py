@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import asyncio
 import time
+import re
 from datetime import datetime
 from typing import Any
 import aiohttp
@@ -381,7 +382,7 @@ class EVSocKwhSensor(BaseEveusSensor):
     @property
     def unit_of_measurement(self) -> str:
         """Return the unit of measurement."""
-        return UnitOfEnergy.KILO_WATT_HOUR
+        return self._attr_native_unit_of_measurement
 
 class EVSocPercentSensor(BaseEveusSensor):
     """EV State of Charge percentage sensor."""
@@ -424,11 +425,13 @@ class TimeToTargetSocSensor(BaseEveusSensor):
         self._attr_unique_id = f"{updater._host}_time_to_target"
         self._attr_icon = "mdi:timer"
         self._attr_state_class = None
+        self._attr_device_class = SensorDeviceClass.DURATION
+        self._hours_pattern = re.compile(r'(\d+)h')
 
     def _format_duration(self, total_minutes: int) -> str:
         """Format duration into a human-readable string."""
         if total_minutes < 1:
-            return "0h 1m"
+            return "0h"
 
         days = int(total_minutes // 1440)
         hours = int((total_minutes % 1440) // 60)
@@ -437,14 +440,15 @@ class TimeToTargetSocSensor(BaseEveusSensor):
         parts = []
         if days > 0:
             parts.append(f"{days}d")
-            parts.append(f"{hours}h")
+            hours_str = f"{hours}h"
         else:
-            parts.append(f"{hours}h")
+            hours_str = f"{hours}h"
+        parts.append(hours_str)
             
         if minutes > 0:
             parts.append(f"{minutes}m")
             
-        return " ".join(parts)
+        return " ".join(parts) if parts else "0h"
 
     @property
     def native_value(self) -> str | None:
@@ -476,7 +480,13 @@ class TimeToTargetSocSensor(BaseEveusSensor):
                 return "0h"
                 
             total_minutes = round((remaining_kwh / power_kw * 60), 0)
-            return self._format_duration(total_minutes)
+            formatted_time = self._format_duration(total_minutes)
+            
+            # Ensure hours part exists for template matching
+            if not self._hours_pattern.search(formatted_time):
+                formatted_time = "0h"
+                
+            return formatted_time
 
         except (TypeError, ValueError, AttributeError) as err:
             _LOGGER.debug("Error calculating time to target: %s", str(err))
