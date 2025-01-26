@@ -68,7 +68,9 @@ class EveusCurrentNumber(RestoreNumber):
            "identifiers": {(DOMAIN, self._host)},
            "name": "Eveus EV Charger",
            "manufacturer": "Eveus",
-           "model": f"Eveus ({self._host})"
+           "model": f"({self._host})",
+           "sw_version": self._session.data.get("verFWMain", "Unknown") if self._session else "Unknown",
+           "hw_version": self._session.data.get("serialNum", "Unknown") if self._session else "Unknown"
        }
 
    async def _validate_value(self, value: float) -> float | None:
