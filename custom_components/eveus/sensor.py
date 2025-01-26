@@ -236,7 +236,7 @@ class BaseEveusSensor(SensorEntity, RestoreEntity):
             "manufacturer": "Eveus",
             "model": f"Eveus ({self._updater._host})",
             "sw_version": self._updater.data.get("verFWMain", "Unknown"),
-            "hw_version": self._updater.data.get("verHW", "Unknown"),
+            "hw_version": self._updater.data.get("serialNum", "Unknown"),
         }
 
     @property
