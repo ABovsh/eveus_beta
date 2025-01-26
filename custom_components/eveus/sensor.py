@@ -69,8 +69,7 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
     """Handle Eveus data updates."""
     def __init__(self, host: str, username: str, password: str, hass: HomeAssistant) -> None:
         """Initialize updater."""
-        super().__init__(host, username, password)
-        self._hass = hass
+        super().__init__(host=host, username=username, password=password, hass=hass)
         self._sensors = []
         self._update_task = None
         self._available = True
