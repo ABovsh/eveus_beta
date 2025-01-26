@@ -1,7 +1,7 @@
 """Support for Eveus number entities."""
 from __future__ import annotations
+
 import logging
-import aiohttp
 from typing import Any
 
 from homeassistant.components.number import (
@@ -27,11 +27,11 @@ from .const import (
     MIN_CURRENT,
     CONF_MODEL
 )
-from .mixins import SessionMixin, DeviceInfoMixin, ErrorHandlingMixin
+from .mixins import SessionMixin, DeviceInfoMixin, ErrorHandlingMixin, ValidationMixin
 
 _LOGGER = logging.getLogger(__name__)
 
-class EveusCurrentNumber(SessionMixin, DeviceInfoMixin, ErrorHandlingMixin, RestoreNumber):
+class EveusCurrentNumber(SessionMixin, DeviceInfoMixin, ErrorHandlingMixin, ValidationMixin, RestoreNumber):
     """Eveus current control."""
     
     _attr_native_step = 1.0
@@ -59,40 +59,21 @@ class EveusCurrentNumber(SessionMixin, DeviceInfoMixin, ErrorHandlingMixin, Rest
 
     async def async_set_native_value(self, value: float) -> None:
         """Set current value."""
-        try:
-            if not self._attr_native_min_value <= value <= self._attr_native_max_value:
-                _LOGGER.warning("Value %s outside allowed range", value)
-                return
+        if not self.validate_numeric_value(value, self._attr_native_min_value, self._attr_native_max_value):
+            _LOGGER.warning("Value %s outside allowed range", value)
+            return
 
-            session = await self._get_session()
-            async with session.post(
-                f"http://{self._host}/pageEvent",
-                auth=aiohttp.BasicAuth(self._username, self._password),
-                headers={"Content-type": "application/x-www-form-urlencoded"},
-                data=f"currentSet={int(value)}",
-            ) as response:
-                response.raise_for_status()
-                self._value = value
-                
-        except Exception as err:
-            await self.handle_error(err, "Error setting current")
+        data = {"currentSet": int(value)}
+        if await self.async_api_call("pageEvent", data=data):
+            self._value = value
 
     async def async_update(self) -> None:
         """Update current value."""
-        try:
-            session = await self._get_session()
-            async with session.post(
-                f"http://{self._host}/main",
-                auth=aiohttp.BasicAuth(self._username, self._password),
-            ) as response:
-                data = await response.json()
-                if "currentSet" in data:
-                    value = float(data["currentSet"])
-                    if self._attr_native_min_value <= value <= self._attr_native_max_value:
-                        self._value = value
-                        
-        except Exception as err:
-            await self.handle_error(err, "Error updating current")
+        data = await self.async_api_call("main")
+        if data and "currentSet" in data:
+            value = float(data["currentSet"])
+            if self.validate_numeric_value(value, self._attr_native_min_value, self._attr_native_max_value):
+                self._value = value
 
     async def async_added_to_hass(self) -> None:
         """Handle added to Home Assistant."""
@@ -104,17 +85,13 @@ class EveusCurrentNumber(SessionMixin, DeviceInfoMixin, ErrorHandlingMixin, Rest
         if state := await self.async_get_last_state():
             try:
                 value = float(state.state)
-                if self._attr_native_min_value <= value <= self._attr_native_max_value:
+                if self.validate_numeric_value(value, self._attr_native_min_value, self._attr_native_max_value):
                     self._value = value
                     return
             except (TypeError, ValueError) as err:
                 _LOGGER.warning("Could not restore state: %s", err)
 
         self._value = min(self._attr_native_max_value, 16.0)
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Clean up resources."""
-        await self._cleanup_session()
 
 async def async_setup_entry(
     hass: HomeAssistant,
