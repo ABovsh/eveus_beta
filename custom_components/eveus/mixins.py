@@ -6,6 +6,7 @@ import aiohttp
 from typing import Any
 
 from homeassistant.const import CONF_HOST
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
     DOMAIN,
@@ -23,7 +24,6 @@ class SessionMixin:
         self._host = host
         self._username = username
         self._password = password
-        self._session = None
         self._available = True
         self._error_count = 0
         self._max_errors = 3
@@ -31,16 +31,27 @@ class SessionMixin:
         self._data = {}
         
     async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create aiohttp session."""
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
+        """Get client session from Home Assistant."""
+        return async_get_clientsession(self.hass)
 
-    async def _cleanup_session(self) -> None:
-        """Clean up session."""
-        if self._session and not self._session.closed:
-            await self._session.close()
-            self._session = None
+    async def _make_request(self) -> dict:
+        """Make an authenticated request to get device data."""
+        try:
+            session = await self._get_session()
+            async with session.post(
+                f"http://{self._host}/main",
+                auth=aiohttp.BasicAuth(self._username, self._password),
+                timeout=10
+            ) as response:
+                response.raise_for_status()
+                self._data = await response.json()
+                self._error_count = 0
+                self._available = True
+                return self._data
+        except Exception as err:
+            self._error_count += 1
+            self._available = self._error_count < self._max_errors
+            raise err
 
 class DeviceInfoMixin:
     """Mixin for device info."""
@@ -49,17 +60,23 @@ class DeviceInfoMixin:
     def device_info(self) -> dict[str, Any]:
         """Return device information."""
         data = {}
+        host = None
+
+        # Get data from updater if available
         if hasattr(self, '_updater'):
             data = self._updater.data if self._updater.data else {}
-        elif hasattr(self, '_data'):
-            data = self._data
-
-        host = getattr(self, '_host', None)
-        if not host and hasattr(self, '_updater'):
             host = self._updater._host
+        # Get data from self if no updater
+        else:
+            data = getattr(self, '_data', {})
+            host = getattr(self, '_host', None)
 
         if not host:
             return {}
+
+        # Get firmware and serial number from data
+        firmware = str(data.get(ATTR_FIRMWARE_VERSION, '')).strip()
+        serial = str(data.get(ATTR_SERIAL_NUMBER, '')).strip()
 
         info = {
             "identifiers": {(DOMAIN, host)},
@@ -67,9 +84,13 @@ class DeviceInfoMixin:
             "manufacturer": "Eveus",
             "model": "Eveus Smart Charger",
             "configuration_url": f"http://{host}",
-            "sw_version": data.get(ATTR_FIRMWARE_VERSION, "Unknown").strip(),
-            "hw_version": data.get(ATTR_SERIAL_NUMBER, "Unknown").strip()
         }
+
+        # Only add version info if we have actual data
+        if firmware:
+            info["sw_version"] = firmware
+        if serial:
+            info["hw_version"] = serial
 
         return info
 
