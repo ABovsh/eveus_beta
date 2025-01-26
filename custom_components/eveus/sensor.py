@@ -76,6 +76,7 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin):
         self._retry_interval = 5
         self._backoff_factor = 1.5
         self._max_retry_interval = 300
+        self._available = True
 
     def register_sensor(self, sensor: "BaseEveusSensor") -> None:
         """Register a sensor for updates."""
@@ -90,6 +91,11 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin):
     def last_update(self) -> float:
         """Return last update timestamp."""
         return self._last_update
+
+    @property
+    def available(self) -> bool:
+        """Return availability of the updater."""
+        return self._available
 
     async def async_start_updates(self) -> None:
         """Start the update loop."""
