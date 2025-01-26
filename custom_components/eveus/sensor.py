@@ -15,6 +15,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.components.text import TextEntity
 from homeassistant.components.sensor import (
    SensorDeviceClass,
    SensorEntity,
@@ -415,6 +416,8 @@ class EVSocPercentSensor(BaseEveusSensor):
         except (TypeError, ValueError, AttributeError):
             return None
 
+from homeassistant.components.text import TextEntity
+
 class TimeToTargetSocSensor(TextEntity):
    """Time to target SOC text entity."""
    _attr_icon = "mdi:timer"
@@ -423,9 +426,25 @@ class TimeToTargetSocSensor(TextEntity):
 
    def __init__(self, updater: EveusUpdater) -> None:
        """Initialize the text entity."""
+       super().__init__()
        self._updater = updater
        self._attr_name = "Time to Target"
        self._attr_unique_id = f"{updater._host}_time_to_target"
+
+   @property
+   def device_info(self) -> dict[str, Any]:
+       """Return device information."""
+       return {
+           "identifiers": {(DOMAIN, self._updater._host)},
+           "name": "Eveus EV Charger",
+           "manufacturer": "Eveus",
+           "model": f"Eveus ({self._updater._host})",
+       }
+
+   @property
+   def available(self) -> bool:
+       """Return if entity is available."""
+       return self._updater.available
 
    @property
    def native_value(self) -> str:
