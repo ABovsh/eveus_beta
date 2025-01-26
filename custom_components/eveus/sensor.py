@@ -425,26 +425,10 @@ class TimeToTargetSocSensor(BaseEveusSensor):
         self._attr_icon = "mdi:timer"
         self._attr_state_class = None
 
-    def _parse_hours(self, time_str: str) -> int:
-        """Extract hours from time string."""
-        try:
-            if not time_str or time_str in ["Not charging", "Target reached", "Insufficient power", "Calculating..."]:
-                return 0
-            parts = time_str.split()
-            hours = 0
-            for part in parts:
-                if 'd' in part:
-                    hours += int(part.replace('d', '')) * 24
-                elif 'h' in part:
-                    hours += int(part.replace('h', ''))
-            return hours
-        except (ValueError, TypeError):
-            return 0
-
     def _format_duration(self, total_minutes: int) -> str:
         """Format duration into a human-readable string."""
         if total_minutes < 1:
-            return "Less than 1m"
+            return "0h 1m"
 
         days = int(total_minutes // 1440)
         hours = int((total_minutes % 1440) // 60)
@@ -453,9 +437,11 @@ class TimeToTargetSocSensor(BaseEveusSensor):
         parts = []
         if days > 0:
             parts.append(f"{days}d")
-        if hours > 0:
             parts.append(f"{hours}h")
-        if minutes > 0 or not parts:
+        else:
+            parts.append(f"{hours}h")
+            
+        if minutes > 0:
             parts.append(f"{minutes}m")
             
         return " ".join(parts)
@@ -465,7 +451,7 @@ class TimeToTargetSocSensor(BaseEveusSensor):
         """Calculate and return time to target SOC."""
         try:
             if self._updater.data.get(ATTR_STATE) != 4:
-                return "Not charging"
+                return "0h"
 
             current_soc = float(self.hass.states.get("sensor.eveus_ev_charger_soc_percent").state)
             target_soc = float(self.hass.states.get("input_number.ev_target_soc").state)
@@ -474,29 +460,27 @@ class TimeToTargetSocSensor(BaseEveusSensor):
             power_meas = float(self._updater.data.get(ATTR_POWER, 0))
 
             if any(x is None for x in [current_soc, target_soc, battery_capacity, correction, power_meas]):
-                return None
+                return "0h"
 
             if current_soc >= target_soc:
-                return "Target reached"
+                return "0h"
 
             if power_meas < 100:
-                return "Insufficient power"
+                return "0h"
 
             remaining_kwh = (target_soc - current_soc) * battery_capacity / 100
             efficiency = (1 - correction / 100)
             power_kw = power_meas * efficiency / 1000
             
             if power_kw <= 0:
-                return "Calculating..."
+                return "0h"
                 
             total_minutes = round((remaining_kwh / power_kw * 60), 0)
-            formatted_time = self._format_duration(total_minutes)
-            _ = self._parse_hours(formatted_time)  # Validate formatting
-            return formatted_time
+            return self._format_duration(total_minutes)
 
         except (TypeError, ValueError, AttributeError) as err:
             _LOGGER.debug("Error calculating time to target: %s", str(err))
-            return None
+            return "0h"
 
 async def async_setup_entry(
     hass: HomeAssistant,
