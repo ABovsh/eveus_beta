@@ -28,14 +28,13 @@ class SessionMixin:
         self._error_count = 0
         self._max_errors = 3
         self._command_lock = asyncio.Lock()
-        self._firmware_version = None
-        self._serial_number = None
+        self._data = {}
         
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create aiohttp session."""
         if self._session is None or self._session.closed:
             timeout = aiohttp.ClientTimeout(total=10)
-            connector = aiohttp.TCPConnector(limit=1, force_close=True, keepalive_timeout=60)
+            connector = aiohttp.TCPConnector(force_close=False)
             self._session = aiohttp.ClientSession(
                 timeout=timeout, 
                 connector=connector,
@@ -67,10 +66,10 @@ class DeviceInfoMixin:
 
         info = {
             "identifiers": {(DOMAIN, host)},
-            "name": f"Eveus EV Charger ({host})",
+            "name": "Eveus EV Charger",
             "manufacturer": "Eveus",
             "model": "Eveus Smart Charger",
-            "configuration_url": f"http://{host}",
+            "configuration_url": f"http://{host}"
         }
 
         # Add firmware version if available
