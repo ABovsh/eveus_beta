@@ -72,6 +72,9 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
         super().__init__(host, username, password)
         self._hass = hass
         self._sensors = []
+        self._update_task = None
+        self._available = True
+        self._last_update = datetime.now().timestamp()
 
     def register_sensor(self, sensor: "BaseEveusSensor") -> None:
         """Register a sensor for updates."""
@@ -79,7 +82,40 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
 
     async def async_start_updates(self) -> None:
         """Start the update loop."""
-        await self.execute_with_retry(self._update)
+        await self.async_update()
+
+    async def async_update(self) -> None:
+        """Update data from device."""
+        try:
+            data = await self.async_api_call("main")
+            if data:
+                self._data = data
+                self._available = True
+                self._last_update = datetime.now().timestamp()
+                self._error_count = 0
+
+                for sensor in self._sensors:
+                    try:
+                        sensor.async_write_ha_state()
+                    except Exception as err:
+                        await self.handle_error(err, f"Error updating sensor {getattr(sensor, 'name', 'unknown')}")
+            else:
+                self._available = False
+                
+        except Exception as err:
+            self._error_count += 1
+            self._available = self._error_count < self._max_errors
+            await self.handle_error(err, "Update failed")
+
+    @property
+    def available(self) -> bool:
+        """Return if updater is available."""
+        return self._available
+
+    @property
+    def last_update(self) -> float:
+        """Return last update timestamp."""
+        return self._last_update
 
 class BaseEveusSensor(DeviceInfoMixin, StateMixin, ValidationMixin, SensorEntity, RestoreEntity):
     """Base implementation for Eveus sensors."""
@@ -107,6 +143,10 @@ class BaseEveusSensor(DeviceInfoMixin, StateMixin, ValidationMixin, SensorEntity
             except (TypeError, ValueError):
                 self._previous_value = state.state
         await self._updater.async_start_updates()
+
+    async def async_update(self) -> None:
+        """Update the entity."""
+        await self._updater.async_update()
 
     @property
     def available(self) -> bool:
@@ -264,23 +304,16 @@ class EVSocPercentSensor(BaseEveusSensor):
         except (TypeError, ValueError, AttributeError):
             return None
 
-class TimeToTargetSocSensor(TextEntity, DeviceInfoMixin, ValidationMixin):
-    """Time to target SOC text entity."""
+class TimeToTargetSocSensor(BaseEveusSensor):
+    """Time to target SOC sensor."""
     _attr_icon = "mdi:timer"
-    _attr_pattern = None
-    _attr_mode = "text"
 
     def __init__(self, updater: EveusUpdater) -> None:
         """Initialize time to target sensor."""
-        super().__init__()
-        self._updater = updater
+        super().__init__(updater)
         self._attr_name = "Time to Target"
         self._attr_unique_id = f"{updater._host}_time_to_target"
-
-    @property
-    def available(self) -> bool:
-        """Return if entity is available."""
-        return self._updater.available
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
 
     @property
     def native_value(self) -> str:
@@ -313,19 +346,7 @@ class TimeToTargetSocSensor(TextEntity, DeviceInfoMixin, ValidationMixin):
             if total_minutes < 1:
                 return "< 1m"
 
-            days = int(total_minutes // 1440)
-            hours = int((total_minutes % 1440) // 60)
-            minutes = int(total_minutes % 60)
-
-            parts = []
-            if days > 0:
-                parts.append(f"{days}d")
-            if hours > 0:
-                parts.append(f"{hours}h")
-            if minutes > 0 or not parts:
-                parts.append(f"{minutes}m")
-
-            return " ".join(parts)
+            return self.format_duration(int(total_minutes * 60))
 
         except (TypeError, ValueError, AttributeError):
             return "Error"
