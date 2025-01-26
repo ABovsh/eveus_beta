@@ -58,6 +58,8 @@ from .const import (
    ATTR_COUNTER_B_COST,
    ATTR_GROUND,
    ATTR_BATTERY_VOLTAGE,
+   ATTR_FIRMWARE_VERSION, 
+   ATTR_SERIAL_NUMBER,  
 )
 
 _LOGGER = logging.getLogger(__name__)
