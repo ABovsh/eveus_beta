@@ -1,15 +1,16 @@
 """Support for Eveus sensors."""
 from __future__ import annotations
+
 import logging
-from typing import Any
+import asyncio
 from datetime import datetime
+from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.restore_state import RestoreEntity
-from homeassistant.components.text import TextEntity
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -55,8 +56,8 @@ from .const import (
 )
 
 from .mixins import (
-    SessionMixin, 
-    DeviceInfoMixin, 
+    SessionMixin,
+    DeviceInfoMixin,
     ErrorHandlingMixin,
     UpdaterMixin,
     StateMixin,
@@ -72,9 +73,9 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
         super().__init__(host=host, username=username, password=password, hass=hass)
         self._sensors = []
         self._update_task = None
-        self._update_lock = asyncio.Lock()
         self._available = True
         self._last_update = datetime.now().timestamp()
+        self._update_lock = asyncio.Lock()
         self._min_update_interval = 5  # Minimum seconds between updates
 
     def register_sensor(self, sensor: "BaseEveusSensor") -> None:
@@ -95,35 +96,34 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
 
     async def async_update(self) -> None:
         """Update data from device with rate limiting."""
-        if not self._update_lock.locked():
-            async with self._update_lock:
-                # Check update interval
-                current_time = datetime.now().timestamp()
-                if current_time - self._last_update < self._min_update_interval:
-                    return
+        async with self._update_lock:
+            # Check update interval
+            current_time = datetime.now().timestamp()
+            if current_time - self._last_update < self._min_update_interval:
+                return
 
-                try:
-                    data = await self.async_api_call("main")
-                    if data:
-                        self._data = data
-                        self._available = True
-                        self._last_update = current_time
-                        self._error_count = 0
+            try:
+                data = await self.async_api_call("main")
+                if data:
+                    self._data = data
+                    self._available = True
+                    self._last_update = current_time
+                    self._error_count = 0
 
-                        # Update sensors without waiting
-                        for sensor in self._sensors:
-                            try:
-                                sensor.async_write_ha_state()
-                            except Exception as err:
-                                _LOGGER.error("Error updating sensor %s: %s", 
-                                    getattr(sensor, 'name', 'unknown'), str(err))
-                    else:
-                        self._available = False
-                        
-                except Exception as err:
-                    self._error_count += 1
-                    self._available = self._error_count < self._max_errors
-                    _LOGGER.error("Update failed: %s", str(err))
+                    # Update sensors
+                    for sensor in self._sensors:
+                        try:
+                            sensor.async_write_ha_state()
+                        except Exception as err:
+                            _LOGGER.error("Error updating sensor %s: %s", 
+                                getattr(sensor, 'name', 'unknown'), str(err))
+                else:
+                    self._available = False
+                    
+            except Exception as err:
+                self._error_count += 1
+                self._available = self._error_count < self._max_errors
+                _LOGGER.error("Update failed: %s", str(err))
 
     @property
     def available(self) -> bool:
