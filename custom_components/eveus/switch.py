@@ -2,9 +2,6 @@
 from __future__ import annotations
 
 import logging
-import asyncio
-import aiohttp
-import time
 from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
@@ -19,11 +16,11 @@ from homeassistant.const import (
 )
 
 from .const import DOMAIN
-from .mixins import SessionMixin, DeviceInfoMixin, ErrorHandlingMixin
+from .mixins import SessionMixin, DeviceInfoMixin, ErrorHandlingMixin, ValidationMixin
 
 _LOGGER = logging.getLogger(__name__)
 
-class BaseEveusSwitch(SessionMixin, DeviceInfoMixin, ErrorHandlingMixin, SwitchEntity):
+class BaseEveusSwitch(SessionMixin, DeviceInfoMixin, ErrorHandlingMixin, ValidationMixin, SwitchEntity):
     """Base class for Eveus switches."""
     
     _attr_has_entity_name = True
@@ -33,11 +30,6 @@ class BaseEveusSwitch(SessionMixin, DeviceInfoMixin, ErrorHandlingMixin, SwitchE
         """Initialize switch."""
         super().__init__(host, username, password)
         self._is_on = False
-        self._last_command_time = 0
-        self._min_command_interval = 1
-        self._command_timeout = 5
-        self._max_retries = 3
-        self._retry_delay = 2
 
     @property
     def unique_id(self) -> str:
@@ -49,72 +41,29 @@ class BaseEveusSwitch(SessionMixin, DeviceInfoMixin, ErrorHandlingMixin, SwitchE
         """Return switch state."""
         return self._is_on
 
-    async def _send_command(self, command: str, value: int, verify: bool = True) -> bool:
-        """Send command with retry logic."""
-        current_time = time.time()
-        if current_time - self._last_command_time < self._min_command_interval:
-            await asyncio.sleep(self._min_command_interval)
-            
-        async with self._command_lock:
-            for attempt in range(self._max_retries):
-                try:
-                    session = await self._get_session()
-                    async with session.post(
-                        f"http://{self._host}/pageEvent",
-                        auth=aiohttp.BasicAuth(self._username, self._password),
-                        headers={"Content-type": "application/x-www-form-urlencoded"},
-                        data=f"pageevent={command}&{command}={value}",
-                        timeout=self._command_timeout
-                    ) as response:
-                        response.raise_for_status()
-                        response_text = await response.text()
-                        
-                        if "error" in response_text.lower():
-                            raise ValueError(f"Error in response: {response_text}")
-
-                        if verify:
-                            verify_data = await self._verify_command(session, command, value)
-                            if not verify_data:
-                                raise ValueError("Command verification failed")
-
-                        self._available = True
-                        self._last_command_time = current_time
-                        self._error_count = 0
-                        return True
-
-                except Exception as err:
-                    if attempt + 1 < self._max_retries:
-                        await asyncio.sleep(self._retry_delay * (2 ** attempt))
-                        continue
-                    await self.handle_error(err, f"Command {command} failed")
-                    return False
-
-            return False
-
-    async def _verify_command(self, session: aiohttp.ClientSession, command: str, value: int) -> bool:
+    async def _verify_command(self, command: str, value: int) -> bool:
         """Verify command execution."""
-        try:
-            async with session.post(
-                f"http://{self._host}/main",
-                auth=aiohttp.BasicAuth(self._username, self._password),
-                timeout=self._command_timeout
-            ) as response:
-                response.raise_for_status()
-                data = await response.json()
-                
-                if command == "evseEnabled":
-                    return data.get("evseEnabled") == value
-                elif command == "oneCharge":
-                    return data.get("oneCharge") == value
-                return True
-                
-        except Exception as err:
-            await self.handle_error(err, "Verification error")
+        data = await self.async_api_call("main")
+        if not data:
             return False
+            
+        if command == "evseEnabled":
+            return data.get("evseEnabled") == value
+        elif command == "oneCharge":
+            return data.get("oneCharge") == value
+        return True
 
-    async def async_will_remove_from_hass(self) -> None:
-        """Clean up resources."""
-        await self._cleanup_session()
+    async def async_send_command(self, command: str, value: int, verify: bool = True) -> bool:
+        """Send command with verification."""
+        data = {"pageevent": command, command: value}
+        result = await self.async_api_call("pageEvent", data=data)
+        
+        if not result:
+            return False
+            
+        if verify:
+            return await self._verify_command(command, value)
+        return True
 
 class EveusStopChargingSwitch(BaseEveusSwitch):
     """Charging control switch."""
@@ -123,28 +72,19 @@ class EveusStopChargingSwitch(BaseEveusSwitch):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Enable charging."""
-        if await self._send_command("evseEnabled", 1):
+        if await self.async_send_command("evseEnabled", 1):
             self._is_on = True
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Disable charging."""
-        if await self._send_command("evseEnabled", 0):
+        if await self.async_send_command("evseEnabled", 0):
             self._is_on = False
 
     async def async_update(self) -> None:
         """Update state."""
-        try:
-            session = await self._get_session()
-            async with session.post(
-                f"http://{self._host}/main",
-                auth=aiohttp.BasicAuth(self._username, self._password),
-                timeout=self._command_timeout
-            ) as response:
-                data = await response.json()
-                self._is_on = data.get("evseEnabled") == 1
-                self._available = True
-        except Exception as err:
-            await self.handle_error(err, "Update error")
+        data = await self.async_api_call("main")
+        if data:
+            self._is_on = data.get("evseEnabled") == 1
 
 class EveusOneChargeSwitch(BaseEveusSwitch):
     """One charge mode switch."""
@@ -153,28 +93,19 @@ class EveusOneChargeSwitch(BaseEveusSwitch):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Enable one charge."""
-        if await self._send_command("oneCharge", 1):
+        if await self.async_send_command("oneCharge", 1):
             self._is_on = True
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Disable one charge."""
-        if await self._send_command("oneCharge", 0):
+        if await self.async_send_command("oneCharge", 0):
             self._is_on = False
 
     async def async_update(self) -> None:
         """Update state."""
-        try:
-            session = await self._get_session()
-            async with session.post(
-                f"http://{self._host}/main",
-                auth=aiohttp.BasicAuth(self._username, self._password),
-                timeout=self._command_timeout
-            ) as response:
-                data = await response.json()
-                self._is_on = data.get("oneCharge") == 1
-                self._available = True
-        except Exception as err:
-            await self.handle_error(err, "Update error")
+        data = await self.async_api_call("main")
+        if data:
+            self._is_on = data.get("oneCharge") == 1
 
 class EveusResetCounterASwitch(BaseEveusSwitch):
     """Reset counter A switch."""
@@ -183,32 +114,23 @@ class EveusResetCounterASwitch(BaseEveusSwitch):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Reset counter."""
-        if await self._send_command("rstEM1", 0, verify=False):
+        if await self.async_send_command("rstEM1", 0, verify=False):
             self._is_on = False
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Reset action for off state."""
-        if await self._send_command("rstEM1", 0, verify=False):
+        if await self.async_send_command("rstEM1", 0, verify=False):
             self._is_on = False
 
     async def async_update(self) -> None:
         """Update state."""
-        try:
-            session = await self._get_session()
-            async with session.post(
-                f"http://{self._host}/main",
-                auth=aiohttp.BasicAuth(self._username, self._password),
-                timeout=self._command_timeout
-            ) as response:
-                data = await response.json()
-                try:
-                    iem1 = float(data.get("IEM1", 0))
-                    self._is_on = iem1 != 0
-                except (ValueError, TypeError):
-                    self._is_on = False
-                self._available = True
-        except Exception as err:
-            await self.handle_error(err, "Update error")
+        data = await self.async_api_call("main")
+        if data:
+            try:
+                iem1 = float(data.get("IEM1", 0))
+                self._is_on = iem1 != 0
+            except (ValueError, TypeError):
+                self._is_on = False
 
 async def async_setup_entry(
     hass: HomeAssistant,
