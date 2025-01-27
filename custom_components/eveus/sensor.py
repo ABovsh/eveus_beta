@@ -81,6 +81,13 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
         self._min_update_interval = 5
         self._request_timeout = 10
         self._data = {}
+        self._error_count = 0
+        self._max_errors = 3
+
+    @property
+    def available(self) -> bool:
+        """Return if updater is available."""
+        return self._available
 
     def register_sensor(self, sensor: "BaseEveusSensor") -> None:
         """Register a sensor for updates."""
@@ -109,6 +116,9 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
             try:
                 data = await self.async_api_call("main")
                 if data and isinstance(data, dict):
+                    # Log the received data for debugging
+                    _LOGGER.debug("Received data: %s", data)
+                    
                     self._data = data
                     self._available = True
                     self._last_update = current_time
@@ -123,12 +133,36 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
                                 getattr(sensor, 'name', 'unknown'), str(err))
                 else:
                     _LOGGER.warning("Invalid or empty API response")
-                    self._available = False
+                    self._error_count += 1
+                    self._available = self._error_count < self._max_errors
 
             except Exception as err:
                 self._error_count += 1
                 self._available = self._error_count < self._max_errors
                 _LOGGER.error("Update failed: %s", str(err))
+
+    def get_data_value(self, key: str, default: Any = None) -> Any:
+        """Safely get value from data with type conversion."""
+        try:
+            value = self._data.get(key)
+            
+            if value is None:
+                return default
+                
+            # Handle numeric conversions
+            if isinstance(default, (int, float)):
+                try:
+                    if isinstance(default, int):
+                        return int(float(value))
+                    return float(value)
+                except (ValueError, TypeError):
+                    return default
+            
+            return value
+            
+        except Exception as err:
+            _LOGGER.debug("Error getting value for %s: %s", key, str(err))
+            return default
 
 class BaseEveusSensor(DeviceInfoMixin, StateMixin, ValidationMixin, SensorEntity, RestoreEntity):
     """Base implementation for Eveus sensors."""
