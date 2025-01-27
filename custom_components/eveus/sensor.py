@@ -66,6 +66,8 @@ from .mixins import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# In sensor.py, update the EveusUpdater class:
+
 class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
     """Handle Eveus data updates."""
 
@@ -79,11 +81,7 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
         self._update_lock = asyncio.Lock()
         self._min_update_interval = 5  # Minimum seconds between updates
         self._request_timeout = 10  # Timeout for API requests
-        self._data = {}  # Ensure data is initialized
-
-    def register_sensor(self, sensor: "BaseEveusSensor") -> None:
-        """Register a sensor for updates."""
-        self._sensors.append(sensor)
+        self._data = {}  # Initialize empty data dictionary
 
     async def async_start_updates(self) -> None:
         """Start the update loop."""
@@ -100,7 +98,6 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
     async def async_update(self) -> None:
         """Update data from device with rate limiting."""
         async with self._update_lock:
-            # Check update interval
             current_time = datetime.now().timestamp()
             if current_time - self._last_update < self._min_update_interval:
                 return
@@ -108,24 +105,26 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
             try:
                 async with asyncio.timeout(self._request_timeout):
                     data = await self.async_api_call("main")
-                    if data and isinstance(data, dict):  # Validate API response
-                        self._data = data
-                        self._available = True
-                        self._last_update = current_time
-                        self._error_count = 0
-
-                        # Update sensors
-                        for sensor in self._sensors:
-                            try:
-                                if hasattr(sensor, "async_write_ha_state"):
-                                    sensor.async_write_ha_state()
-                            except Exception as err:
-                                _LOGGER.error("Error updating sensor %s: %s", 
-                                    getattr(sensor, 'name', 'unknown'), str(err))
-                    else:
-                        _LOGGER.warning("Invalid or empty API response")
+                    if not data or not isinstance(data, dict):
+                        _LOGGER.warning("Invalid API response")
                         self._available = False
-                        
+                        return
+
+                    # Update internal data store
+                    self._data = data
+                    self._available = True
+                    self._last_update = current_time
+                    self._error_count = 0
+
+                    # Update sensors
+                    for sensor in self._sensors:
+                        try:
+                            if hasattr(sensor, "async_write_ha_state"):
+                                sensor.async_write_ha_state()
+                        except Exception as err:
+                            _LOGGER.error("Error updating sensor %s: %s", 
+                                getattr(sensor, 'name', 'unknown'), str(err))
+
             except asyncio.TimeoutError:
                 _LOGGER.warning("Update timed out")
                 self._available = False
@@ -134,28 +133,29 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
                 self._available = self._error_count < self._max_errors
                 _LOGGER.error("Update failed: %s", str(err))
 
-    @property
-    def available(self) -> bool:
-        """Return if updater is available."""
-        return self._available
-
-    @property
-    def last_update(self) -> float:
-        """Return last update timestamp."""
-        return self._last_update
-
     def get_data_value(self, key: str, default: Any = None) -> Any:
         """Safely get value from data with type conversion."""
         try:
-            value = self._data.get(key, default)
+            value = self._data.get(key)
             if value is None:
                 return default
+                
+            # Handle type conversion based on default type
+            if isinstance(default, (int, float)):
+                try:
+                    return type(default)(value)
+                except (TypeError, ValueError):
+                    return default
             return value
-        except (TypeError, ValueError):
+        except Exception as err:
+            _LOGGER.debug("Error getting value for %s: %s", key, str(err))
             return default
-        
+
+# Update the BaseEveusSensor class:
+
 class BaseEveusSensor(DeviceInfoMixin, StateMixin, ValidationMixin, SensorEntity, RestoreEntity):
     """Base implementation for Eveus sensors."""
+    
     def __init__(self, updater: EveusUpdater) -> None:
         """Initialize the sensor."""
         self._updater = updater
@@ -169,21 +169,20 @@ class BaseEveusSensor(DeviceInfoMixin, StateMixin, ValidationMixin, SensorEntity
     async def async_added_to_hass(self) -> None:
         """Handle entity which will be added."""
         await super().async_added_to_hass()
-        state = await self.async_get_last_state()
-        if state and state.state not in ('unknown', 'unavailable'):
-            try:
-                self._previous_value = (
-                    float(state.state) 
-                    if hasattr(self, '_attr_suggested_display_precision') 
-                    else state.state
-                )
-            except (TypeError, ValueError):
-                self._previous_value = state.state
-        await self._updater.async_start_updates()
+        
+        # Restore previous state if available
+        if state := await self.async_get_last_state():
+            if state.state not in ('unknown', 'unavailable'):
+                try:
+                    if hasattr(self, '_attr_suggested_display_precision'):
+                        self._previous_value = float(state.state)
+                    else:
+                        self._previous_value = state.state
+                except (TypeError, ValueError):
+                    self._previous_value = state.state
 
-    async def async_update(self) -> None:
-        """Update the entity."""
-        await self._updater.async_update()
+        # Start the updater
+        await self._updater.async_start_updates()
 
     @property
     def available(self) -> bool:
@@ -194,15 +193,18 @@ class BaseEveusSensor(DeviceInfoMixin, StateMixin, ValidationMixin, SensorEntity
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional state attributes."""
         attrs = {
-            "last_update": self._updater.last_update,
+            "last_update": datetime.fromtimestamp(self._updater.last_update).isoformat(),
             "host": self._updater._host,
         }
         if self._previous_value is not None:
             attrs["previous_value"] = self._previous_value
         return attrs
 
+# Update the NumericSensor class:
+
 class NumericSensor(BaseEveusSensor):
     """Base class for numeric sensors."""
+    
     def __init__(self, updater: EveusUpdater, name: str, key: str, 
                 unit: str = None, device_class: str = None,
                 icon: str = None, precision: int = None) -> None:
@@ -220,7 +222,17 @@ class NumericSensor(BaseEveusSensor):
     @property
     def native_value(self) -> float | None:
         """Return sensor state."""
-        return self._updater.get_data_value(self._key, self._previous_value)
+        try:
+            value = self._updater.get_data_value(self._key, 0)
+            if value is None:
+                return self._previous_value
+            if isinstance(value, (int, float)):
+                self._previous_value = value
+                return value
+            return self._previous_value
+        except Exception as err:
+            _LOGGER.debug("Error getting value for %s: %s", self.name, str(err))
+            return self._previous_value
 
 class EnergySensor(NumericSensor):
     """Energy sensor implementation."""
