@@ -41,23 +41,75 @@ class ConnectionManager:
             for attempt in range(3):
                 try:
                     async with session.request(method, url, **kwargs) as response:
+                        # Check if the response was successful
+                        if response.status == 401:
+                            raise aiohttp.ClientResponseError(
+                                response.request_info,
+                                response.history,
+                                status=response.status,
+                                message="Authentication failed"
+                            )
+                        
                         response.raise_for_status()
+                        
+                        # Handle empty response
                         if response.content_length == 0:
+                            if attempt < 2:
+                                await asyncio.sleep(self._retry_interval * (self._backoff_factor ** attempt))
+                                continue
                             raise ValueError("Empty response received")
-                        return await response.json()
-                except asyncio.TimeoutError:
-                    if attempt == 2:
-                        raise
-                    await asyncio.sleep(self._retry_interval * (self._backoff_factor ** attempt))
-                except (aiohttp.ClientError, ValueError) as err:
-                    if attempt == 2:
-                        raise
+                            
+                        # Try to parse JSON response
+                        try:
+                            return await response.json()
+                        except aiohttp.ContentTypeError:
+                            # If JSON parsing fails, try to get text content
+                            text = await response.text()
+                            _LOGGER.debug("Non-JSON response: %s", text)
+                            raise ValueError(f"Invalid JSON response: {text}")
+                            
+                except aiohttp.ServerDisconnectedError:
                     _LOGGER.warning(
-                        "Request failed (attempt %d/3): %s",
+                        "Server disconnected (attempt %d/3), retrying in %d seconds",
+                        attempt + 1,
+                        self._retry_interval * (self._backoff_factor ** attempt)
+                    )
+                    if attempt < 2:
+                        await asyncio.sleep(self._retry_interval * (self._backoff_factor ** attempt))
+                        continue
+                    raise
+                    
+                except aiohttp.ClientError as err:
+                    _LOGGER.warning(
+                        "Connection error (attempt %d/3): %s",
                         attempt + 1,
                         str(err)
                     )
-                    await asyncio.sleep(self._retry_interval * (self._backoff_factor ** attempt))
+                    if attempt < 2:
+                        await asyncio.sleep(self._retry_interval * (self._backoff_factor ** attempt))
+                        continue
+                    raise
+                    
+                except asyncio.TimeoutError:
+                    _LOGGER.warning(
+                        "Request timeout (attempt %d/3)",
+                        attempt + 1
+                    )
+                    if attempt < 2:
+                        await asyncio.sleep(self._retry_interval * (self._backoff_factor ** attempt))
+                        continue
+                    raise
+                    
+                except Exception as err:
+                    _LOGGER.error(
+                        "Unexpected error (attempt %d/3): %s",
+                        attempt + 1,
+                        str(err)
+                    )
+                    if attempt < 2:
+                        await asyncio.sleep(self._retry_interval * (self._backoff_factor ** attempt))
+                        continue
+                    raise
 
 class SessionMixin:
     """Enhanced session mixin with improved connection handling."""
@@ -81,8 +133,12 @@ class SessionMixin:
         """Get or create client session."""
         if not self.hass:
             raise HomeAssistantError("HomeAssistant instance not set")
-        if not self._session:
-            self._session = async_create_clientsession(self.hass)
+        if not self._session or self._session.closed:
+            self._session = async_create_clientsession(
+                self.hass,
+                timeout=aiohttp.ClientTimeout(total=30),
+                cookie_jar=aiohttp.CookieJar(unsafe=True)
+            )
         return self._session
 
     async def async_api_call(
@@ -97,36 +153,69 @@ class SessionMixin:
             session = await self._get_session()
             url = f"http://{self._host}/{endpoint}"
             
+            auth = aiohttp.BasicAuth(self._username, self._password)
+            headers = {"Content-type": "application/x-www-form-urlencoded"} if data else None
+            
             kwargs.update({
-                "auth": aiohttp.BasicAuth(self._username, self._password),
-                "headers": {"Content-type": "application/x-www-form-urlencoded"} if data else None,
-                "data": data
+                "auth": auth,
+                "headers": headers,
+                "data": data,
+                "allow_redirects": True,
+                "ssl": False  # Local device, no SSL needed
             })
+
+            # Log request details for debugging (excluding sensitive data)
+            _LOGGER.debug(
+                "Making request to %s with method %s",
+                url,
+                method
+            )
 
             result = await self._connection_manager.execute_request(session, method, url, **kwargs)
             
             if result is None:
-                _LOGGER.warning("Empty API response")
+                _LOGGER.warning("Empty response received from API")
                 return None
 
-            # Handle unexpected MIME types (e.g., text/html)
-            if isinstance(result, str):
-                _LOGGER.warning("Unexpected API response format: %s", result)
-                try:
-                    # Attempt to parse HTML response as JSON
-                    import json
-                    result = json.loads(result)
-                except json.JSONDecodeError:
-                    _LOGGER.error("Failed to parse API response as JSON")
-                    return None
-
             if not isinstance(result, dict):
-                _LOGGER.warning("Invalid API response format: %s", type(result))
+                _LOGGER.warning("Invalid API response format: %s", result)
                 return None
 
             self._error_count = 0
             self._available = True
             return result
+
+        except aiohttp.ServerDisconnectedError as err:
+            self._error_count += 1
+            self._available = self._error_count < self._max_errors
+            _LOGGER.warning(
+                "Server disconnected (attempt %d/%d): %s",
+                self._error_count,
+                self._max_errors,
+                str(err)
+            )
+            return None
+
+        except aiohttp.ClientError as err:
+            self._error_count += 1
+            self._available = self._error_count < self._max_errors
+            _LOGGER.warning(
+                "Connection error (attempt %d/%d): %s",
+                self._error_count,
+                self._max_errors,
+                str(err)
+            )
+            return None
+
+        except asyncio.TimeoutError:
+            self._error_count += 1
+            self._available = self._error_count < self._max_errors
+            _LOGGER.warning(
+                "Request timeout (attempt %d/%d)",
+                self._error_count,
+                self._max_errors
+            )
+            return None
 
         except asyncio.CancelledError:
             self._available = False
@@ -135,7 +224,7 @@ class SessionMixin:
         except Exception as err:
             self._error_count += 1
             self._available = self._error_count < self._max_errors
-            _LOGGER.error("API call failed: %s", str(err))
+            _LOGGER.error("Unexpected error in API call: %s", str(err))
             return None
 
     async def _cleanup_session(self) -> None:
@@ -143,7 +232,6 @@ class SessionMixin:
         if self._session and not self._session.closed:
             await self._session.close()
             self._session = None
-
 class UpdaterMixin:
     """Mixin for entity update functionality."""
     
