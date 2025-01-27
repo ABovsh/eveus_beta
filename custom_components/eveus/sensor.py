@@ -242,46 +242,30 @@ class NumericSensor(BaseEveusSensor):
         self._attr_icon = icon
         self._attr_suggested_display_precision = precision
         self._attr_state_class = SensorStateClass.MEASUREMENT
+        _LOGGER.debug("Initialized sensor %s with key %s", name, key)
 
     @property
     def native_value(self) -> float | None:
         """Return sensor state."""
         try:
-            # Get value with appropriate default based on device class
-            default = 0.0 if self.device_class in [
-                SensorDeviceClass.ENERGY,
-                SensorDeviceClass.POWER,
-                SensorDeviceClass.VOLTAGE,
-                SensorDeviceClass.CURRENT
-            ] else 0
+            value = self._updater.get_data_value(self._key)
+            _LOGGER.debug("Sensor %s (%s) raw value: %s", self.name, self._key, value)
             
-            value = self._updater.get_data_value(self._key, default)
-            
-            # Handle None or invalid values
             if value is None:
-                return self._previous_value if self._previous_value is not None else default
+                return None
                 
-            # Convert and validate numeric value
+            # Convert to float for numeric sensors
             try:
-                numeric_value = float(value)
-                if self.device_class == SensorDeviceClass.TEMPERATURE:
-                    # Ensure temperature is within reasonable bounds
-                    if -50 <= numeric_value <= 150:
-                        self._previous_value = numeric_value
-                        return numeric_value
-                    return self._previous_value if self._previous_value is not None else default
-                else:
-                    # For other numeric values, ensure they're non-negative
-                    if numeric_value >= 0:
-                        self._previous_value = numeric_value
-                        return numeric_value
-                    return self._previous_value if self._previous_value is not None else default
+                float_value = float(value)
+                _LOGGER.debug("Sensor %s converted value: %s", self.name, float_value)
+                return float_value
             except (ValueError, TypeError):
-                return self._previous_value if self._previous_value is not None else default
+                _LOGGER.warning("Could not convert value %s for sensor %s", value, self.name)
+                return None
                 
         except Exception as err:
-            _LOGGER.debug("Error getting value for %s: %s", self.name, str(err))
-            return self._previous_value if self._previous_value is not None else 0
+            _LOGGER.error("Error getting value for sensor %s: %s", self.name, str(err))
+            return None
 
 class EnergySensor(NumericSensor):
     """Energy sensor implementation."""
