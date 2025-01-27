@@ -83,6 +83,11 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
         self._request_timeout = 10  # Timeout for API requests
         self._data = {}  # Initialize empty data dictionary
 
+    def register_sensor(self, sensor: "BaseEveusSensor") -> None:
+        """Register a sensor for updates."""
+        if sensor not in self._sensors:
+            self._sensors.append(sensor)
+
     async def async_start_updates(self) -> None:
         """Start the update loop."""
         try:
@@ -151,7 +156,15 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
             _LOGGER.debug("Error getting value for %s: %s", key, str(err))
             return default
 
-# Update the BaseEveusSensor class:
+    @property
+    def available(self) -> bool:
+        """Return if updater is available."""
+        return self._available
+
+    @property
+    def last_update(self) -> float:
+        """Return last update timestamp."""
+        return self._last_update
 
 class BaseEveusSensor(DeviceInfoMixin, StateMixin, ValidationMixin, SensorEntity, RestoreEntity):
     """Base implementation for Eveus sensors."""
