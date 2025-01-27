@@ -141,6 +141,9 @@ class SessionMixin:
             )
         return self._session
 
+class SessionMixin:
+    """Enhanced session mixin with improved connection handling."""
+    
     async def async_api_call(
         self,
         endpoint: str,
@@ -161,18 +164,16 @@ class SessionMixin:
                 "headers": headers,
                 "data": data,
                 "allow_redirects": True,
-                "ssl": False  # Local device, no SSL needed
+                "ssl": False
             })
 
-            # Log request details for debugging (excluding sensitive data)
-            _LOGGER.debug(
-                "Making request to %s with method %s",
-                url,
-                method
-            )
+            _LOGGER.debug("Making request to %s with method %s", url, method)
 
             result = await self._connection_manager.execute_request(session, method, url, **kwargs)
             
+            # Add detailed debug logging
+            _LOGGER.debug("API Response from %s: %s", endpoint, result)
+
             if result is None:
                 _LOGGER.warning("Empty response received from API")
                 return None
@@ -181,9 +182,18 @@ class SessionMixin:
                 _LOGGER.warning("Invalid API response format: %s", result)
                 return None
 
+            # Log specific values we're interested in
+            for key in ["voltMeas1", "curMeas1", "powerMeas", "sessionEnergy", "totalEnergy"]:
+                if key in result:
+                    _LOGGER.debug("Found %s: %s", key, result[key])
+
             self._error_count = 0
             self._available = True
             return result
+
+        except Exception as err:
+            _LOGGER.error("API call error: %s", str(err))
+            return None
 
         except aiohttp.ServerDisconnectedError as err:
             self._error_count += 1
