@@ -209,11 +209,21 @@ class BaseEveusSensor(DeviceInfoMixin, StateMixin, ValidationMixin, SensorEntity
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional state attributes."""
         attrs = {
-            "last_update": datetime.fromtimestamp(self._updater.last_update).isoformat(),
             "host": self._updater._host,
         }
+        
+        try:
+            # Safely handle last update time
+            if hasattr(self._updater, 'last_update'):
+                last_update = datetime.fromtimestamp(self._updater.last_update)
+                attrs["last_update"] = last_update.isoformat()
+        except (AttributeError, TypeError, ValueError) as err:
+            _LOGGER.debug("Error formatting last update time: %s", str(err))
+            attrs["last_update"] = None
+            
         if self._previous_value is not None:
             attrs["previous_value"] = self._previous_value
+            
         return attrs
 
 class NumericSensor(BaseEveusSensor):
