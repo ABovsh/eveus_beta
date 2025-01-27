@@ -1,16 +1,18 @@
 """Support for Eveus sensors."""
 from __future__ import annotations
-
 import logging
 import asyncio
-from datetime import datetime, timedelta
+import time
 from typing import Any
+import aiohttp
+from datetime import datetime
 
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.components.text import TextEntity
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -55,125 +57,125 @@ from .const import (
     ATTR_BATTERY_VOLTAGE,
 )
 
-from .mixins import (
-    SessionMixin,
-    DeviceInfoMixin,
-    ErrorHandlingMixin,
-    UpdaterMixin,
-    StateMixin,
-    ValidationMixin
-)
+from .mixins import SessionMixin, DeviceInfoMixin, ErrorHandlingMixin
 
 _LOGGER = logging.getLogger(__name__)
 
-class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
+class EveusUpdater(SessionMixin, ErrorHandlingMixin):
     """Handle Eveus data updates."""
 
     def __init__(self, host: str, username: str, password: str, hass: HomeAssistant) -> None:
         """Initialize updater."""
-        super().__init__()
-        self.initialize(host, username, password, hass)
+        super().__init__(host, username, password)
+        self._hass = hass
+        self._data = {}
         self._sensors = []
         self._update_task = None
-        self._available = True
-        self._last_update_time = datetime.now().timestamp()
+        self._last_update = time.time()
         self._update_lock = asyncio.Lock()
-        self._min_update_interval = 5
-        self._request_timeout = 10
-        self._data = {}
-        self._error_count = 0
-        self._max_errors = 3
-
-    @property
-    def available(self) -> bool:
-        """Return if updater is available."""
-        return self._available
-
-    @property
-    def last_update(self) -> float:
-        """Return the timestamp of the last update."""
-        return self._last_update_time
+        self._retry_interval = 5
+        self._backoff_factor = 1.5
+        self._max_retry_interval = 300
+        self._available = True
 
     def register_sensor(self, sensor: "BaseEveusSensor") -> None:
         """Register a sensor for updates."""
-        if sensor not in self._sensors:
-            self._sensors.append(sensor)
+        self._sensors.append(sensor)
+
+    @property
+    def data(self) -> dict:
+        """Return latest data."""
+        return self._data
+
+    @property
+    def last_update(self) -> float:
+        """Return last update timestamp."""
+        return self._last_update
+
+    @property
+    def available(self) -> bool:
+        """Return availability of the updater."""
+        return self._available
 
     async def async_start_updates(self) -> None:
         """Start the update loop."""
-        try:
-            async with asyncio.timeout(self._request_timeout):
-                await self.async_update()
-        except asyncio.TimeoutError:
-            _LOGGER.warning("Initial update timed out")
-            self._available = False
-        except Exception as err:
-            _LOGGER.error("Error during initial update: %s", str(err))
-            self._available = False
+        if self._update_task is None:
+            self._update_task = asyncio.create_task(self._update_loop())
 
-    async def async_update(self) -> None:
-        """Update data from device with rate limiting."""
-        async with self._update_lock:
-            current_time = datetime.now().timestamp()
-            if current_time - self._last_update_time < self._min_update_interval:
-                return
-
+    async def _update_loop(self) -> None:
+        """Handle the update loop."""
+        retry_count = 0
+        while True:
             try:
-                data = await self.async_api_call("main")
-                if data and isinstance(data, dict):
-                    # Log the received data for debugging
-                    _LOGGER.debug("Received data: %s", data)
-                    
+                async with asyncio.timeout(10):
+                    await self._update()
+                    retry_count = 0
+                    self._retry_interval = 5
+                await asyncio.sleep(SCAN_INTERVAL.total_seconds())
+                
+            except asyncio.CancelledError:
+                break
+                
+            except Exception as err:
+                retry_count += 1
+                self._retry_interval = min(
+                    self._retry_interval * self._backoff_factor,
+                    self._max_retry_interval
+                )
+                await self.handle_error(err, f"Update failed, retrying in {self._retry_interval}s")
+                await asyncio.sleep(self._retry_interval)
+
+    async def _update(self) -> None:
+        """Update data from the device."""
+        async with self._update_lock:
+            try:
+                session = await self._get_session()
+                async with session.post(
+                    f"http://{self._host}/main",
+                    auth=aiohttp.BasicAuth(self._username, self._password),
+                    timeout=10
+                ) as response:
+                    response.raise_for_status()
+                    if response.content_length == 0:
+                        raise ValueError("Empty response received")
+                        
+                    data = await response.json()
+                    if not isinstance(data, dict):
+                        raise ValueError("Invalid data format received")
+                        
                     self._data = data
                     self._available = True
-                    self._last_update_time = current_time
+                    self._last_update = time.time()
                     self._error_count = 0
 
                     for sensor in self._sensors:
                         try:
-                            if hasattr(sensor, "async_write_ha_state"):
-                                sensor.async_write_ha_state()
+                            sensor.async_write_ha_state()
                         except Exception as err:
-                            _LOGGER.error("Error updating sensor %s: %s", 
-                                getattr(sensor, 'name', 'unknown'), str(err))
-                else:
-                    _LOGGER.warning("Invalid or empty API response")
-                    self._error_count += 1
-                    self._available = self._error_count < self._max_errors
+                            await self.handle_error(err, f"Error updating sensor {getattr(sensor, 'name', 'unknown')}")
 
             except Exception as err:
                 self._error_count += 1
                 self._available = self._error_count < self._max_errors
-                _LOGGER.error("Update failed: %s", str(err))
+                raise
 
-    def get_data_value(self, key: str, default: Any = None) -> Any:
-        """Safely get value from data with type conversion."""
-        try:
-            value = self._data.get(key)
-            
-            if value is None:
-                return default
-                
-            # Handle numeric conversions
-            if isinstance(default, (int, float)):
-                try:
-                    if isinstance(default, int):
-                        return int(float(value))
-                    return float(value)
-                except (ValueError, TypeError):
-                    return default
-            
-            return value
-            
-        except Exception as err:
-            _LOGGER.debug("Error getting value for %s: %s", key, str(err))
-            return default
+    async def async_shutdown(self) -> None:
+        """Shut down the updater."""
+        if self._update_task:
+            self._update_task.cancel()
+            try:
+                async with asyncio.timeout(5):
+                    await self._update_task
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
 
-class BaseEveusSensor(DeviceInfoMixin, StateMixin, ValidationMixin, SensorEntity, RestoreEntity):
+        await self._cleanup_session()
+
+class BaseEveusSensor(DeviceInfoMixin, SensorEntity, RestoreEntity):
     """Base implementation for Eveus sensors."""
+    
     def __init__(self, updater: EveusUpdater) -> None:
         """Initialize the sensor."""
-        super().__init__()
         self._updater = updater
         self._updater.register_sensor(self)
         self._previous_value = None
@@ -185,45 +187,36 @@ class BaseEveusSensor(DeviceInfoMixin, StateMixin, ValidationMixin, SensorEntity
     async def async_added_to_hass(self) -> None:
         """Handle entity which will be added."""
         await super().async_added_to_hass()
-        
-        if state := await self.async_get_last_state():
-            if state.state not in ('unknown', 'unavailable'):
-                try:
-                    if hasattr(self, '_attr_suggested_display_precision'):
-                        self._previous_value = float(state.state)
-                    else:
-                        self._previous_value = state.state
-                except (TypeError, ValueError):
-                    self._previous_value = state.state
-        
+        state = await self.async_get_last_state()
+        if state and state.state not in ('unknown', 'unavailable'):
+            try:
+                self._previous_value = (
+                    float(state.state) 
+                    if hasattr(self, '_attr_suggested_display_precision') 
+                    else state.state
+                )
+            except (TypeError, ValueError):
+                self._previous_value = state.state
         await self._updater.async_start_updates()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Handle entity removal."""
+        await self._updater.async_shutdown()
 
     @property
     def available(self) -> bool:
         """Return if entity is available."""
-        if not hasattr(self._updater, 'available'):
-            return False
         return self._updater.available
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional state attributes."""
         attrs = {
+            "last_update": self._updater.last_update,
             "host": self._updater._host,
         }
-        
-        try:
-            # Safely handle last update time
-            if hasattr(self._updater, 'last_update'):
-                last_update = datetime.fromtimestamp(self._updater.last_update)
-                attrs["last_update"] = last_update.isoformat()
-        except (AttributeError, TypeError, ValueError) as err:
-            _LOGGER.debug("Error formatting last update time: %s", str(err))
-            attrs["last_update"] = None
-            
         if self._previous_value is not None:
             attrs["previous_value"] = self._previous_value
-            
         return attrs
 
 class NumericSensor(BaseEveusSensor):
@@ -232,7 +225,7 @@ class NumericSensor(BaseEveusSensor):
     def __init__(self, updater: EveusUpdater, name: str, key: str, 
                 unit: str = None, device_class: str = None,
                 icon: str = None, precision: int = None) -> None:
-        """Initialize numeric sensor."""
+        """Initialize the sensor."""
         super().__init__(updater)
         self._key = key
         self._attr_name = name
@@ -242,33 +235,21 @@ class NumericSensor(BaseEveusSensor):
         self._attr_icon = icon
         self._attr_suggested_display_precision = precision
         self._attr_state_class = SensorStateClass.MEASUREMENT
-        _LOGGER.debug("Initialized sensor %s with key %s", name, key)
 
     @property
     def native_value(self) -> float | None:
-        """Return sensor state."""
+        """Return the state of the sensor."""
         try:
-            value = self._updater.get_data_value(self._key)
-            _LOGGER.debug("Sensor %s (%s) raw value: %s", self.name, self._key, value)
-            
-            if value is None:
-                return None
-                
-            # Convert to float for numeric sensors
-            try:
-                float_value = float(value)
-                _LOGGER.debug("Sensor %s converted value: %s", self.name, float_value)
-                return float_value
-            except (ValueError, TypeError):
-                _LOGGER.warning("Could not convert value %s for sensor %s", value, self.name)
-                return None
-                
-        except Exception as err:
-            _LOGGER.error("Error getting value for sensor %s: %s", self.name, str(err))
-            return None
+            value = float(self._updater.data.get(self._key, 0))
+            self._previous_value = value
+            if self._attr_suggested_display_precision is not None:
+                return round(value, self._attr_suggested_display_precision)
+            return value
+        except (TypeError, ValueError):
+            return self._previous_value
 
 class EnergySensor(NumericSensor):
-    """Energy sensor implementation."""
+    """Base energy sensor."""
     def __init__(self, updater: EveusUpdater, name: str, key: str):
         """Initialize energy sensor."""
         super().__init__(
@@ -282,7 +263,7 @@ class EnergySensor(NumericSensor):
         self._attr_state_class = SensorStateClass.TOTAL_INCREASING
 
 class StateSensor(BaseEveusSensor):
-    """State sensor implementation."""
+    """Base state sensor."""
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     
     def __init__(self, updater: EveusUpdater, name: str, key: str,
@@ -298,10 +279,11 @@ class StateSensor(BaseEveusSensor):
     @property
     def native_value(self) -> str:
         """Return mapped state value."""
-        return self.get_mapped_state(
-            self._updater.get_data_value(self._key),
-            self._state_map
-        )
+        try:
+            state = self._updater.data.get(self._key)
+            return self._state_map.get(state, "Unknown")
+        except (TypeError, ValueError):
+            return "Unknown"
 
 class EveusGroundSensor(BaseEveusSensor):
     """Ground connection sensor."""
@@ -317,12 +299,16 @@ class EveusGroundSensor(BaseEveusSensor):
     @property
     def native_value(self) -> str:
         """Return ground status."""
-        return "Connected" if self._updater.get_data_value(ATTR_GROUND) == 1 else "Not Connected"
+        try:
+            return "Connected" if self._updater.data.get(ATTR_GROUND) == 1 else "Not Connected"
+        except (TypeError, ValueError):
+            return "Unknown"
 
 class EVSocKwhSensor(BaseEveusSensor):
     """EV State of Charge energy sensor."""
+    
     def __init__(self, updater: EveusUpdater) -> None:
-        """Initialize SOC energy sensor."""
+        """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "SOC Energy"
         self._attr_unique_id = f"{updater._host}_soc_kwh"
@@ -338,12 +324,13 @@ class EVSocKwhSensor(BaseEveusSensor):
         try:
             initial_soc = float(self.hass.states.get("input_number.ev_initial_soc").state)
             max_capacity = float(self.hass.states.get("input_number.ev_battery_capacity").state)
-            energy_charged = self._updater.get_data_value("IEM1", 0)
+            energy_charged = float(self._updater.data.get("IEM1", 0))
             correction = float(self.hass.states.get("input_number.ev_soc_correction").state)
 
-            if not self.validate_numeric_value(initial_soc, 0, 100):
+            if any(x is None for x in [initial_soc, max_capacity, energy_charged, correction]):
                 return None
-            if not self.validate_numeric_value(max_capacity, 0, float('inf')):
+
+            if initial_soc < 0 or initial_soc > 100 or max_capacity <= 0:
                 return None
 
             initial_kwh = (initial_soc / 100) * max_capacity
@@ -352,14 +339,19 @@ class EVSocKwhSensor(BaseEveusSensor):
             total_kwh = initial_kwh + charged_kwh
             
             return round(max(0, min(total_kwh, max_capacity)), 2)
-            
         except (TypeError, ValueError, AttributeError):
             return None
 
+    @property
+    def unit_of_measurement(self) -> str:
+        """Return the unit of measurement."""
+        return self._attr_native_unit_of_measurement
+
 class EVSocPercentSensor(BaseEveusSensor):
     """EV State of Charge percentage sensor."""
+    
     def __init__(self, updater: EveusUpdater) -> None:
-        """Initialize SOC percentage sensor."""
+        """Initialize the sensor."""
         super().__init__(updater)
         self._attr_name = "SOC Percent"
         self._attr_unique_id = f"{updater._host}_soc_percent"
@@ -371,64 +363,80 @@ class EVSocPercentSensor(BaseEveusSensor):
 
     @property
     def native_value(self) -> float | None:
-        """Return state of charge percentage."""
+        """Return the state of charge percentage."""
         try:
             soc_kwh = float(self.hass.states.get("sensor.eveus_ev_charger_soc_energy").state)
             max_capacity = float(self.hass.states.get("input_number.ev_battery_capacity").state)
             
-            if not self.validate_numeric_value(soc_kwh, 0, float('inf')) or \
-               not self.validate_numeric_value(max_capacity, 0, float('inf')):
+            if any(x is None for x in [soc_kwh, max_capacity]):
                 return None
                 
-            percentage = round((soc_kwh / max_capacity * 100), 0)
-            return max(0, min(percentage, 100))
-            
+            if soc_kwh >= 0 and max_capacity > 0:
+                percentage = round((soc_kwh / max_capacity * 100), 0)
+                return max(0, min(percentage, 100))
+            return None
         except (TypeError, ValueError, AttributeError):
             return None
 
-class TimeToTargetSocSensor(BaseEveusSensor):
-    """Time to target SOC sensor."""
+class TimeToTargetSocSensor(TextEntity, DeviceInfoMixin):
+    """Time to target SOC text entity."""
     _attr_icon = "mdi:timer"
+    _attr_pattern = None
+    _attr_mode = "text"
 
     def __init__(self, updater: EveusUpdater) -> None:
-        """Initialize time to target sensor."""
-        super().__init__(updater)
+        """Initialize the text entity."""
+        super().__init__()
+        self._updater = updater
         self._attr_name = "Time to Target"
         self._attr_unique_id = f"{updater._host}_time_to_target"
-        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def available(self) -> bool:
+        """Return if entity is available."""
+        return self._updater.available
 
     @property
     def native_value(self) -> str:
-        """Calculate and return time to target."""
+        """Calculate and return formatted time to target."""
         try:
-            if self._updater.get_data_value(ATTR_STATE) != 4:
-                return "Not charging"
+            if self._updater.data.get(ATTR_STATE) != 4:  # Not charging
+                return "Standby"
 
             current_soc = float(self.hass.states.get("sensor.eveus_ev_charger_soc_percent").state)
             target_soc = float(self.hass.states.get("input_number.ev_target_soc").state)
-            power_meas = self._updater.get_data_value(ATTR_POWER, 0)
+            power_meas = float(self._updater.data.get(ATTR_POWER, 0))
             battery_capacity = float(self.hass.states.get("input_number.ev_battery_capacity").state)
             correction = float(self.hass.states.get("input_number.ev_soc_correction").state)
 
-            if not all(self.validate_numeric_value(x, 0, float('inf')) 
-                      for x in [current_soc, target_soc, power_meas, battery_capacity]):
-                return "Invalid parameters"
-
-            if power_meas < 100:  # Minimum power threshold
-                return "Insufficient power"
+            if power_meas <= 0:
+                return "Standby"
 
             remaining_kwh = (target_soc - current_soc) * battery_capacity / 100
-            if remaining_kwh <= 0:
-                return "Target reached"
-
             efficiency = (1 - correction / 100)
             power_kw = power_meas * efficiency / 1000
+            
+            if power_kw <= 0:
+                return "Standby"
+
             total_minutes = round((remaining_kwh / power_kw * 60), 0)
             
             if total_minutes < 1:
                 return "< 1m"
 
-            return self.format_duration(int(total_minutes * 60))
+            days = int(total_minutes // 1440)
+            hours = int((total_minutes % 1440) // 60)
+            minutes = int(total_minutes % 60)
+
+            parts = []
+            if days > 0:
+                parts.append(f"{days}d")
+            if hours > 0:
+                parts.append(f"{hours}h")
+            if minutes > 0 or not parts:
+                parts.append(f"{minutes}m")
+
+            return " ".join(parts)
 
         except (TypeError, ValueError, AttributeError):
             return "Error"
