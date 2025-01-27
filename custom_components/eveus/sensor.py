@@ -76,7 +76,7 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
         self._sensors = []
         self._update_task = None
         self._available = True
-        self._last_update = datetime.now().timestamp()
+        self._last_update_time = datetime.now().timestamp()
         self._update_lock = asyncio.Lock()
         self._min_update_interval = 5
         self._request_timeout = 10
@@ -88,6 +88,11 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
     def available(self) -> bool:
         """Return if updater is available."""
         return self._available
+
+    @property
+    def last_update(self) -> float:
+        """Return the timestamp of the last update."""
+        return self._last_update_time
 
     def register_sensor(self, sensor: "BaseEveusSensor") -> None:
         """Register a sensor for updates."""
@@ -110,7 +115,7 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
         """Update data from device with rate limiting."""
         async with self._update_lock:
             current_time = datetime.now().timestamp()
-            if current_time - self._last_update < self._min_update_interval:
+            if current_time - self._last_update_time < self._min_update_interval:
                 return
 
             try:
@@ -121,7 +126,7 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
                     
                     self._data = data
                     self._available = True
-                    self._last_update = current_time
+                    self._last_update_time = current_time
                     self._error_count = 0
 
                     for sensor in self._sensors:
