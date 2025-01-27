@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -77,6 +77,7 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
         self._last_update = datetime.now().timestamp()
         self._update_lock = asyncio.Lock()
         self._min_update_interval = 5  # Minimum seconds between updates
+        self._request_timeout = 10  # Timeout for API requests
 
     def register_sensor(self, sensor: "BaseEveusSensor") -> None:
         """Register a sensor for updates."""
@@ -85,7 +86,7 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
     async def async_start_updates(self) -> None:
         """Start the update loop."""
         try:
-            async with asyncio.timeout(10):  # Timeout for initial update
+            async with asyncio.timeout(self._request_timeout):
                 await self.async_update()
         except asyncio.TimeoutError:
             _LOGGER.error("Initial update timed out")
@@ -103,23 +104,27 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
                 return
 
             try:
-                data = await self.async_api_call("main")
-                if data:
-                    self._data = data
-                    self._available = True
-                    self._last_update = current_time
-                    self._error_count = 0
+                async with asyncio.timeout(self._request_timeout):
+                    data = await self.async_api_call("main")
+                    if data:
+                        self._data = data
+                        self._available = True
+                        self._last_update = current_time
+                        self._error_count = 0
 
-                    # Update sensors
-                    for sensor in self._sensors:
-                        try:
-                            sensor.async_write_ha_state()
-                        except Exception as err:
-                            _LOGGER.error("Error updating sensor %s: %s", 
-                                getattr(sensor, 'name', 'unknown'), str(err))
-                else:
-                    self._available = False
-                    
+                        # Update sensors
+                        for sensor in self._sensors:
+                            try:
+                                sensor.async_write_ha_state()
+                            except Exception as err:
+                                _LOGGER.error("Error updating sensor %s: %s", 
+                                    getattr(sensor, 'name', 'unknown'), str(err))
+                    else:
+                        self._available = False
+                        
+            except asyncio.TimeoutError:
+                _LOGGER.warning("Update timed out")
+                self._available = False
             except Exception as err:
                 self._error_count += 1
                 self._available = self._error_count < self._max_errors
