@@ -78,6 +78,7 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
         self._update_lock = asyncio.Lock()
         self._min_update_interval = 5  # Minimum seconds between updates
         self._request_timeout = 10  # Timeout for API requests
+        self._data = {}  # Ensure data is initialized
 
     def register_sensor(self, sensor: "BaseEveusSensor") -> None:
         """Register a sensor for updates."""
@@ -106,7 +107,7 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
             try:
                 async with asyncio.timeout(self._request_timeout):
                     data = await self.async_api_call("main")
-                    if data:
+                    if data and isinstance(data, dict):  # Validate API response
                         self._data = data
                         self._available = True
                         self._last_update = current_time
@@ -115,11 +116,13 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
                         # Update sensors
                         for sensor in self._sensors:
                             try:
-                                sensor.async_write_ha_state()
+                                if hasattr(sensor, "async_write_ha_state"):
+                                    sensor.async_write_ha_state()
                             except Exception as err:
                                 _LOGGER.error("Error updating sensor %s: %s", 
                                     getattr(sensor, 'name', 'unknown'), str(err))
                     else:
+                        _LOGGER.warning("Invalid or empty API response")
                         self._available = False
                         
             except asyncio.TimeoutError:
@@ -130,6 +133,16 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
                 self._available = self._error_count < self._max_errors
                 _LOGGER.error("Update failed: %s", str(err))
 
+    def get_data_value(self, key: str, default: Any = None) -> Any:
+        """Safely get value from data with type conversion."""
+        try:
+            value = self._data.get(key, default)
+            if value is None:
+                return default
+            return value
+        except (TypeError, ValueError):
+            return default
+    
     @property
     def available(self) -> bool:
         """Return if updater is available."""
