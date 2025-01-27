@@ -59,6 +59,122 @@ class ConnectionManager:
                     )
                     await asyncio.sleep(self._retry_interval * (self._backoff_factor ** attempt))
 
+class ErrorHandlingMixin:
+    """Enhanced error handling with retry logic."""
+    
+    async def handle_error(self, err: Exception, context: str = "") -> None:
+        """Handle errors with consistent logging and state management."""
+        error_msg = f"{context}: {str(err)}" if context else str(err)
+        
+        if isinstance(err, asyncio.CancelledError):
+            return
+
+        if isinstance(err, (asyncio.TimeoutError, aiohttp.ClientError)):
+            _LOGGER.warning("Connection error %s", error_msg)
+            if hasattr(self, '_error_count'):
+                self._error_count += 1
+                self._available = self._error_count < self._max_errors
+        else:
+            _LOGGER.error("Unexpected error %s", error_msg)
+            if hasattr(self, '_available'):
+                self._available = False
+
+    async def execute_with_retry(
+        self, 
+        func: Callable, 
+        *args, 
+        max_retries: int = 3, 
+        retry_delay: float = 2.0,
+        **kwargs
+    ) -> Any:
+        """Execute function with retry logic."""
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                return await func(*args, **kwargs)
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:
+                last_error = err
+                if attempt < max_retries - 1:
+                    delay = retry_delay * (2 ** attempt)
+                    _LOGGER.debug(
+                        "Attempt %d failed, retrying in %.1f seconds: %s",
+                        attempt + 1, delay, str(err)
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                
+                await self.handle_error(err)
+                return None
+
+        if last_error:
+            _LOGGER.error("Failed after %d attempts: %s", max_retries, str(last_error))
+        return None
+
+class ValidationMixin:
+    """Mixin for input validation."""
+    
+    def validate_numeric_value(
+        self, 
+        value: Any, 
+        min_val: float, 
+        max_val: float,
+        allow_none: bool = False
+    ) -> bool:
+        """Validate numeric value within range."""
+        if value is None:
+            return allow_none
+            
+        try:
+            num_value = float(value)
+            return min_val <= num_value <= max_val
+        except (TypeError, ValueError):
+            return False
+
+    def validate_state_value(self, value: Any, valid_states: list) -> bool:
+        """Validate state value."""
+        try:
+            return value in valid_states
+        except TypeError:
+            return False
+
+    def validate_required_fields(self, data: dict, required_fields: list) -> bool:
+        """Validate required fields in data."""
+        return all(field in data and data[field] is not None for field in required_fields)
+
+class StateMixin:
+    """Mixin for state management."""
+    
+    def get_mapped_state(self, state_value: Any, mapping: dict, default: str = "Unknown") -> str:
+        """Get mapped state with error handling."""
+        try:
+            if state_value is None:
+                return default
+            return mapping.get(int(state_value), default)
+        except (TypeError, ValueError):
+            return default
+
+    def format_duration(self, seconds: int) -> str:
+        """Format duration in seconds to human readable string."""
+        try:
+            minutes = seconds // 60
+            hours = minutes // 60
+            days = hours // 24
+            
+            parts = []
+            if days > 0:
+                parts.append(f"{days}d")
+            if hours % 24 > 0:
+                parts.append(f"{hours % 24}h")
+            if minutes % 60 > 0:
+                parts.append(f"{minutes % 60}m")
+                
+            return " ".join(parts) if parts else "0m"
+        except (TypeError, ValueError):
+            return "Invalid"
+
 class SessionMixin:
     """Enhanced session mixin with improved connection handling."""
     
@@ -136,140 +252,38 @@ class SessionMixin:
             await self._session.close()
             self._session = None
 
-class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
-    """Handle Eveus data updates."""
-
-    def __init__(self, host: str, username: str, password: str, hass: HomeAssistant) -> None:
-        """Initialize updater."""
-        super().__init__()
-        self.initialize(host, username, password, hass)
-        self._sensors = []
-        self._update_task = None
-        self._available = True
-        self._last_update = datetime.now().timestamp()
-        self._update_lock = asyncio.Lock()
-        self._min_update_interval = 5
-        self._request_timeout = 10
-        self._data = {}
-
-    def register_sensor(self, sensor: "BaseEveusSensor") -> None:
-        """Register a sensor for updates."""
-        if sensor not in self._sensors:
-            self._sensors.append(sensor)
-
-    async def async_start_updates(self) -> None:
-        """Start the update loop."""
-        try:
-            async with asyncio.timeout(self._request_timeout):
-                await self.async_update()
-        except asyncio.TimeoutError:
-            _LOGGER.warning("Initial update timed out")
-            self._available = False
-        except Exception as err:
-            _LOGGER.error("Error during initial update: %s", str(err))
-            self._available = False
-
-    async def async_update(self) -> None:
-        """Update data from device with rate limiting."""
-        async with self._update_lock:
-            current_time = datetime.now().timestamp()
-            if current_time - self._last_update < self._min_update_interval:
-                return
-
-            try:
-                data = await self.async_api_call("main")
-                if data and isinstance(data, dict):
-                    self._data = data
-                    self._available = True
-                    self._last_update = current_time
-                    self._error_count = 0
-
-                    for sensor in self._sensors:
-                        try:
-                            if hasattr(sensor, "async_write_ha_state"):
-                                sensor.async_write_ha_state()
-                        except Exception as err:
-                            _LOGGER.error("Error updating sensor %s: %s", 
-                                getattr(sensor, 'name', 'unknown'), str(err))
-                else:
-                    _LOGGER.warning("Invalid or empty API response")
-                    self._available = False
-
-            except Exception as err:
-                self._error_count += 1
-                self._available = self._error_count < self._max_errors
-                _LOGGER.error("Update failed: %s", str(err))
-
-class StateMixin:
-    """Mixin for state management."""
+class UpdaterMixin:
+    """Mixin for entity update functionality."""
     
-    def get_mapped_state(self, state_value: Any, mapping: dict, default: str = "Unknown") -> str:
-        """Get mapped state with error handling."""
+    async def async_update_data(self, full_update: bool = True) -> bool:
+        """Common update method with rate limiting and data validation."""
+        current_time = datetime.now().timestamp()
+        
+        if hasattr(self, '_min_update_interval') and \
+           hasattr(self, '_last_update') and \
+           current_time - self._last_update < self._min_update_interval:
+            return True
+            
+        async with self._command_lock:
+            data = await self.async_api_call("main")
+            if data:
+                if full_update:
+                    self._data = data
+                else:
+                    self._data.update(data)
+                self._last_update = current_time
+                return True
+        return False
+
+    def get_data_value(self, key: str, default: Any = None) -> Any:
+        """Safely get value from data with type conversion."""
         try:
-            if state_value is None:
-                return default
-            return mapping.get(int(state_value), default)
+            value = self._data.get(key, default)
+            if isinstance(value, (int, float)) and isinstance(default, (int, float)):
+                return type(default)(value)
+            return value
         except (TypeError, ValueError):
             return default
-
-    def format_duration(self, seconds: int) -> str:
-        """Format duration in seconds to human readable string."""
-        try:
-            minutes = seconds // 60
-            hours = minutes // 60
-            days = hours // 24
-            
-            parts = []
-            if days > 0:
-                parts.append(f"{days}d")
-            if hours % 24 > 0:
-                parts.append(f"{hours % 24}h")
-            if minutes % 60 > 0:
-                parts.append(f"{minutes % 60}m")
-                
-            return " ".join(parts) if parts else "0m"
-        except (TypeError, ValueError):
-            return "Invalid"
-
-class ErrorHandlingMixin:
-    """Enhanced error handling with retry logic."""
-    
-    async def handle_error(self, err: Exception, context: str = "") -> None:
-        """Handle errors with consistent logging and state management."""
-        error_msg = f"{context}: {str(err)}" if context else str(err)
-        
-        if isinstance(err, asyncio.CancelledError):
-            return
-
-        if isinstance(err, (asyncio.TimeoutError, aiohttp.ClientError)):
-            _LOGGER.warning("Connection error %s", error_msg)
-            if hasattr(self, '_error_count'):
-                self._error_count += 1
-                self._available = self._error_count < self._max_errors
-        else:
-            _LOGGER.error("Unexpected error %s", error_msg)
-            if hasattr(self, '_available'):
-                self._available = False
-
-class ValidationMixin:
-    """Mixin for input validation."""
-    
-    def validate_numeric_value(
-        self, 
-        value: Any, 
-        min_val: float, 
-        max_val: float,
-        allow_none: bool = False
-    ) -> bool:
-        """Validate numeric value within range."""
-        if value is None:
-            return allow_none
-            
-        try:
-            num_value = float(value)
-            return min_val <= num_value <= max_val
-        except (TypeError, ValueError):
-            return False
 
 class DeviceInfoMixin:
     """Mixin for device info."""
