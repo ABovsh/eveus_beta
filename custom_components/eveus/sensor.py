@@ -181,7 +181,6 @@ class BaseEveusSensor(DeviceInfoMixin, StateMixin, ValidationMixin, SensorEntity
         """Handle entity which will be added."""
         await super().async_added_to_hass()
         
-        # Restore previous state if available
         if state := await self.async_get_last_state():
             if state.state not in ('unknown', 'unavailable'):
                 try:
@@ -191,13 +190,14 @@ class BaseEveusSensor(DeviceInfoMixin, StateMixin, ValidationMixin, SensorEntity
                         self._previous_value = state.state
                 except (TypeError, ValueError):
                     self._previous_value = state.state
-
-        # Start the updater
+        
         await self._updater.async_start_updates()
 
     @property
     def available(self) -> bool:
         """Return if entity is available."""
+        if not hasattr(self._updater, 'available'):
+            return False
         return self._updater.available
 
     @property
