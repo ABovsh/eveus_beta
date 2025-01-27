@@ -45,7 +45,8 @@ class EveusCurrentNumber(SessionMixin, DeviceInfoMixin, ErrorHandlingMixin, Vali
 
     def __init__(self, host: str, username: str, password: str, model: str) -> None:
         """Initialize current control."""
-        super().__init__(host, username, password)
+        super().__init__()
+        self.initialize(host, username, password)
         self._model = model
         self._attr_unique_id = f"{host}_charging_current"
         self._attr_native_min_value = float(MIN_CURRENT)
