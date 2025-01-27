@@ -66,8 +66,6 @@ from .mixins import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# In sensor.py, update the EveusUpdater class:
-
 class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
     """Handle Eveus data updates."""
 
@@ -79,9 +77,9 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
         self._available = True
         self._last_update = datetime.now().timestamp()
         self._update_lock = asyncio.Lock()
-        self._min_update_interval = 5  # Minimum seconds between updates
-        self._request_timeout = 10  # Timeout for API requests
-        self._data = {}  # Initialize empty data dictionary
+        self._min_update_interval = 5
+        self._request_timeout = 10
+        self._data = {}
 
     def register_sensor(self, sensor: "BaseEveusSensor") -> None:
         """Register a sensor for updates."""
@@ -115,6 +113,9 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
                         self._available = False
                         return
 
+                    # Log received data for debugging
+                    _LOGGER.debug("Received data: %s", data)
+                    
                     # Update internal data store
                     self._data = data
                     self._available = True
@@ -142,16 +143,28 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
         """Safely get value from data with type conversion."""
         try:
             value = self._data.get(key)
+            
+            # Return default if value is None
             if value is None:
                 return default
                 
-            # Handle type conversion based on default type
+            # For numeric values, ensure proper conversion
             if isinstance(default, (int, float)):
                 try:
-                    return type(default)(value)
-                except (TypeError, ValueError):
+                    # Handle different numeric types
+                    if isinstance(value, (int, float)):
+                        return float(value) if isinstance(default, float) else int(value)
+                    elif isinstance(value, str) and value.strip():
+                        # Convert string to appropriate numeric type
+                        return float(value) if isinstance(default, float) else int(float(value))
                     return default
+                except (ValueError, TypeError):
+                    _LOGGER.debug("Failed to convert value %s for key %s", value, key)
+                    return default
+            
+            # For non-numeric values, return as is
             return value
+            
         except Exception as err:
             _LOGGER.debug("Error getting value for %s: %s", key, str(err))
             return default
@@ -213,8 +226,6 @@ class BaseEveusSensor(DeviceInfoMixin, StateMixin, ValidationMixin, SensorEntity
             attrs["previous_value"] = self._previous_value
         return attrs
 
-# Update the NumericSensor class:
-
 class NumericSensor(BaseEveusSensor):
     """Base class for numeric sensors."""
     
@@ -236,16 +247,41 @@ class NumericSensor(BaseEveusSensor):
     def native_value(self) -> float | None:
         """Return sensor state."""
         try:
-            value = self._updater.get_data_value(self._key, 0)
+            # Get value with appropriate default based on device class
+            default = 0.0 if self.device_class in [
+                SensorDeviceClass.ENERGY,
+                SensorDeviceClass.POWER,
+                SensorDeviceClass.VOLTAGE,
+                SensorDeviceClass.CURRENT
+            ] else 0
+            
+            value = self._updater.get_data_value(self._key, default)
+            
+            # Handle None or invalid values
             if value is None:
-                return self._previous_value
-            if isinstance(value, (int, float)):
-                self._previous_value = value
-                return value
-            return self._previous_value
+                return self._previous_value if self._previous_value is not None else default
+                
+            # Convert and validate numeric value
+            try:
+                numeric_value = float(value)
+                if self.device_class == SensorDeviceClass.TEMPERATURE:
+                    # Ensure temperature is within reasonable bounds
+                    if -50 <= numeric_value <= 150:
+                        self._previous_value = numeric_value
+                        return numeric_value
+                    return self._previous_value if self._previous_value is not None else default
+                else:
+                    # For other numeric values, ensure they're non-negative
+                    if numeric_value >= 0:
+                        self._previous_value = numeric_value
+                        return numeric_value
+                    return self._previous_value if self._previous_value is not None else default
+            except (ValueError, TypeError):
+                return self._previous_value if self._previous_value is not None else default
+                
         except Exception as err:
             _LOGGER.debug("Error getting value for %s: %s", self.name, str(err))
-            return self._previous_value
+            return self._previous_value if self._previous_value is not None else 0
 
 class EnergySensor(NumericSensor):
     """Energy sensor implementation."""
