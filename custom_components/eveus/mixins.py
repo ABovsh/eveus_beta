@@ -105,8 +105,23 @@ class SessionMixin:
 
             result = await self._connection_manager.execute_request(session, method, url, **kwargs)
             
-            if result is None or not isinstance(result, dict):
-                _LOGGER.warning("Invalid API response: %s", result)
+            if result is None:
+                _LOGGER.warning("Empty API response")
+                return None
+
+            # Handle unexpected MIME types (e.g., text/html)
+            if isinstance(result, str):
+                _LOGGER.warning("Unexpected API response format: %s", result)
+                try:
+                    # Attempt to parse HTML response as JSON
+                    import json
+                    result = json.loads(result)
+                except json.JSONDecodeError:
+                    _LOGGER.error("Failed to parse API response as JSON")
+                    return None
+
+            if not isinstance(result, dict):
+                _LOGGER.warning("Invalid API response format: %s", type(result))
                 return None
 
             self._error_count = 0
