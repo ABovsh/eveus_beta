@@ -68,6 +68,7 @@ _LOGGER = logging.getLogger(__name__)
 
 class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
     """Handle Eveus data updates."""
+
     def __init__(self, host: str, username: str, password: str, hass: HomeAssistant) -> None:
         """Initialize updater."""
         super().__init__(host=host, username=username, password=password, hass=hass)
@@ -90,7 +91,7 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
             async with asyncio.timeout(self._request_timeout):
                 await self.async_update()
         except asyncio.TimeoutError:
-            _LOGGER.error("Initial update timed out")
+            _LOGGER.warning("Initial update timed out")
             self._available = False
         except Exception as err:
             _LOGGER.error("Error during initial update: %s", str(err))
@@ -133,16 +134,6 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
                 self._available = self._error_count < self._max_errors
                 _LOGGER.error("Update failed: %s", str(err))
 
-    def get_data_value(self, key: str, default: Any = None) -> Any:
-        """Safely get value from data with type conversion."""
-        try:
-            value = self._data.get(key, default)
-            if value is None:
-                return default
-            return value
-        except (TypeError, ValueError):
-            return default
-    
     @property
     def available(self) -> bool:
         """Return if updater is available."""
@@ -152,6 +143,16 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
     def last_update(self) -> float:
         """Return last update timestamp."""
         return self._last_update
+
+    def get_data_value(self, key: str, default: Any = None) -> Any:
+        """Safely get value from data with type conversion."""
+        try:
+            value = self._data.get(key, default)
+            if value is None:
+                return default
+            return value
+        except (TypeError, ValueError):
+            return default
         
 class BaseEveusSensor(DeviceInfoMixin, StateMixin, ValidationMixin, SensorEntity, RestoreEntity):
     """Base implementation for Eveus sensors."""
