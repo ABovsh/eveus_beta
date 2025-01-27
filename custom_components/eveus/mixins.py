@@ -136,38 +136,69 @@ class SessionMixin:
             await self._session.close()
             self._session = None
 
-class UpdaterMixin:
-    """Mixin for entity update functionality."""
-    
-    async def async_update_data(self, full_update: bool = True) -> bool:
-        """Common update method with rate limiting and data validation."""
-        current_time = datetime.now().timestamp()
-        
-        if hasattr(self, '_min_update_interval') and \
-           hasattr(self, '_last_update') and \
-           current_time - self._last_update < self._min_update_interval:
-            return True
-            
-        async with self._command_lock:
-            data = await self.async_api_call("main")
-            if data:
-                if full_update:
-                    self._data = data
-                else:
-                    self._data.update(data)
-                self._last_update = current_time
-                return True
-        return False
+class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
+    """Handle Eveus data updates."""
 
-    def get_data_value(self, key: str, default: Any = None) -> Any:
-        """Safely get value from data with type conversion."""
+    def __init__(self, host: str, username: str, password: str, hass: HomeAssistant) -> None:
+        """Initialize updater."""
+        super().__init__()
+        self.initialize(host, username, password, hass)
+        self._sensors = []
+        self._update_task = None
+        self._available = True
+        self._last_update = datetime.now().timestamp()
+        self._update_lock = asyncio.Lock()
+        self._min_update_interval = 5
+        self._request_timeout = 10
+        self._data = {}
+
+    def register_sensor(self, sensor: "BaseEveusSensor") -> None:
+        """Register a sensor for updates."""
+        if sensor not in self._sensors:
+            self._sensors.append(sensor)
+
+    async def async_start_updates(self) -> None:
+        """Start the update loop."""
         try:
-            value = self._data.get(key, default)
-            if isinstance(value, (int, float)) and isinstance(default, (int, float)):
-                return type(default)(value)
-            return value
-        except (TypeError, ValueError):
-            return default
+            async with asyncio.timeout(self._request_timeout):
+                await self.async_update()
+        except asyncio.TimeoutError:
+            _LOGGER.warning("Initial update timed out")
+            self._available = False
+        except Exception as err:
+            _LOGGER.error("Error during initial update: %s", str(err))
+            self._available = False
+
+    async def async_update(self) -> None:
+        """Update data from device with rate limiting."""
+        async with self._update_lock:
+            current_time = datetime.now().timestamp()
+            if current_time - self._last_update < self._min_update_interval:
+                return
+
+            try:
+                data = await self.async_api_call("main")
+                if data and isinstance(data, dict):
+                    self._data = data
+                    self._available = True
+                    self._last_update = current_time
+                    self._error_count = 0
+
+                    for sensor in self._sensors:
+                        try:
+                            if hasattr(sensor, "async_write_ha_state"):
+                                sensor.async_write_ha_state()
+                        except Exception as err:
+                            _LOGGER.error("Error updating sensor %s: %s", 
+                                getattr(sensor, 'name', 'unknown'), str(err))
+                else:
+                    _LOGGER.warning("Invalid or empty API response")
+                    self._available = False
+
+            except Exception as err:
+                self._error_count += 1
+                self._available = self._error_count < self._max_errors
+                _LOGGER.error("Update failed: %s", str(err))
 
 class StateMixin:
     """Mixin for state management."""
