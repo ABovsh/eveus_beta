@@ -28,7 +28,8 @@ class BaseEveusSwitch(SessionMixin, DeviceInfoMixin, ErrorHandlingMixin, Validat
     
     def __init__(self, host: str, username: str, password: str) -> None:
         """Initialize switch."""
-        super().__init__(host, username, password)
+        super().__init__()
+        self.initialize(host, username, password)
         self._is_on = False
 
     @property
