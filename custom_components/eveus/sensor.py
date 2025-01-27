@@ -71,7 +71,8 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
 
     def __init__(self, host: str, username: str, password: str, hass: HomeAssistant) -> None:
         """Initialize updater."""
-        super().__init__(host=host, username=username, password=password, hass=hass)
+        super().__init__()
+        self.initialize(host, username, password, hass)
         self._sensors = []
         self._update_task = None
         self._available = True
@@ -85,7 +86,18 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
         """Register a sensor for updates."""
         if sensor not in self._sensors:
             self._sensors.append(sensor)
-            _LOGGER.debug("Registered sensor: %s", getattr(sensor, 'name', 'unknown'))
+
+    async def async_start_updates(self) -> None:
+        """Start the update loop."""
+        try:
+            async with asyncio.timeout(self._request_timeout):
+                await self.async_update()
+        except asyncio.TimeoutError:
+            _LOGGER.warning("Initial update timed out")
+            self._available = False
+        except Exception as err:
+            _LOGGER.error("Error during initial update: %s", str(err))
+            self._available = False
 
     async def async_update(self) -> None:
         """Update data from device with rate limiting."""
@@ -95,70 +107,34 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
                 return
 
             try:
-                _LOGGER.debug("Requesting update from Eveus charger")
                 data = await self.async_api_call("main")
-                
-                if not data or not isinstance(data, dict):
-                    _LOGGER.warning("Invalid API response")
+                if data and isinstance(data, dict):
+                    self._data = data
+                    self._available = True
+                    self._last_update = current_time
+                    self._error_count = 0
+
+                    for sensor in self._sensors:
+                        try:
+                            if hasattr(sensor, "async_write_ha_state"):
+                                sensor.async_write_ha_state()
+                        except Exception as err:
+                            _LOGGER.error("Error updating sensor %s: %s", 
+                                getattr(sensor, 'name', 'unknown'), str(err))
+                else:
+                    _LOGGER.warning("Invalid or empty API response")
                     self._available = False
-                    return
-
-                # Debug log the received data
-                _LOGGER.debug("Received data from charger: %s", data)
-                
-                # Update internal data store
-                self._data = data
-                self._available = True
-                self._last_update = current_time
-                self._error_count = 0
-
-                # Debug log key values
-                for key in ["voltMeas1", "curMeas1", "powerMeas", "sessionEnergy", "totalEnergy"]:
-                    _LOGGER.debug("Value for %s: %s", key, data.get(key))
-
-                # Update all registered sensors
-                for sensor in self._sensors:
-                    try:
-                        if hasattr(sensor, "async_write_ha_state"):
-                            sensor.async_write_ha_state()
-                    except Exception as err:
-                        _LOGGER.error("Error updating sensor %s: %s", 
-                            getattr(sensor, 'name', 'unknown'), str(err))
 
             except Exception as err:
-                _LOGGER.error("Update failed: %s", str(err))
                 self._error_count += 1
                 self._available = self._error_count < self._max_errors
+                _LOGGER.error("Update failed: %s", str(err))
 
-    def get_data_value(self, key: str, default: Any = None) -> Any:
-        """Safely get value from data with type conversion."""
-        try:
-            value = self._data.get(key)
-            _LOGGER.debug("Getting value for key %s: %s", key, value)
-            
-            if value is None:
-                return default
-                
-            # For numeric values, convert and validate
-            if isinstance(default, (int, float)):
-                try:
-                    float_val = float(value)
-                    _LOGGER.debug("Converted value for %s: %s", key, float_val)
-                    return float_val
-                except (ValueError, TypeError):
-                    _LOGGER.warning("Failed to convert value %s for key %s", value, key)
-                    return default
-            
-            return value
-            
-        except Exception as err:
-            _LOGGER.debug("Error getting value for %s: %s", key, str(err))
-            return default
 class BaseEveusSensor(DeviceInfoMixin, StateMixin, ValidationMixin, SensorEntity, RestoreEntity):
     """Base implementation for Eveus sensors."""
-    
     def __init__(self, updater: EveusUpdater) -> None:
         """Initialize the sensor."""
+        super().__init__()
         self._updater = updater
         self._updater.register_sensor(self)
         self._previous_value = None
