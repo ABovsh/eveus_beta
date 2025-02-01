@@ -1,5 +1,4 @@
 """API package for Eveus integration."""
-from .client import EveusClient
 from .models import DeviceInfo, DeviceState
 from .exceptions import (
     EveusError,
@@ -9,11 +8,12 @@ from .exceptions import (
     ValidationError,
     TimeoutError,
 )
+from .client import EveusClient
 
 __all__ = [
-    "EveusClient",
     "DeviceInfo",
-    "DeviceState",
+    "DeviceState", 
+    "EveusClient",
     "EveusError",
     "CannotConnect",
     "InvalidAuth",
