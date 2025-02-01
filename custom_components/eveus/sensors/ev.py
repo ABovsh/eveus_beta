@@ -1,6 +1,5 @@
-"""EV-specific sensors for Eveus."""
+"""EV-specific sensors."""
 from typing import Optional
-
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorStateClass,
@@ -9,9 +8,8 @@ from homeassistant.const import (
     UnitOfEnergy,
     PERCENTAGE,
 )
-
 from .base import BaseEveusSensor
-from ..util.helpers import calculate_soc_kwh
+from ..util.helpers import calculate_soc_kwh, format_duration
 
 class EVSocKwhSensor(BaseEveusSensor):
     """EV State of Charge energy sensor."""
@@ -20,7 +18,6 @@ class EVSocKwhSensor(BaseEveusSensor):
     _attr_state_class = SensorStateClass.TOTAL
 
     def __init__(self, client) -> None:
-        """Initialize the sensor."""
         super().__init__(client)
         self._attr_name = "SOC Energy"
         self._attr_unique_id = f"{client._device_info.identifier}_soc_kwh"
@@ -29,13 +26,11 @@ class EVSocKwhSensor(BaseEveusSensor):
 
     @property
     def native_value(self) -> Optional[float]:
-        """Calculate and return state of charge in kWh."""
         try:
             initial_soc = float(self.hass.states.get("input_number.ev_initial_soc").state)
             max_capacity = float(self.hass.states.get("input_number.ev_battery_capacity").state)
-            energy_charged = self._client.state.counter_a_energy
+            energy_charged = self._client.state.counter_a_energy if self._client.state else 0
             correction = float(self.hass.states.get("input_number.ev_soc_correction").state)
-
             return calculate_soc_kwh(initial_soc, max_capacity, energy_charged, correction)
         except (TypeError, ValueError, AttributeError):
             return None
@@ -48,7 +43,6 @@ class EVSocPercentSensor(BaseEveusSensor):
     _attr_suggested_display_precision = 0
 
     def __init__(self, client) -> None:
-        """Initialize the sensor."""
         super().__init__(client)
         self._attr_name = "SOC Percent"
         self._attr_unique_id = f"{client._device_info.identifier}_soc_percent"
@@ -56,11 +50,9 @@ class EVSocPercentSensor(BaseEveusSensor):
 
     @property
     def native_value(self) -> Optional[float]:
-        """Return the state of charge percentage."""
         try:
             soc_kwh = float(self.hass.states.get(f"sensor.eveus_ev_charger_soc_energy").state)
             max_capacity = float(self.hass.states.get("input_number.ev_battery_capacity").state)
-            
             if soc_kwh >= 0 and max_capacity > 0:
                 percentage = round((soc_kwh / max_capacity * 100), 0)
                 return max(0, min(percentage, 100))
@@ -70,9 +62,8 @@ class EVSocPercentSensor(BaseEveusSensor):
 
 class TimeToTargetSocSensor(BaseEveusSensor):
     """Time to target SOC sensor."""
-
+    
     def __init__(self, client) -> None:
-        """Initialize the sensor."""
         super().__init__(client)
         self._attr_name = "Time to Target"
         self._attr_unique_id = f"{client._device_info.identifier}_time_to_target"
@@ -80,21 +71,20 @@ class TimeToTargetSocSensor(BaseEveusSensor):
 
     @property
     def native_value(self) -> str:
-        """Calculate and return formatted time to target."""
         try:
             if not self._client.state:
                 return "-"
 
-            current_soc = float(self.hass.states.get(f"sensor.eveus_ev_charger_soc_percent").state)
+            current_soc = float(self.hass.states.get("sensor.eveus_ev_charger_soc_percent").state)
             target_soc = float(self.hass.states.get("input_number.ev_target_soc").state)
             power_meas = self._client.state.power
             battery_capacity = float(self.hass.states.get("input_number.ev_battery_capacity").state)
             correction = float(self.hass.states.get("input_number.ev_soc_correction").state)
-
+            
             if current_soc >= target_soc:
                 return "Target reached"
 
-            if not self._client.state.power:
+            if not power_meas:
                 return "Not charging"
 
             if power_meas < 100:
