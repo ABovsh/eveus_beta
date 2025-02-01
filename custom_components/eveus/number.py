@@ -1,7 +1,6 @@
 """Support for Eveus number entities."""
 from __future__ import annotations
 import logging
-import aiohttp
 from typing import Any
 
 from homeassistant.components.number import (
