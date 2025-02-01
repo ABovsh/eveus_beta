@@ -5,10 +5,14 @@ from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorStateClass,
 )
-from homeassistant.const import UnitOfTemperature
+from homeassistant.const import (
+    UnitOfTemperature,
+    UnitOfTime,  # Added missing import
+)
 
 from .base import BaseEveusSensor, BaseNumericSensor
 from ..const import CHARGING_STATES, ERROR_STATES, NORMAL_SUBSTATES
+from ..util.helpers import format_duration, format_system_time
 
 class EveusStateSensor(BaseEveusSensor):
     """Charging state sensor."""
