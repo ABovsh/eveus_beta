@@ -70,14 +70,10 @@ class EveusCurrentNumber(SessionMixin, DeviceInfoMixin, ErrorHandlingMixin, Vali
     async def async_update(self) -> None:
         """Update current value."""
         data = await self.async_api_call("main")
-        if data and isinstance(data, dict) and "currentSet" in data:  # Validate API response
+        if data and "currentSet" in data:
             value = float(data["currentSet"])
             if self.validate_numeric_value(value, self._attr_native_min_value, self._attr_native_max_value):
                 self._value = value
-            else:
-                _LOGGER.warning("Invalid current value: %s", value)
-        else:
-            _LOGGER.warning("Invalid or missing data in API response")
 
     async def async_added_to_hass(self) -> None:
         """Handle added to Home Assistant."""

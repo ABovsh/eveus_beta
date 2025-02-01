@@ -105,10 +105,6 @@ class SessionMixin:
 
             result = await self._connection_manager.execute_request(session, method, url, **kwargs)
             
-            if result is None or not isinstance(result, dict):
-                _LOGGER.warning("Invalid API response: %s", result)
-                return None
-
             self._error_count = 0
             self._available = True
             return result

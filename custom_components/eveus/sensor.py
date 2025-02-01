@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -68,7 +68,6 @@ _LOGGER = logging.getLogger(__name__)
 
 class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
     """Handle Eveus data updates."""
-
     def __init__(self, host: str, username: str, password: str, hass: HomeAssistant) -> None:
         """Initialize updater."""
         super().__init__(host=host, username=username, password=password, hass=hass)
@@ -78,8 +77,6 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
         self._last_update = datetime.now().timestamp()
         self._update_lock = asyncio.Lock()
         self._min_update_interval = 5  # Minimum seconds between updates
-        self._request_timeout = 10  # Timeout for API requests
-        self._data = {}  # Ensure data is initialized
 
     def register_sensor(self, sensor: "BaseEveusSensor") -> None:
         """Register a sensor for updates."""
@@ -88,10 +85,10 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
     async def async_start_updates(self) -> None:
         """Start the update loop."""
         try:
-            async with asyncio.timeout(self._request_timeout):
+            async with asyncio.timeout(10):  # Timeout for initial update
                 await self.async_update()
         except asyncio.TimeoutError:
-            _LOGGER.warning("Initial update timed out")
+            _LOGGER.error("Initial update timed out")
             self._available = False
         except Exception as err:
             _LOGGER.error("Error during initial update: %s", str(err))
@@ -106,29 +103,23 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
                 return
 
             try:
-                async with asyncio.timeout(self._request_timeout):
-                    data = await self.async_api_call("main")
-                    if data and isinstance(data, dict):  # Validate API response
-                        self._data = data
-                        self._available = True
-                        self._last_update = current_time
-                        self._error_count = 0
+                data = await self.async_api_call("main")
+                if data:
+                    self._data = data
+                    self._available = True
+                    self._last_update = current_time
+                    self._error_count = 0
 
-                        # Update sensors
-                        for sensor in self._sensors:
-                            try:
-                                if hasattr(sensor, "async_write_ha_state"):
-                                    sensor.async_write_ha_state()
-                            except Exception as err:
-                                _LOGGER.error("Error updating sensor %s: %s", 
-                                    getattr(sensor, 'name', 'unknown'), str(err))
-                    else:
-                        _LOGGER.warning("Invalid or empty API response")
-                        self._available = False
-                        
-            except asyncio.TimeoutError:
-                _LOGGER.warning("Update timed out")
-                self._available = False
+                    # Update sensors
+                    for sensor in self._sensors:
+                        try:
+                            sensor.async_write_ha_state()
+                        except Exception as err:
+                            _LOGGER.error("Error updating sensor %s: %s", 
+                                getattr(sensor, 'name', 'unknown'), str(err))
+                else:
+                    self._available = False
+                    
             except Exception as err:
                 self._error_count += 1
                 self._available = self._error_count < self._max_errors
@@ -143,16 +134,6 @@ class EveusUpdater(SessionMixin, ErrorHandlingMixin, UpdaterMixin):
     def last_update(self) -> float:
         """Return last update timestamp."""
         return self._last_update
-
-    def get_data_value(self, key: str, default: Any = None) -> Any:
-        """Safely get value from data with type conversion."""
-        try:
-            value = self._data.get(key, default)
-            if value is None:
-                return default
-            return value
-        except (TypeError, ValueError):
-            return default
         
 class BaseEveusSensor(DeviceInfoMixin, StateMixin, ValidationMixin, SensorEntity, RestoreEntity):
     """Base implementation for Eveus sensors."""

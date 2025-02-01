@@ -83,10 +83,8 @@ class EveusStopChargingSwitch(BaseEveusSwitch):
     async def async_update(self) -> None:
         """Update state."""
         data = await self.async_api_call("main")
-        if data and isinstance(data, dict):  # Validate API response
+        if data:
             self._is_on = data.get("evseEnabled") == 1
-        else:
-            _LOGGER.warning("Invalid or missing data in API response")
 
 class EveusOneChargeSwitch(BaseEveusSwitch):
     """One charge mode switch."""
