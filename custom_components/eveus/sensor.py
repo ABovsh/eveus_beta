@@ -499,7 +499,7 @@ async def async_setup_entry(
             entity_category=EntityCategory.DIAGNOSTIC
         ),
 
-        # Temperature sensors
+        # Temperature sensors (FIXED HERE)
         EveusSensorBase(updater, "Box Temperature", ATTR_TEMPERATURE_BOX,
                        SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS,
                        SensorStateClass.MEASUREMENT, "mdi:thermometer", 0),
