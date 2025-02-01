@@ -5,7 +5,7 @@ import logging
 import asyncio
 import time
 from datetime import datetime
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 import aiohttp
 
@@ -61,7 +61,6 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-#region Helper Functions
 def format_duration(seconds: int) -> str:
     """Format duration in seconds to human-readable string."""
     days = seconds // 86400
@@ -73,9 +72,7 @@ def format_duration(seconds: int) -> str:
     if hours > 0:
         return f"{hours}h {minutes:02d}m"
     return f"{minutes}m"
-#endregion
 
-#region Core Components
 class EveusUpdater:
     """Central data updater for Eveus system."""
     
@@ -166,7 +163,7 @@ class EveusUpdater:
             await self._session.close()
 
 class EveusSensor(SensorEntity, RestoreEntity):
-    """Configurable base sensor class."""
+    """Base sensor class for numeric values."""
     
     _attr_has_entity_name = True
     _attr_should_poll = False
@@ -183,12 +180,10 @@ class EveusSensor(SensorEntity, RestoreEntity):
         state_class: SensorStateClass = None,
         icon: str = None,
         precision: int = 2,
-        mapper: Callable[[dict], Any] = None,
         entity_category: EntityCategory = None
     ):
         self._updater = updater
         self._key = key
-        self._mapper = mapper
         self._previous_value = None
         self._attr_name = name
         self._attr_unique_id = f"{updater._host}_{name.lower().replace(' ', '_')}"
@@ -212,10 +207,7 @@ class EveusSensor(SensorEntity, RestoreEntity):
         }
 
     @property
-    def native_value(self) -> Any:
-        if self._mapper:
-            return self._mapper(self._updater.data)
-            
+    def native_value(self) -> float | None:
         try:
             value = float(self._updater.data.get(self._key, 0))
             self._previous_value = value
@@ -242,9 +234,43 @@ class EveusSensor(SensorEntity, RestoreEntity):
                 self._previous_value = state.state
         await self._updater.async_start_updates()
 
-#endregion
+class EveusStringSensor(EveusSensor):
+    """Sensor class for string-based values."""
+    
+    _attr_state_class = None
+    _attr_native_unit_of_measurement = None
+    _attr_suggested_display_precision = None
 
-#region Specialized Components
+    def __init__(
+        self,
+        updater: EveusUpdater,
+        name: str,
+        key: str,
+        mapper: Callable[[dict], str],
+        icon: str = None,
+        entity_category: EntityCategory = None
+    ):
+        super().__init__(
+            updater=updater,
+            name=name,
+            key=key,
+            device_class=None,
+            native_unit=None,
+            state_class=None,
+            icon=icon,
+            precision=0,
+            entity_category=entity_category
+        )
+        self._mapper = mapper
+
+    @property
+    def native_value(self) -> str:
+        try:
+            return self._mapper(self._updater.data)
+        except (TypeError, ValueError, KeyError) as err:
+            _LOGGER.debug("Error mapping value for %s: %s", self.name, str(err))
+            return "Unknown"
+
 class EveusTimeSensor(EveusSensor):
     """Time duration sensor with formatted attribute."""
     
@@ -284,46 +310,6 @@ class EveusCounterSensor(EveusSensor):
             precision=1 if measurement == "Energy" else 0
         )
 
-class EVSocSensor(EveusSensor):
-    """State of Charge sensor with calculation logic."""
-    
-    def __init__(self, updater: EveusUpdater, is_percent: bool):
-        unit = "%" if is_percent else UnitOfEnergy.KILO_WATT_HOUR
-        super().__init__(
-            updater=updater,
-            name="SOC Percent" if is_percent else "SOC Energy",
-            key="IEM1",
-            device_class=SensorDeviceClass.BATTERY if is_percent else SensorDeviceClass.ENERGY,
-            native_unit=unit,
-            state_class=SensorStateClass.MEASUREMENT if is_percent else SensorStateClass.TOTAL,
-            icon="mdi:battery-charging",
-            precision=0
-        )
-
-    @property
-    def native_value(self) -> float | None:
-        try:
-            params = {
-                'initial': float(self.hass.states.get("input_number.ev_initial_soc").state),
-                'capacity': float(self.hass.states.get("input_number.ev_battery_capacity").state),
-                'charged': float(self._updater.data.get(self._key, 0)),
-                'correction': float(self.hass.states.get("input_number.ev_soc_correction").state)
-            }
-
-            if params['initial'] < 0 or params['initial'] > 100 or params['capacity'] <= 0:
-                return None
-
-            efficiency = 1 - params['correction'] / 100
-            initial_kwh = (params['initial'] / 100) * params['capacity']
-            total_kwh = initial_kwh + (params['charged'] * efficiency)
-
-            if "Percent" in self.name:
-                return min(max(round((total_kwh / params['capacity']) * 100, 0), 0), 100)
-            return round(max(0, min(total_kwh, params['capacity'])), 2)
-
-        except (TypeError, ValueError, AttributeError):
-            return None
-
 class TimeToTargetSensor(TextEntity, RestoreEntity):
     """Time remaining to target SOC sensor."""
     
@@ -347,20 +333,19 @@ class TimeToTargetSensor(TextEntity, RestoreEntity):
     @property
     def native_value(self) -> str:
         try:
-            params = {
-                'current': float(self.hass.states.get("sensor.eveus_ev_charger_soc_percent").state),
-                'target': float(self.hass.states.get("input_number.ev_target_soc").state),
-                'power': float(self._updater.data.get(ATTR_POWER, 0)),
-                'capacity': float(self.hass.states.get("input_number.ev_battery_capacity").state),
-                'correction': float(self.hass.states.get("input_number.ev_soc_correction").state)
-            }
+            current = float(self.hass.states.get("sensor.eveus_ev_charger_soc_percent").state)
+            target = float(self.hass.states.get("input_number.ev_target_soc").state)
+            power = float(self._updater.data.get(ATTR_POWER, 0))
+            capacity = float(self.hass.states.get("input_number.ev_battery_capacity").state)
+            correction = float(self.hass.states.get("input_number.ev_soc_correction").state)
 
-            remaining_kwh = (params['target'] - params['current']) * params['capacity'] / 100
-            power_kw = params['power'] * (1 - params['correction']/100) / 1000
+            remaining = (target - current) * capacity / 100
+            power_kw = power * (1 - correction/100) / 1000
             
-            return "-" if power_kw <= 0 else format_duration(
-                int((remaining_kwh / power_kw) * 3600)
-            )
+            if power_kw <= 0:
+                return "-"
+
+            return format_duration(int((remaining / power_kw) * 3600))
 
         except (TypeError, ValueError, AttributeError):
             return "-"
@@ -375,7 +360,6 @@ class TimeToTargetSensor(TextEntity, RestoreEntity):
             "last_update": self._updater.last_update,
             "host": self._updater._host
         }
-#endregion
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -391,7 +375,7 @@ async def async_setup_entry(
     )
 
     sensors = [
-        # Basic measurements
+        # Numeric sensors
         EveusSensor(updater, "Voltage", ATTR_VOLTAGE,
                    SensorDeviceClass.VOLTAGE, UnitOfElectricPotential.VOLT,
                    SensorStateClass.MEASUREMENT, "mdi:lightning-bolt", 0),
@@ -404,17 +388,22 @@ async def async_setup_entry(
                    SensorDeviceClass.POWER, UnitOfPower.WATT,
                    SensorStateClass.MEASUREMENT, "mdi:flash", 0),
 
-        # Diagnostic sensors
-        EveusSensor(updater, "State", ATTR_STATE,
-                   mapper=lambda d: CHARGING_STATES.get(d.get(ATTR_STATE), "Unknown"),
-                   entity_category=EntityCategory.DIAGNOSTIC),
+        # String-based state sensors
+        EveusStringSensor(updater, "State", ATTR_STATE,
+            mapper=lambda d: CHARGING_STATES.get(d.get(ATTR_STATE), "Unknown"),
+            icon="mdi:information",
+            entity_category=EntityCategory.DIAGNOSTIC
+        ),
         
-        EveusSensor(updater, "Substate", ATTR_SUBSTATE,
-                   mapper=lambda d: (
-                       ERROR_STATES.get(d.get(ATTR_SUBSTATE), "Unknown Error") 
-                       if d.get(ATTR_STATE) == 7 
-                       else NORMAL_SUBSTATES.get(d.get(ATTR_SUBSTATE), "Unknown State")
-                   ), entity_category=EntityCategory.DIAGNOSTIC),
+        EveusStringSensor(updater, "Substate", ATTR_SUBSTATE,
+            mapper=lambda d: (
+                ERROR_STATES.get(d.get(ATTR_SUBSTATE), "Unknown Error") 
+                if d.get(ATTR_STATE) == 7 
+                else NORMAL_SUBSTATES.get(d.get(ATTR_SUBSTATE), "Unknown State")
+            ),
+            icon="mdi:information",
+            entity_category=EntityCategory.DIAGNOSTIC
+        ),
 
         # Temperature sensors
         EveusSensor(updater, "Box Temperature", ATTR_TEMPERATURE_BOX,
@@ -433,10 +422,6 @@ async def async_setup_entry(
         EveusCounterSensor(updater, "B", "Energy", ATTR_COUNTER_B_ENERGY),
         EveusCounterSensor(updater, "A", "Cost", ATTR_COUNTER_A_COST),
         EveusCounterSensor(updater, "B", "Cost", ATTR_COUNTER_B_COST),
-
-        # SOC sensors
-        EVSocSensor(updater, is_percent=False),
-        EVSocSensor(updater, is_percent=True),
 
         # Time to Target
         TimeToTargetSensor(updater)
