@@ -4,22 +4,22 @@ from typing import Optional
 
 def format_duration(seconds: int) -> str:
     """Format duration in seconds to human readable string."""
-    if seconds < 60:
-        return f"{seconds}s"
-    
-    days = seconds // 86400
-    hours = (seconds % 86400) // 3600
-    minutes = (seconds % 3600) // 60
-    
-    parts = []
-    if days > 0:
-        parts.append(f"{days}d")
-    if hours > 0:
-        parts.append(f"{hours}h")
-    if minutes > 0:
-        parts.append(f"{minutes}m")
-    
-    return " ".join(parts)
+    try:
+        days = seconds // 86400
+        hours = (seconds % 86400) // 3600
+        minutes = (seconds % 3600) // 60
+        
+        parts = []
+        if days > 0:
+            parts.append(f"{days}d")
+        if hours > 0:
+            parts.append(f"{hours}h")
+        if minutes > 0 or not parts:
+            parts.append(f"{minutes}m")
+            
+        return " ".join(parts)
+    except (TypeError, ValueError):
+        return "0m"
 
 def format_system_time(timestamp: int) -> str:
     """Format system timestamp to time string."""
