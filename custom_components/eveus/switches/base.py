@@ -1,37 +1,22 @@
-"""Base switch implementation for Eveus."""
-from typing import Any
+"""Base class for switches."""
 from homeassistant.components.switch import SwitchEntity
-from ..api.client import EveusClient
-from ..const import DOMAIN
 
 class BaseEveusSwitch(SwitchEntity):
-    """Base implementation of Eveus switch."""
+    """Base Eveus switch."""
 
-    def __init__(self, client: EveusClient, name: str, icon: str) -> None:
-        """Initialize switch."""
+    def __init__(self, client) -> None:
+        """Initialize the switch."""
         self._client = client
-        self._attr_name = name
-        self._attr_icon = icon
+        self._client.register_entity(self)
         self._attr_has_entity_name = True
-        self._is_on = False
-
-    @property
-    def unique_id(self) -> str:
-        """Return unique ID."""
-        return f"{self._client._device_info.identifier}_{self.name}"
-
-    @property
-    def is_on(self) -> bool:
-        """Return true if switch is on."""
-        return self._is_on
 
     @property
     def available(self) -> bool:
-        """Return if entity is available."""
+        """Return True if entity is available."""
         return self._client.available
 
     @property
-    def device_info(self) -> dict[str, Any]:
+    def device_info(self):
         """Return device information."""
         return {
             "identifiers": {(DOMAIN, self._client._device_info.identifier)},
