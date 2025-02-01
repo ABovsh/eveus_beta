@@ -1,21 +1,20 @@
-"""Support for Eveus switches."""
+"""Platform for switch integration."""
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-
 from .const import DOMAIN
-from .switches import (
+from .switches.entities import (
     EveusChargingSwitch,
     EveusOneChargeSwitch,
     EveusResetCounterSwitch,
 )
 
 async def async_setup_entry(
-    hass: HomeAssistant,
+    hass: HomeAssistant, 
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the Eveus switch entities."""
+    """Set up Eveus switch based on a config entry."""
     client = hass.data[DOMAIN][entry.entry_id]["client"]
     
     switches = [
