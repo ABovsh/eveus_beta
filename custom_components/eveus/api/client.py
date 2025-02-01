@@ -22,6 +22,7 @@ class EveusClient:
         self._error_count = 0
         self._max_errors = 3
         self._last_update = 0
+        self._update_task: Optional[asyncio.Task] = None
 
     @property
     def available(self) -> bool:
@@ -42,6 +43,23 @@ class EveusClient:
                 )
             )
         return self._session
+
+    async def start_updates(self) -> None:
+        """Start the update loop."""
+        if self._update_task is None:
+            self._update_task = asyncio.create_task(self._update_loop())
+
+    async def _update_loop(self) -> None:
+        """Run the update loop."""
+        while True:
+            try:
+                await self.update()
+                await asyncio.sleep(30)  # Update every 30 seconds
+            except asyncio.CancelledError:
+                break
+            except Exception as err:
+                _LOGGER.error("Error in update loop: %s", str(err))
+                await asyncio.sleep(30)
 
     async def update(self) -> None:
         """Update device state."""
@@ -86,6 +104,16 @@ class EveusClient:
                 
             except Exception as err:
                 raise CommandError(f"Error sending command {command}: {err}") from err
+
+    async def async_shutdown(self) -> None:
+        """Stop the update loop and close the client."""
+        if self._update_task:
+            self._update_task.cancel()
+            try:
+                await self._update_task
+            except asyncio.CancelledError:
+                pass
+        await self.close()
 
     async def close(self) -> None:
         """Close the client."""
