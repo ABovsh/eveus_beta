@@ -470,17 +470,17 @@ async def async_setup_entry(
 
     sensors = [
         # Numeric sensors
-        EveusSensor(updater, "Voltage", ATTR_VOLTAGE,
-                   SensorDeviceClass.VOLTAGE, UnitOfElectricPotential.VOLT,
-                   SensorStateClass.MEASUREMENT, "mdi:lightning-bolt", 0),
+        EveusSensorBase(updater, "Voltage", ATTR_VOLTAGE,
+                       SensorDeviceClass.VOLTAGE, UnitOfElectricPotential.VOLT,
+                       SensorStateClass.MEASUREMENT, "mdi:lightning-bolt", 0),
         
-        EveusSensor(updater, "Current", ATTR_CURRENT,
-                   SensorDeviceClass.CURRENT, UnitOfElectricCurrent.AMPERE,
-                   SensorStateClass.MEASUREMENT, "mdi:current-ac", 1),
+        EveusSensorBase(updater, "Current", ATTR_CURRENT,
+                       SensorDeviceClass.CURRENT, UnitOfElectricCurrent.AMPERE,
+                       SensorStateClass.MEASUREMENT, "mdi:current-ac", 1),
         
-        EveusSensor(updater, "Power", ATTR_POWER,
-                   SensorDeviceClass.POWER, UnitOfPower.WATT,
-                   SensorStateClass.MEASUREMENT, "mdi:flash", 0),
+        EveusSensorBase(updater, "Power", ATTR_POWER,
+                       SensorDeviceClass.POWER, UnitOfPower.WATT,
+                       SensorStateClass.MEASUREMENT, "mdi:flash", 0),
 
         # String-based state sensors
         EveusStringSensor(updater, "State", ATTR_STATE,
