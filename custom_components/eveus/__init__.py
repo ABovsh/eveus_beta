@@ -13,7 +13,11 @@ from .api.client import EveusClient
 from .api.models import DeviceInfo
 from .const import DOMAIN
 
-PLATFORMS = [Platform.SENSOR, Platform.SWITCH, Platform.NUMBER]
+PLATFORMS = [
+    Platform.SENSOR,
+    Platform.SWITCH,
+    Platform.NUMBER,
+]
 
 _LOGGER = logging.getLogger(__name__)
 
