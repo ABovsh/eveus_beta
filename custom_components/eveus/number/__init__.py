@@ -1,2 +1,0 @@
-"""Number package."""
-from .entities import *  # noqa: F403
