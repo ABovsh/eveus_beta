@@ -1,20 +1,19 @@
+# File: custom_components/eveus/config_flow.py
 """Config flow for Eveus."""
 from __future__ import annotations
 
 import logging
-import asyncio
 from typing import Any
 
-import aiohttp
 import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import aiohttp_client
 
+from .base import EveusBaseConnection
 from .const import (
     DOMAIN,
     MODEL_16A,
@@ -22,6 +21,7 @@ from .const import (
     CONF_MODEL,
     MODELS,
 )
+from .exceptions import EveusConnectionError, EveusAuthError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -55,30 +55,22 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
         raise InvalidInput
 
     try:
-        session = aiohttp_client.async_get_clientsession(hass)
-        timeout = aiohttp.ClientTimeout(total=10)
+        connection = EveusBaseConnection(
+            host=data[CONF_HOST],
+            username=data[CONF_USERNAME],
+            password=data[CONF_PASSWORD],
+        )
+        
+        # Test connection by attempting update
+        await connection.async_update()
+        await connection.async_close()
+        
+        return {"title": f"Eveus Charger ({data[CONF_HOST]})"}
 
-        async with session.post(
-            f"http://{data[CONF_HOST]}/main",
-            auth=aiohttp.BasicAuth(data[CONF_USERNAME], data[CONF_PASSWORD]),
-            timeout=timeout,
-        ) as response:
-            if response.status == 401:
-                raise InvalidAuth
-            response.raise_for_status()
-            
-            result = await response.json()
-            if not isinstance(result, dict) or "state" not in result:
-                raise CannotConnect
-            
-            return {"title": f"Eveus Charger ({data[CONF_HOST]})"}
-
-    except aiohttp.ClientResponseError as err:
-        if err.status == 401:
-            raise InvalidAuth from err
+    except EveusAuthError as err:
+        raise InvalidAuth from err
+    except EveusConnectionError as err:
         raise CannotConnect from err
-    except (asyncio.TimeoutError, aiohttp.ClientError):
-        raise CannotConnect
     except Exception as err:
         _LOGGER.exception("Unexpected error: %s", str(err))
         raise CannotConnect from err
@@ -117,11 +109,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors
         )
 
-class CannotConnect(HomeAssistantError):
+class CannotConnect(Exception):
     """Error to indicate we cannot connect."""
 
-class InvalidAuth(HomeAssistantError):
+class InvalidAuth(Exception):
     """Error to indicate there is invalid auth."""
 
-class InvalidInput(HomeAssistantError):
+class InvalidInput(Exception):
     """Error to indicate missing input_number entities."""
