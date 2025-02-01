@@ -519,6 +519,22 @@ async def async_setup_entry(
 
         # Time to Target
         TimeToTargetSensor(updater)
+
+        # Battery Voltage
+        EveusSensorBase(updater, "Battery Voltage", ATTR_BATTERY_VOLTAGE,
+                       SensorDeviceClass.VOLTAGE, UnitOfElectricPotential.VOLT,
+                       SensorStateClass.MEASUREMENT, "mdi:battery", 1),
+    
+        # Total Energy
+        EveusSensorBase(updater, "Total Energy", ATTR_TOTAL_ENERGY,
+                       SensorDeviceClass.ENERGY, UnitOfEnergy.KILO_WATT_HOUR,
+                       SensorStateClass.TOTAL_INCREASING, "mdi:flash", 1),
+    
+        # System Time
+        EveusStringSensor(updater, "System Time", ATTR_SYSTEM_TIME,
+                         mapper=lambda d: str(d.get(ATTR_SYSTEM_TIME, "Unknown")),
+                         icon="mdi:clock",
+                         entity_category=EntityCategory.DIAGNOSTIC)
     ]
 
     hass.data.setdefault(DOMAIN, {})
