@@ -38,6 +38,7 @@ class DeviceState:
     counter_b_energy: float
     counter_a_cost: float
     counter_b_cost: float
+    session_time: int = 0  # Added missing field
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "DeviceState":
@@ -60,5 +61,6 @@ class DeviceState:
             counter_a_energy=float(data.get("IEM1", 0)),
             counter_b_energy=float(data.get("IEM2", 0)),
             counter_a_cost=float(data.get("IEM1_money", 0)),
-            counter_b_cost=float(data.get("IEM2_money", 0))
+            counter_b_cost=float(data.get("IEM2_money", 0)),
+            session_time=int(data.get("sessionTime", 0))  # Added conversion
         )
