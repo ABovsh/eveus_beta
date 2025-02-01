@@ -1,5 +1,5 @@
 """Diagnostic sensors for Eveus."""
-from typing import Optional
+from typing import Any, Optional
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -7,7 +7,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import (
     UnitOfTemperature,
-    UnitOfTime,  # Added missing import
+    UnitOfTime,
 )
 
 from .base import BaseEveusSensor, BaseNumericSensor
