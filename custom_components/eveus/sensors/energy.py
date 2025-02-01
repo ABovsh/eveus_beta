@@ -52,3 +52,66 @@ class EveusPowerSensor(BaseNumericSensor):
     def get_value_from_state(self) -> float:
         """Get power value."""
         return self._client.state.power
+
+class EveusCounterEnergySensor(EveusEnergySensor):
+    """Base counter energy sensor."""
+    _attr_icon = "mdi:counter"
+
+class EveusCounterCostSensor(BaseNumericSensor):
+    """Base counter cost sensor."""
+    _attr_native_unit_of_measurement = "₴"
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_icon = "mdi:currency-uah"
+    _attr_suggested_display_precision = 0
+
+class EveusCounterAEnergySensor(EveusCounterEnergySensor):
+    """Counter A energy sensor."""
+    
+    def __init__(self, client) -> None:
+        """Initialize the sensor."""
+        super().__init__(client)
+        self._attr_name = "Counter A Energy"
+        self._attr_unique_id = f"{client._device_info.identifier}_counter_a_energy"
+
+    def get_value_from_state(self) -> float:
+        """Get counter A energy."""
+        return self._client.state.counter_a_energy
+
+class EveusCounterBEnergySensor(EveusCounterEnergySensor):
+    """Counter B energy sensor."""
+    
+    def __init__(self, client) -> None:
+        """Initialize the sensor."""
+        super().__init__(client)
+        self._attr_name = "Counter B Energy"
+        self._attr_unique_id = f"{client._device_info.identifier}_counter_b_energy"
+
+    def get_value_from_state(self) -> float:
+        """Get counter B energy."""
+        return self._client.state.counter_b_energy
+
+class EveusCounterACostSensor(EveusCounterCostSensor):
+    """Counter A cost sensor."""
+    
+    def __init__(self, client) -> None:
+        """Initialize the sensor."""
+        super().__init__(client)
+        self._attr_name = "Counter A Cost"
+        self._attr_unique_id = f"{client._device_info.identifier}_counter_a_cost"
+
+    def get_value_from_state(self) -> float:
+        """Get counter A cost."""
+        return self._client.state.counter_a_cost
+
+class EveusCounterBCostSensor(EveusCounterCostSensor):
+    """Counter B cost sensor."""
+    
+    def __init__(self, client) -> None:
+        """Initialize the sensor."""
+        super().__init__(client)
+        self._attr_name = "Counter B Cost"
+        self._attr_unique_id = f"{client._device_info.identifier}_counter_b_cost"
+
+    def get_value_from_state(self) -> float:
+        """Get counter B cost."""
+        return self._client.state.counter_b_cost
