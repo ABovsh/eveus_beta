@@ -500,13 +500,13 @@ async def async_setup_entry(
         ),
 
         # Temperature sensors
-        EveusSensor(updater, "Box Temperature", ATTR_TEMPERATURE_BOX,
-                   SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS,
-                   SensorStateClass.MEASUREMENT, "mdi:thermometer", 0),
+        EveusSensorBase(updater, "Box Temperature", ATTR_TEMPERATURE_BOX,
+                       SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS,
+                       SensorStateClass.MEASUREMENT, "mdi:thermometer", 0),
         
-        EveusSensor(updater, "Plug Temperature", ATTR_TEMPERATURE_PLUG,
-                   SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS,
-                   SensorStateClass.MEASUREMENT, "mdi:thermometer-high", 0),
+        EveusSensorBase(updater, "Plug Temperature", ATTR_TEMPERATURE_PLUG,
+                       SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS,
+                       SensorStateClass.MEASUREMENT, "mdi:thermometer-high", 0),
 
         # Time-based sensors
         EveusTimeSensor(updater, "Session Time", ATTR_SESSION_TIME),
