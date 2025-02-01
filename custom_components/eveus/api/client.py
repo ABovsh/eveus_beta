@@ -1,11 +1,13 @@
 """Eveus API client."""
 import logging
 import asyncio
+import time
 from typing import Any, Optional
 import aiohttp
 
 from .exceptions import CannotConnect, InvalidAuth, CommandError, TimeoutError
 from .models import DeviceInfo, DeviceState
+from ..const import SCAN_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,6 +25,11 @@ class EveusClient:
         self._max_errors = 3
         self._last_update = 0
         self._update_task: Optional[asyncio.Task] = None
+        self._entities = []
+
+    def register_entity(self, entity) -> None:
+        """Register an entity for updates."""
+        self._entities.append(entity)
 
     @property
     def available(self) -> bool:
@@ -53,13 +60,23 @@ class EveusClient:
         """Run the update loop."""
         while True:
             try:
-                await self.update()
-                await asyncio.sleep(30)  # Update every 30 seconds
+                current_time = time.time()
+                if current_time - self._last_update >= SCAN_INTERVAL.total_seconds():
+                    await self.update()
+                    self._last_update = current_time
+                    
+                    # Update all registered entities
+                    for entity in self._entities:
+                        if hasattr(entity, 'async_write_ha_state'):
+                            entity.async_write_ha_state()
+                
+                await asyncio.sleep(1)  # Short sleep to prevent CPU hogging
+                
             except asyncio.CancelledError:
                 break
             except Exception as err:
                 _LOGGER.error("Error in update loop: %s", str(err))
-                await asyncio.sleep(30)
+                await asyncio.sleep(5)  # Short delay on error
 
     async def update(self) -> None:
         """Update device state."""
