@@ -1,6 +1,21 @@
-"""Data models for Eveus."""
+"""Data models for Eveus API."""
 from dataclasses import dataclass
 from typing import Any, Optional
+
+@dataclass
+class DeviceInfo:
+    """Device information."""
+    host: str
+    username: str
+    password: str
+    model: str = "16A"
+    sw_version: Optional[str] = None
+    hw_version: Optional[str] = None
+
+    @property
+    def identifier(self) -> str:
+        """Get unique identifier."""
+        return self.host
 
 @dataclass
 class DeviceState:
