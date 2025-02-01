@@ -5,8 +5,8 @@ import time
 from typing import Any, Optional
 import aiohttp
 
-from .exceptions import CannotConnect, InvalidAuth, CommandError, TimeoutError
 from .models import DeviceInfo, DeviceState
+from .exceptions import CannotConnect, InvalidAuth, CommandError, TimeoutError
 from ..const import SCAN_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
@@ -68,15 +68,18 @@ class EveusClient:
                     # Update all registered entities
                     for entity in self._entities:
                         if hasattr(entity, 'async_write_ha_state'):
-                            entity.async_write_ha_state()
+                            try:
+                                entity.async_write_ha_state()
+                            except Exception as err:
+                                _LOGGER.error("Error updating entity: %s", str(err))
                 
-                await asyncio.sleep(1)  # Short sleep to prevent CPU hogging
+                await asyncio.sleep(1)
                 
             except asyncio.CancelledError:
                 break
             except Exception as err:
                 _LOGGER.error("Error in update loop: %s", str(err))
-                await asyncio.sleep(5)  # Short delay on error
+                await asyncio.sleep(5)
 
     async def update(self) -> None:
         """Update device state."""
@@ -116,7 +119,6 @@ class EveusClient:
                 ) as response:
                     response.raise_for_status()
                     
-                # Verify command execution
                 await self.update()
                 
             except Exception as err:
