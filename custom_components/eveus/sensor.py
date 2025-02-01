@@ -234,12 +234,13 @@ class EveusSensor(SensorEntity, RestoreEntity):
                 self._previous_value = state.state
         await self._updater.async_start_updates()
 
-class EveusStringSensor(EveusSensor):
+class EveusStringSensor(SensorEntity, RestoreEntity):
     """Sensor class for string-based values."""
     
-    _attr_state_class = None
-    _attr_native_unit_of_measurement = None
-    _attr_suggested_display_precision = None
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+    _attr_entity_registry_enabled_default = True
+    _attr_entity_registry_visible_default = True
 
     def __init__(
         self,
@@ -250,26 +251,61 @@ class EveusStringSensor(EveusSensor):
         icon: str = None,
         entity_category: EntityCategory = None
     ):
-        super().__init__(
-            updater=updater,
-            name=name,
-            key=key,
-            device_class=None,
-            native_unit=None,
-            state_class=None,
-            icon=icon,
-            precision=0,
-            entity_category=entity_category
-        )
+        """Initialize the string sensor."""
+        self._updater = updater
+        self._key = key
         self._mapper = mapper
+        self._previous_value = None
+        self._attr_name = name
+        self._attr_unique_id = f"{updater._host}_{name.lower().replace(' ', '_')}"
+        self._attr_icon = icon
+        self._attr_entity_category = entity_category
+        updater.register_sensor(self)
 
     @property
-    def native_value(self) -> str:
+    def device_info(self) -> dict[str, Any]:
+        """Return device information."""
+        return {
+            "identifiers": {(DOMAIN, self._updater._host)},
+            "name": "Eveus EV Charger",
+            "manufacturer": "Eveus",
+            "model": f"Eveus ({self._updater._host})",
+            "sw_version": self._updater.data.get("verFWMain", "Unknown"),
+            "hw_version": self._updater.data.get("verHW", "Unknown"),
+        }
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the state of the sensor."""
         try:
-            return self._mapper(self._updater.data)
+            value = self._mapper(self._updater.data)
+            self._previous_value = value
+            return value
         except (TypeError, ValueError, KeyError) as err:
             _LOGGER.debug("Error mapping value for %s: %s", self.name, str(err))
-            return "Unknown"
+            return self._previous_value if self._previous_value else "Unknown"
+
+    @property
+    def available(self) -> bool:
+        """Return if entity is available."""
+        return self._updater.available
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the state attributes."""
+        return {
+            "last_update": self._updater.last_update,
+            "host": self._updater._host,
+            **({} if self._previous_value is None else {"previous_value": self._previous_value})
+        }
+
+    async def async_added_to_hass(self) -> None:
+        """Handle entity which will be added."""
+        await super().async_added_to_hass()
+        if state := await self.async_get_last_state():
+            if state.state not in ('unknown', 'unavailable'):
+                self._previous_value = state.state
+        await self._updater.async_start_updates()
 
 class EveusTimeSensor(EveusSensor):
     """Time duration sensor with formatted attribute."""
