@@ -4,12 +4,6 @@ from datetime import timedelta
 DOMAIN = "eveus"
 SCAN_INTERVAL = timedelta(seconds=30)
 
-# API Constants
-API_TIMEOUT = 10
-API_RETRY_DELAY = 2
-API_MAX_RETRIES = 3
-
-# Model Constants
 MODEL_16A = "16A"
 MODEL_32A = "32A"
 MODELS = [MODEL_16A, MODEL_32A]
@@ -19,10 +13,8 @@ MODEL_MAX_CURRENT = {
 }
 MIN_CURRENT = 8
 
-# Configuration
 CONF_MODEL = "model"
 
-# Required Helper Entities
 REQUIRED_HELPERS = [
     "input_number.ev_battery_capacity",
     "input_number.ev_initial_soc",
@@ -30,7 +22,6 @@ REQUIRED_HELPERS = [
     "input_number.ev_target_soc",
 ]
 
-# State Mappings
 CHARGING_STATES = {
     0: "Startup",
     1: "System Test",
