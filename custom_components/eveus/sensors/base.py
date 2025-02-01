@@ -1,4 +1,4 @@
-"""Base sensor implementations."""
+"""Base sensor implementation."""
 from typing import Any, Optional
 
 from homeassistant.components.sensor import (
@@ -8,18 +8,18 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from ..api.client import EveusClient
 from ..const import DOMAIN
 
 class BaseEveusSensor(SensorEntity, RestoreEntity):
     """Base implementation for Eveus sensors."""
 
-    def __init__(self, client: EveusClient) -> None:
+    def __init__(self, client) -> None:
         """Initialize the sensor."""
         self._client = client
-        self._attr_has_entity_name = True
+        self._client.register_entity(self)
         self._previous_value = None
         self._attr_should_poll = False
+        self._attr_has_entity_name = True
     
     @property
     def device_info(self) -> dict[str, Any]:
