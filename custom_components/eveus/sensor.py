@@ -506,17 +506,39 @@ class EVSocPercentSensor(BaseEveusSensor):
         except (TypeError, ValueError, AttributeError):
             return None
 
-class TimeToTargetSocSensor(TextEntity):
+class TimeToTargetSocSensor(TextEntity, RestoreEntity):
+    """Time to target SOC text entity."""
     SENSOR_NAME = "Time to Target"
     _attr_icon = "mdi:timer"
     _attr_pattern = None
     _attr_mode = "text"
 
     def __init__(self, updater: EveusUpdater) -> None:
-        super().__init__()
+        """Initialize the text entity."""
         self._updater = updater
-        self._attr_unique_id = f"{updater._host}_time_to_target"
         self._attr_name = self.SENSOR_NAME
+        self._attr_unique_id = f"{updater._host}_time_to_target"
+        self._attr_has_entity_name = True
+        self._attr_should_poll = False
+        self._attr_entity_registry_enabled_default = True
+        self._attr_entity_registry_visible_default = True
+
+    @property
+    def device_info(self) -> dict[str, Any]:
+        """Return device information."""
+        return {
+            "identifiers": {(DOMAIN, self._updater._host)},
+            "name": "Eveus EV Charger",
+            "manufacturer": "Eveus",
+            "model": f"Eveus ({self._updater._host})",
+            "sw_version": self._updater.data.get("verFWMain", "Unknown"),
+            "hw_version": self._updater.data.get("verHW", "Unknown"),
+        }
+
+    @property
+    def available(self) -> bool:
+        """Return if entity is available."""
+        return self._updater.available
 
     @property
     def native_value(self) -> str:
@@ -531,7 +553,7 @@ class TimeToTargetSocSensor(TextEntity):
             remaining_kwh = (target_soc - current_soc) * battery_capacity / 100
             efficiency = (1 - correction / 100)
             power_kw = power_meas * efficiency / 1000
-           
+            
             if power_kw <= 0:
                 return "-"
 
@@ -557,6 +579,14 @@ class TimeToTargetSocSensor(TextEntity):
         except (TypeError, ValueError, AttributeError):
             return "-"
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return additional state attributes."""
+        return {
+            "last_update": self._updater.last_update,
+            "host": self._updater._host
+        }
+        
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
