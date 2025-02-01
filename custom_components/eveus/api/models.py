@@ -1,21 +1,6 @@
-"""Data models for Eveus API."""
+"""Data models for Eveus."""
 from dataclasses import dataclass
 from typing import Any, Optional
-
-@dataclass
-class DeviceInfo:
-    """Device information."""
-    host: str
-    username: str
-    password: str
-    model: str = "16A"
-    sw_version: Optional[str] = None
-    hw_version: Optional[str] = None
-
-    @property
-    def identifier(self) -> str:
-        """Get unique identifier."""
-        return self.host
 
 @dataclass
 class DeviceState:
@@ -38,7 +23,8 @@ class DeviceState:
     counter_b_energy: float
     counter_a_cost: float
     counter_b_cost: float
-    session_time: int = 0
+    session_time: int
+    one_charge: bool = False
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "DeviceState":
@@ -62,5 +48,6 @@ class DeviceState:
             counter_b_energy=float(data.get("IEM2", 0)),
             counter_a_cost=float(data.get("IEM1_money", 0)),
             counter_b_cost=float(data.get("IEM2_money", 0)),
-            session_time=int(data.get("sessionTime", 0))
+            session_time=int(data.get("sessionTime", 0)),
+            one_charge=data.get("oneCharge", 0) == 1
         )
