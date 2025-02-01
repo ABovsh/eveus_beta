@@ -129,9 +129,12 @@ class EveusSessionTimeSensor(BaseEveusSensor):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional attributes."""
-        attrs = super().extra_state_attributes
+        attrs = super().extra_state_attributes or {}  # Initialize if None
         if not self._client.state:
             return attrs
             
-        attrs["formatted_time"] = format_duration(self._client.state.session_time)
+        try:
+            attrs["formatted_time"] = format_duration(self._client.state.session_time)
+        except (TypeError, ValueError):
+            attrs["formatted_time"] = "0m"
         return attrs
