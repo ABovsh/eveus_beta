@@ -84,3 +84,50 @@ class EveusPlugTemperatureSensor(EveusTemperatureSensor):
     def get_value_from_state(self) -> float:
         """Get plug temperature value."""
         return self._client.state.temperature_plug
+
+class EveusSystemTimeSensor(BaseEveusSensor):
+    """System time sensor."""
+
+    def __init__(self, client) -> None:
+        """Initialize the sensor."""
+        super().__init__(client)
+        self._attr_name = "System Time"
+        self._attr_unique_id = f"{client._device_info.identifier}_system_time"
+        self._attr_icon = "mdi:clock-outline"
+
+    @property
+    def native_value(self) -> str:
+        """Return formatted system time."""
+        if not self._client.state:
+            return "unknown"
+        return format_system_time(self._client.state.system_time)
+
+class EveusSessionTimeSensor(BaseEveusSensor):
+    """Session time sensor."""
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.SECONDS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, client) -> None:
+        """Initialize the sensor."""
+        super().__init__(client)
+        self._attr_name = "Session Time"
+        self._attr_unique_id = f"{client._device_info.identifier}_session_time"
+        self._attr_icon = "mdi:timer"
+
+    @property
+    def native_value(self) -> int:
+        """Return session time in seconds."""
+        if not self._client.state:
+            return 0
+        return self._client.state.session_time
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return additional attributes."""
+        attrs = super().extra_state_attributes
+        if not self._client.state:
+            return attrs
+            
+        attrs["formatted_time"] = format_duration(self._client.state.session_time)
+        return attrs
