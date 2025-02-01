@@ -1,7 +1,4 @@
 """Platform for Eveus sensor integration."""
-import logging
-from typing import Any
-
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -11,6 +8,8 @@ from .sensors.energy import (
     EveusVoltageSensor,
     EveusCurrentSensor,
     EveusPowerSensor,
+    EveusSessionEnergySensor,
+    EveusTotalEnergySensor,
     EveusCounterAEnergySensor,
     EveusCounterBEnergySensor,
     EveusCounterACostSensor,
@@ -30,8 +29,6 @@ from .sensors.ev import (
     TimeToTargetSocSensor,
 )
 
-_LOGGER = logging.getLogger(__name__)
-
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -50,6 +47,8 @@ async def async_setup_entry(
         EveusPlugTemperatureSensor(client),
         EveusSystemTimeSensor(client),
         EveusSessionTimeSensor(client),
+        EveusSessionEnergySensor(client),
+        EveusTotalEnergySensor(client),
         EveusCounterAEnergySensor(client),
         EveusCounterBEnergySensor(client),
         EveusCounterACostSensor(client),
