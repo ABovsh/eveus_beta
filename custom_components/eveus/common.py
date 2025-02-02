@@ -67,16 +67,21 @@ class EveusUpdater:
             self._update_task = asyncio.create_task(self._update_loop())
 
     async def _update_loop(self) -> None:
-        """Handle updates with improved error handling."""
-        while True:
-            try:
-                await self._update()
-                await asyncio.sleep(SCAN_INTERVAL.total_seconds())
-            except asyncio.CancelledError:
-                break
-            except Exception as err:
-                _LOGGER.error("Error in update loop: %s", str(err))
-                await asyncio.sleep(SCAN_INTERVAL.total_seconds())
+            """Handle updates with improved error handling."""
+            while True:
+                try:
+                    start_time = time.time()
+                    await self._update()
+                    
+                    # Calculate sleep time to maintain exact interval
+                    elapsed = time.time() - start_time
+                    sleep_time = max(0, SCAN_INTERVAL.total_seconds() - elapsed)
+                    await asyncio.sleep(sleep_time)
+                except asyncio.CancelledError:
+                    break
+                except Exception as err:
+                    _LOGGER.error("Error updating data: %s", str(err))
+                    await asyncio.sleep(5)  # Short retry on error
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create client session."""
