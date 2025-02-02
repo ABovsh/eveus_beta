@@ -78,14 +78,7 @@ class EveusCurrentNumber(EveusNumberEntity):
         """Set new current value."""
         value = int(min(self._attr_native_max_value, max(self._attr_native_min_value, value)))
         
-        if await send_eveus_command(
-            self.hass,  # ADDED: Required first parameter
-            self._updater.host,  # FIXED: Remove underscore
-            self._updater.username,  # FIXED: Remove underscore
-            self._updater.password,  # FIXED: Remove underscore
-            "currentSet",
-            value
-        ):
+        if await self._updater.send_command("currentSet", value):
             self._attr_native_value = float(value)
 
     async def _async_restore_state(self, state) -> None:
