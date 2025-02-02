@@ -29,6 +29,7 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
 
     _attr_entity_category = EntityCategory.CONFIG
     _command: str = None
+    _state_key: str = None
     
     def __init__(self, updater: EveusUpdater) -> None:
         """Initialize the switch."""
@@ -44,6 +45,8 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
         """Send command to switch."""
         if self._command is None:
             raise NotImplementedError("_command must be defined")
+        
+        _LOGGER.debug("Sending command %s=%s to %s", self._command, value, self._updater._host)
             
         if await send_eveus_command(
             self._updater._host,
@@ -56,6 +59,16 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
             self._is_on = bool(value)
             self.async_write_ha_state()
 
+    async def async_update(self) -> None:
+        """Update state."""
+        if self._updater.available and self._state_key:
+            value = self._updater.data.get(self._state_key)
+            if value is not None:
+                new_state = bool(int(value))
+                if new_state != self._is_on:
+                    self._is_on = new_state
+                    _LOGGER.debug("%s state updated to %s", self.name, self._is_on)
+                    
 class EveusStopChargingSwitch(BaseSwitchEntity):
     """Representation of Eveus charging control switch."""
 
