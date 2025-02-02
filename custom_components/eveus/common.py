@@ -93,20 +93,24 @@ class EveusUpdater:
 
     async def _update(self) -> None:
         """Update the data."""
+        session = None
         try:
             session = await self._get_session()
             async with session.post(
                 f"http://{self._host}/main",
                 auth=aiohttp.BasicAuth(self._username, self._password),
-                timeout=UPDATE_TIMEOUT
+                timeout=UPDATE_TIMEOUT,
             ) as response:
                 response.raise_for_status()
-                data = await response.json()
+                data = await response.text()  # First get raw text
+                _LOGGER.debug("Raw response: %s", data)
                 
-                if not isinstance(data, dict):
-                    raise ValueError(f"Invalid data format received: {type(data)}")
-                
-                self._data = data
+                try:
+                    self._data = {} if not data else response.json()
+                except ValueError as json_err:
+                    _LOGGER.error("Failed to parse JSON response: %s. Raw data: %s", json_err, data)
+                    return
+
                 self._available = True
                 self._last_update = time.time()
                 self._error_count = 0
@@ -118,21 +122,20 @@ class EveusUpdater:
                         _LOGGER.error(
                             "Error updating entity %s: %s",
                             getattr(entity, 'name', 'unknown'),
-                            str(entity_err)
+                            str(entity_err),
                         )
 
         except aiohttp.ClientError as err:
             self._error_count += 1
             self._available = False if self._error_count >= self._max_errors else True
             _LOGGER.error("Connection error: %s", str(err))
-        except ValueError as err:
-            self._error_count += 1
-            self._available = False if self._error_count >= self._max_errors else True
-            _LOGGER.error("Data error: %s", str(err))
         except Exception as err:
             self._error_count += 1
             self._available = False if self._error_count >= self._max_errors else True
-            _LOGGER.error("Unexpected error: %s", str(err))
+            _LOGGER.error("Unexpected error: %s", str(err), exc_info=True)
+        finally:
+            if session and not session.closed:
+                await session.close()
             
     async def async_shutdown(self) -> None:
         """Shutdown the updater."""
