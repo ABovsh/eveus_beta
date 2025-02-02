@@ -79,12 +79,12 @@ class EveusCurrentNumber(EveusNumberEntity):
         value = int(min(self._attr_native_max_value, max(self._attr_native_min_value, value)))
         
         if await send_eveus_command(
-            self._updater._host,
-            self._updater._username,
-            self._updater._password,
+            self.hass,  # ADDED: Required first parameter
+            self._updater.host,  # FIXED: Remove underscore
+            self._updater.username,  # FIXED: Remove underscore
+            self._updater.password,  # FIXED: Remove underscore
             "currentSet",
-            value,
-            await self._updater._get_session()
+            value
         ):
             self._attr_native_value = float(value)
 
@@ -103,22 +103,20 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the Eveus number entities."""
-    updater = EveusUpdater(
-        host=entry.data[CONF_HOST],
-        username=entry.data[CONF_USERNAME],
-        password=entry.data[CONF_PASSWORD],
-        hass=hass,
-    )
+    # FIXED: Get existing updater from hass.data
+    data = hass.data[DOMAIN][entry.entry_id]
+    updater = data["updater"]
+    model = entry.data[CONF_MODEL]
 
     entities = [
-        EveusCurrentNumber(updater, entry.data[CONF_MODEL]),
+        EveusCurrentNumber(updater, model),
     ]
 
     # Initialize entities dict if needed
-    if "entities" not in hass.data[DOMAIN][entry.entry_id]:
-        hass.data[DOMAIN][entry.entry_id]["entities"] = {}
+    if "entities" not in data:
+        data["entities"] = {}
     
-    hass.data[DOMAIN][entry.entry_id]["entities"]["number"] = {
+    data["entities"]["number"] = {
         entity.unique_id: entity for entity in entities
     }
 
