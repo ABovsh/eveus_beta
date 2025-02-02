@@ -266,17 +266,6 @@ class EveusSystemTimeSensor(BaseEveusEntity, SensorEntity):
         except (TypeError, ValueError):
             return None
 
-class EveusSessionTimeSecondsSensor(BaseEveusNumericEntity):
-    """Session time in seconds sensor."""
-
-    ENTITY_NAME = "Session Time Seconds"
-    _key = ATTR_SESSION_TIME
-    _attr_device_class = SensorDeviceClass.DURATION
-    _attr_native_unit_of_measurement = UnitOfTime.SECONDS
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:timer"
-    _attr_suggested_display_precision = 0
-
 class EveusSessionTimeSensor(BaseEveusEntity, SensorEntity):
     """Formatted session time sensor."""
 
@@ -466,7 +455,6 @@ async def async_setup_entry(
         EveusPlugTemperatureSensor(updater),
         EveusBatteryVoltageSensor(updater),
         EveusSessionTimeSensor(updater),
-        EveusSessionTimeSecondsSensor(updater),
         EveusSystemTimeSensor(updater),
         EveusConnectionErrorsSensor(updater),
         EveusCounterAEnergySensor(updater),
