@@ -423,12 +423,9 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the Eveus sensors."""
-    updater = EveusUpdater(
-        host=entry.data[CONF_HOST],
-        username=entry.data[CONF_USERNAME],
-        password=entry.data[CONF_PASSWORD],
-        hass=hass,
-    )
+    # FIXED: Get existing updater from hass.data
+    data = hass.data[DOMAIN][entry.entry_id]
+    updater = data["updater"]
 
     sensors = [
         EveusVoltageSensor(updater),
@@ -455,10 +452,10 @@ async def async_setup_entry(
         TimeToTargetSocSensor(updater),
     ]
 
-    if "entities" not in hass.data[DOMAIN][entry.entry_id]:
-        hass.data[DOMAIN][entry.entry_id]["entities"] = {}
+    if "entities" not in data:
+        data["entities"] = {}
 
-    hass.data[DOMAIN][entry.entry_id]["entities"]["sensor"] = {
+    data["entities"]["sensor"] = {
         sensor.unique_id: sensor for sensor in sensors
     }
 
