@@ -29,12 +29,11 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
 
     _attr_entity_category = EntityCategory.CONFIG
     _command: str = None
-    _default_state: bool = False
     
     def __init__(self, updater: EveusUpdater) -> None:
         """Initialize the switch."""
         super().__init__(updater)
-        self._is_on = self._default_state
+        self._is_on = False
 
     @property
     def is_on(self) -> bool:
@@ -63,7 +62,6 @@ class EveusStopChargingSwitch(BaseSwitchEntity):
     ENTITY_NAME = "Stop Charging"
     _attr_icon = "mdi:ev-station"
     _command = "evseEnabled"
-    _default_state = True  # Default to enabled
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn on charging."""
@@ -86,7 +84,6 @@ class EveusOneChargeSwitch(BaseSwitchEntity):
     ENTITY_NAME = "One Charge"
     _attr_icon = "mdi:lightning-bolt"
     _command = "oneCharge"
-    _default_state = True  # Default to enabled
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Enable one charge mode."""
@@ -107,14 +104,13 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
     """Representation of Eveus reset counter A switch."""
 
     ENTITY_NAME = "Reset Counter A"
-    _attr_icon = "mdi:counter"
+    _attr_icon = "mdi:refresh-circle"
     _command = "rstEM1"
-    _default_state = False  # Always default to off
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Reset counter A."""
         await self._send_switch_command(0)
-        self._is_on = False  # Always false as it's a momentary switch
+        self._is_on = True  # Update local state
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
@@ -124,11 +120,11 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
         self.async_write_ha_state()
 
     async def async_update(self) -> None:
-        """Update state."""
+        """Update state based on IEM1 value."""
         if self._updater.available:
             try:
-                # Reset switch is always off, it's momentary
-                self._is_on = False
+                iem1_value = self._updater.data.get("IEM1")
+                self._is_on = False if iem1_value in (None, "", 0, "0", "null", "undefined", "ERROR") else True
             except (TypeError, ValueError):
                 self._is_on = False
 
