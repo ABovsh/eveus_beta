@@ -148,6 +148,18 @@ class EveusTotalEnergySensor(EveusEnergyBaseSensor):
     _key = ATTR_TOTAL_ENERGY
     _attr_icon = "mdi:battery-charging-100"
 
+class EveusConnectionErrorsSensor(EveusDiagnosticSensor):
+    """Failed requests counter sensor."""
+
+    ENTITY_NAME = "Connection Errors"
+    _attr_icon = "mdi:connection"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def native_value(self) -> int:
+        """Return number of consecutive failed requests."""
+        return self._updater.failed_requests
+
 class EveusStateSensor(EveusDiagnosticSensor):
     ENTITY_NAME = "State"
 
@@ -230,52 +242,65 @@ class EveusPlugTemperatureSensor(EveusNumericSensor):
     _attr_suggested_display_precision = 0
 
 class EveusSystemTimeSensor(EveusSensorBase):
+    """System time sensor with timezone correction."""
+
     ENTITY_NAME = "System Time"
     _attr_icon = "mdi:clock-outline"
 
     @property
     def native_value(self) -> str:
-        """Return formatted system time."""
+        """Return timezone-corrected system time."""
         try:
-            timestamp = self._updater.data.get(ATTR_SYSTEM_TIME)
+            timestamp = self._updater.data.get("systemTime")
+            timezone_offset = self._updater.data.get("timeZone", 0)
+            
             if timestamp is None:
                 return None
-            return datetime.fromtimestamp(int(timestamp)).strftime("%H:%M")
+                
+            # Convert timestamp to datetime and adjust for timezone
+            dt = datetime.fromtimestamp(int(timestamp))
+            # Subtract timezone offset as it's added by the device
+            adjusted_dt = dt - timedelta(hours=timezone_offset)
+            return adjusted_dt.strftime("%H:%M")
         except (TypeError, ValueError):
             return None
 
-class EveusSessionTimeSensor(EveusNumericSensor):
-    ENTITY_NAME = "Session Time"
-    _key = ATTR_SESSION_TIME
+class EveusSessionTimeSecondsSensor(EveusNumericSensor):
+    """Session time in seconds sensor."""
+
+    ENTITY_NAME = "Session Time Seconds"
+    _key = "sessionTime"
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.SECONDS
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:timer"
     _attr_suggested_display_precision = 0
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+class EveusSessionTimeSensor(EveusSensorBase):
+    """Formatted session time sensor."""
+
+    ENTITY_NAME = "Session Time"
+    _attr_icon = "mdi:timer"
+    _attr_device_class = SensorDeviceClass.DURATION
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return additional state attributes."""
-        attrs = super().extra_state_attributes or {}
+    def native_value(self) -> str:
+        """Return formatted session time."""
         try:
-            seconds = int(self.native_value or 0)
+            seconds = int(self._updater.data.get("sessionTime", 0))
             days = seconds // 86400
             hours = (seconds % 86400) // 3600
             minutes = (seconds % 3600) // 60
 
             if days > 0:
-                formatted_time = f"{days}d {hours:02d}h {minutes:02d}m"
+                return f"{days}d {hours}h {minutes}m"
             elif hours > 0:
-                formatted_time = f"{hours}h {minutes:02d}m"
-            else:
-                formatted_time = f"{minutes}m"
-            
-            attrs["formatted_time"] = formatted_time
+                return f"{hours}h {minutes}m"
+            return f"{minutes}m"
             
         except (TypeError, ValueError):
-            attrs["formatted_time"] = "0m"
-            
-        return attrs
+            return "0m"
 
 class EveusCounterAEnergySensor(EveusEnergyBaseSensor):
     ENTITY_NAME = "Counter A Energy"
@@ -444,6 +469,8 @@ async def async_setup_entry(
         EveusBatteryVoltageSensor(updater),
         EveusSystemTimeSensor(updater),
         EveusSessionTimeSensor(updater),
+        EveusSessionTimeSecondsSensor(updater),
+        EveusConnectionErrorsSensor(updater)
         EveusCounterAEnergySensor(updater),
         EveusCounterBEnergySensor(updater),
         EveusCounterACostSensor(updater),
