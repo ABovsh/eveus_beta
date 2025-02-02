@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import asyncio
 import time
-import json  # Added import
+import json
 from typing import Any
 
 import aiohttp
@@ -19,8 +19,8 @@ _LOGGER = logging.getLogger(__name__)
 # Common Constants
 MAX_RETRIES = 3
 RETRY_DELAY = 2
-COMMAND_TIMEOUT = 5
-UPDATE_TIMEOUT = 10
+COMMAND_TIMEOUT = 3  # Reduced from 5
+UPDATE_TIMEOUT = 5  # Reduced from 10
 MIN_UPDATE_INTERVAL = 2
 MIN_COMMAND_INTERVAL = 1
 
@@ -42,6 +42,8 @@ class EveusUpdater:
         self._update_lock = asyncio.Lock()
         self._error_count = 0
         self._max_errors = 3
+        self._retry_count = 0
+        self._max_retries = 3
 
     def register_entity(self, entity: "BaseEveusEntity") -> None:
         """Register an entity for updates."""
@@ -84,8 +86,13 @@ class EveusUpdater:
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create client session."""
         if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=5)
-            connector = aiohttp.TCPConnector(limit=1, force_close=True, enable_cleanup_closed=True)
+            timeout = aiohttp.ClientTimeout(total=UPDATE_TIMEOUT)
+            connector = aiohttp.TCPConnector(
+                limit=1,
+                force_close=True,
+                enable_cleanup_closed=True,
+                ssl=False
+            )
             self._session = aiohttp.ClientSession(
                 timeout=timeout,
                 connector=connector,
@@ -100,7 +107,7 @@ class EveusUpdater:
             session = await self._get_session()
             
             # Timeout context
-            timeout = aiohttp.ClientTimeout(total=5, connect=3)
+            timeout = aiohttp.ClientTimeout(total=UPDATE_TIMEOUT, connect=2)
             
             async with session.post(
                 f"http://{self._host}/main",
@@ -112,7 +119,7 @@ class EveusUpdater:
                 text = await response.text()
                 
                 try:
-                    data = json.loads(text)  # Fixed JSON parsing
+                    data = json.loads(text)
                     
                     if not isinstance(data, dict):
                         _LOGGER.error("Unexpected data type: %s", type(data))
@@ -122,6 +129,7 @@ class EveusUpdater:
                     self._available = True
                     self._last_update = time.time()
                     self._error_count = 0
+                    self._retry_count = 0
 
                     for entity in self._entities:
                         try:
@@ -139,13 +147,31 @@ class EveusUpdater:
 
         except aiohttp.ClientError as err:
             self._error_count += 1
+            self._retry_count += 1
             self._available = False if self._error_count >= self._max_errors else True
-            _LOGGER.error("Connection error for %s: %s", self._host, str(err))
+            
+            if self._retry_count < self._max_retries:
+                _LOGGER.warning("Connection error for %s (attempt %d of %d): %s",
+                              self._host, self._retry_count, self._max_retries, str(err))
+                await asyncio.sleep(RETRY_DELAY)
+            else:
+                _LOGGER.error("Connection error for %s after %d retries: %s",
+                            self._host, self._max_retries, str(err))
+                self._retry_count = 0
             
         except asyncio.TimeoutError:
             self._error_count += 1
+            self._retry_count += 1
             self._available = False if self._error_count >= self._max_errors else True
-            _LOGGER.error("Timeout error for %s", self._host)
+            
+            if self._retry_count < self._max_retries:
+                _LOGGER.warning("Timeout error for %s (attempt %d of %d)",
+                              self._host, self._retry_count, self._max_retries)
+                await asyncio.sleep(RETRY_DELAY)
+            else:
+                _LOGGER.error("Timeout error for %s after %d retries",
+                            self._host, self._max_retries)
+                self._retry_count = 0
             
         except Exception as err:
             self._error_count += 1
@@ -156,7 +182,7 @@ class EveusUpdater:
             # Always close the current session
             if session and not session.closed:
                 await session.close()
-            self._session = None  # Force new session creation on next update
+            self._session = None
             
     async def async_shutdown(self) -> None:
         """Shutdown the updater and cleanup resources."""
@@ -319,27 +345,40 @@ async def send_eveus_command(
     session: aiohttp.ClientSession | None = None
 ) -> bool:
     """Send command to Eveus device."""
+    should_close = False
+    retry_count = 0
+    max_retries = 3
+
     if session is None:
-        timeout = aiohttp.ClientTimeout(total=10, connect=5)
-        connector = aiohttp.TCPConnector(limit=1, force_close=True)
+        timeout = aiohttp.ClientTimeout(total=COMMAND_TIMEOUT, connect=2)
+        connector = aiohttp.TCPConnector(limit=1, force_close=True, ssl=False)
         session = aiohttp.ClientSession(timeout=timeout, connector=connector)
         should_close = True
-    else:
-        should_close = False
 
-    try:
-        async with session.post(
-            f"http://{host}/pageEvent",
-            auth=aiohttp.BasicAuth(username, password),
-            headers={"Content-type": "application/x-www-form-urlencoded"},
-            data=f"pageevent={command}&{command}={value}",
-            timeout=COMMAND_TIMEOUT,
-        ) as response:
-            response.raise_for_status()
-            return True
-    except Exception as err:
-        _LOGGER.error("Failed to send command %s: %s", command, str(err))
-        return False
-    finally:
-        if should_close:
-            await session.close()
+    while retry_count < max_retries:
+        try:
+            async with session.post(
+                f"http://{host}/pageEvent",
+                auth=aiohttp.BasicAuth(username, password),
+                headers={"Content-type": "application/x-www-form-urlencoded"},
+                data=f"pageevent={command}&{command}={value}",
+                timeout=COMMAND_TIMEOUT,
+            ) as response:
+                response.raise_for_status()
+                return True
+
+        except Exception as err:
+            retry_count += 1
+            if retry_count < max_retries:
+                _LOGGER.warning("Failed to send command %s (attempt %d of %d): %s",
+                              command, retry_count, max_retries, str(err))
+                await asyncio.sleep(RETRY_DELAY)
+            else:
+                _LOGGER.error("Failed to send command %s after %d retries: %s",
+                            command, max_retries, str(err))
+            
+        finally:
+            if should_close and session and not session.closed:
+                await session.close()
+
+    return False
