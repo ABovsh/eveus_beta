@@ -12,13 +12,13 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from .const import DOMAIN
 from .common import EveusUpdater
 
-PLATFORMS = [
+_LOGGER = logging.getLogger(__name__)
+
+PLATFORMS: list[Platform] = [
     Platform.SENSOR,
     Platform.SWITCH,
     Platform.NUMBER,
 ]
-
-_LOGGER = logging.getLogger(__name__)
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the Eveus component."""
@@ -28,7 +28,10 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Eveus from a config entry."""
     try:
-        # Create and store the updater
+        # Initialize data structure
+        hass.data.setdefault(DOMAIN, {})
+        
+        # Create updater instance
         updater = EveusUpdater(
             host=entry.data[CONF_HOST],
             username=entry.data[CONF_USERNAME],
@@ -36,13 +39,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass=hass,
         )
 
+        # Store entry data
         hass.data[DOMAIN][entry.entry_id] = {
             "title": entry.title,
             "updater": updater,
-            "entities": {}
+            "entities": {},
         }
 
-        # Setup platforms
+        # Set up platforms
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
         return True
 
@@ -53,18 +57,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     try:
-        # Get updater
-        updater = hass.data[DOMAIN][entry.entry_id].get("updater")
-        
+        # Get updater instance
+        data = hass.data[DOMAIN].get(entry.entry_id, {})
+        updater = data.get("updater")
+
         # Unload platforms
         unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-
-        if unload_ok:
+        
+        if unload_ok and updater:
             # Shutdown updater
-            if updater:
-                await updater.async_shutdown()
+            await updater.async_shutdown()
             hass.data[DOMAIN].pop(entry.entry_id)
-
+        
         return unload_ok
 
     except Exception as ex:
