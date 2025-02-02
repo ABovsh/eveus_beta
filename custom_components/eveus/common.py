@@ -5,22 +5,41 @@ import logging
 import asyncio
 import time
 import json
-from typing import Any
+from typing import Any, Optional
+from contextlib import asynccontextmanager
 
 import aiohttp
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.restore_state import RestoreEntity
-from homeassistant.helpers import aiohttp_client  # ADDED
+from homeassistant.helpers import aiohttp_client
+from homeassistant.exceptions import HomeAssistantError
 
 from .const import DOMAIN, SCAN_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
 
-# Common Constants
-RETRY_DELAY = 10
+# Constants
+RETRY_DELAY = 10  # Single retry after 10 seconds
 COMMAND_TIMEOUT = 5
 UPDATE_TIMEOUT = 5
+SESSION_TIMEOUT = aiohttp.ClientTimeout(total=10, connect=3)
+CONNECTION_POOL_SIZE = 2
+
+class EveusError(HomeAssistantError):
+    """Base class for Eveus errors."""
+
+class EveusConnectionError(EveusError):
+    """Error indicating connection issues."""
+
+@asynccontextmanager
+async def get_eveus_session(hass: HomeAssistant) -> aiohttp.ClientSession:
+    """Get aiohttp session with proper configuration."""
+    session = aiohttp_client.async_get_clientsession(hass)
+    try:
+        yield session
+    finally:
+        # Session will be closed by HA
 
 async def send_eveus_command(
     host: str, 
@@ -28,15 +47,9 @@ async def send_eveus_command(
     password: str, 
     command: str, 
     value: Any,
-    session: aiohttp.ClientSession | None = None
+    session: Optional[aiohttp.ClientSession] = None
 ) -> bool:
-    """Send command to Eveus device."""
-    should_close = False
-
-    # CHANGED: Use HA's aiohttp client
-    if session is None:
-        session = aiohttp_client.async_get_clientsession()
-
+    """Send command to Eveus device with simple retry."""
     try:
         async with session.post(
             f"http://{host}/pageEvent",
@@ -48,32 +61,21 @@ async def send_eveus_command(
             response.raise_for_status()
             return True
     
-    except aiohttp.ClientResponseError as err:
+    except aiohttp.ClientError as err:
         _LOGGER.error(
-            "Command %s failed with HTTP %s: %s", 
-            command,
-            err.status,
-            err.message
-        )
-    
-    except Exception as err:
-        _LOGGER.error(
-            "Command %s failed: %s (Host: %s)",  # <-- Added host context
+            "Command %s failed: %s (Host: %s)",
             command,
             str(err),
             host
         )
-
-    finally:
-        if should_close and session and not session.closed:
-            await session.close()
+        return False
 
 class EveusUpdater:
     """Class to handle Eveus data updates."""
 
     def __init__(self, host: str, username: str, password: str, hass: HomeAssistant) -> None:
         """Initialize the updater."""
-        self.host = host  # Public attribute
+        self.host = host
         self.username = username
         self.password = password
         self._hass = hass
@@ -85,8 +87,23 @@ class EveusUpdater:
         self._last_update = 0
         self._update_lock = asyncio.Lock()
         self._command_lock = asyncio.Lock()
-        self._retry_count = 0
-        self._max_retries = 1
+        self._retry_needed = False
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create client session."""
+        if not self._session or self._session.closed:
+            connector = aiohttp.TCPConnector(
+                limit=CONNECTION_POOL_SIZE,
+                force_close=True,
+                enable_cleanup_closed=True,
+                ssl=False
+            )
+            self._session = aiohttp.ClientSession(
+                timeout=SESSION_TIMEOUT,
+                connector=connector,
+                headers={"Connection": "close"}
+            )
+        return self._session
 
     def register_entity(self, entity: "BaseEveusEntity") -> None:
         """Register an entity for updates."""
@@ -104,33 +121,14 @@ class EveusUpdater:
         """Return if updater is available."""
         return self._available
 
-    async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create client session."""
-        if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=5)
-            connector = aiohttp.TCPConnector(
-                limit=1,
-                force_close=True,
-                enable_cleanup_closed=True,
-                ssl=False
-            )
-            self._session = aiohttp.ClientSession(
-                timeout=timeout,
-                connector=connector,
-                headers={"Connection": "close"}
-            )
-        return self._session
-
     async def _update(self) -> None:
-        """Update the data."""
+        """Update the data with simple retry."""
         try:
             session = await self._get_session()
-            # Corrected: Use self.host instead of self.host
             async with session.post(
                 f"http://{self.host}/main",
                 auth=aiohttp.BasicAuth(self.username, self.password),
-                timeout=aiohttp.ClientTimeout(total=5, connect=3),
-                headers={"Connection": "close"},
+                timeout=SESSION_TIMEOUT,
             ) as response:
                 response.raise_for_status()
                 text = await response.text()
@@ -140,14 +138,13 @@ class EveusUpdater:
                     if not isinstance(data, dict):
                         raise ValueError(f"Unexpected data type: {type(data)}")
                     
-                    # Only update if data has changed
                     if data != self._data:
                         self._data = data
                         self._available = True
                         self._last_update = time.time()
-                        self._retry_count = 0
+                        self._retry_needed = False
 
-                        # Update all registered entities
+                        # Update registered entities
                         for entity in self._entities:
                             if hasattr(entity, 'hass') and entity.hass:
                                 try:
@@ -165,38 +162,24 @@ class EveusUpdater:
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             self._available = False
-            if self._retry_count < self._max_retries:
-                self._retry_count += 1
-                _LOGGER.warning(
-                    "Connection error for %s (retry %d/%d): %s",
-                    self.host, self._retry_count, self._max_retries, str(err)
-                )
-                await asyncio.sleep(RETRY_DELAY)
-            else:
-                self._retry_count = 0
-                _LOGGER.error("Connection error for %s: %s", self.host, str(err))
-                
+            self._retry_needed = True
+            _LOGGER.error("Connection error for %s: %s", self.host, str(err))
+            
         except Exception as err:
             self._available = False
             _LOGGER.error("Error updating data for %s: %s", self.host, str(err))
-            
-        finally:
-            if session and not session.closed:
-                await session.close()
-            self._session = None
 
-    async def send_command(
-        self, command: str, value: Any
-    ) -> bool:
+    async def send_command(self, command: str, value: Any) -> bool:
         """Send command to device with proper session management."""
-        return await send_eveus_command(
-            self.host,  # CHANGED: Use public attribute
-            self.username,
-            self.password,
-            command,
-            value,
-            await self._get_session()
-        )
+        async with self._command_lock:
+            return await send_eveus_command(
+                self.host,
+                self.username,
+                self.password,
+                command,
+                value,
+                await self._get_session()
+            )
 
     async def async_start_updates(self) -> None:
         """Start the update loop."""
@@ -205,13 +188,20 @@ class EveusUpdater:
             _LOGGER.debug("Started update loop for %s", self.host)
 
     async def update_loop(self) -> None:
-        """Handle update loop."""
+        """Handle update loop with simple retry."""
         _LOGGER.debug("Starting update loop for %s", self.host)
         while True:
             try:
                 async with self._update_lock:
                     await self._update()
+                    
+                # Simple retry after 10 seconds if needed
+                if self._retry_needed:
+                    await asyncio.sleep(RETRY_DELAY)
+                    continue
+                    
                 await asyncio.sleep(SCAN_INTERVAL.total_seconds())
+                    
             except asyncio.CancelledError:
                 break
             except Exception as err:
@@ -219,7 +209,7 @@ class EveusUpdater:
                 await asyncio.sleep(RETRY_DELAY)
 
     async def async_shutdown(self) -> None:
-        """Shutdown the updater."""
+        """Shutdown the updater with proper cleanup."""
         if self._update_task:
             self._update_task.cancel()
             try:
@@ -249,7 +239,6 @@ class BaseEveusEntity(RestoreEntity, Entity):
             raise NotImplementedError("ENTITY_NAME must be defined in child class")
 
         self._attr_name = self.ENTITY_NAME
-        # Corrected: Use updater.host instead of updater.host
         self._attr_unique_id = f"{updater.host}_{self.ENTITY_NAME.lower().replace(' ', '_')}"
 
     @property
@@ -261,7 +250,6 @@ class BaseEveusEntity(RestoreEntity, Entity):
     def device_info(self) -> dict[str, Any]:
         """Return device information."""
         return {
-            # Corrected: Use self._updater.host instead of self._updater.host
             "identifiers": {(DOMAIN, self._updater.host)},
             "name": "Eveus EV Charger",
             "manufacturer": "Eveus",
