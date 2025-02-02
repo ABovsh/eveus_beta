@@ -83,77 +83,80 @@ class EveusUpdater:
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create client session."""
         if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=10, connect=5)
-            connector = aiohttp.TCPConnector(limit=1, force_close=True)
-            self._session = aiohttp.ClientSession(timeout=timeout, connector=connector)
+            timeout = aiohttp.ClientTimeout(total=5)
+            connector = aiohttp.TCPConnector(limit=1, force_close=True, enable_cleanup_closed=True)
+            self._session = aiohttp.ClientSession(
+                timeout=timeout,
+                connector=connector,
+                headers={"Connection": "close"}
+            )
         return self._session
 
     async def _update(self) -> None:
         """Update the data."""
+        session = None
         try:
             session = await self._get_session()
+            
+            # Create timeout context for this specific request
+            timeout = aiohttp.ClientTimeout(total=5, connect=3)
+            
             async with session.post(
                 f"http://{self._host}/main",
                 auth=aiohttp.BasicAuth(self._username, self._password),
-                timeout=UPDATE_TIMEOUT,
+                timeout=timeout,
+                headers={"Connection": "close"},  # Force connection close after request
             ) as response:
                 response.raise_for_status()
                 text = await response.text()
+                
                 try:
                     data = response.json(content=text)
-                except ValueError:
-                    _LOGGER.error("Invalid JSON received: %s", text)
-                    return
-                
-                if not isinstance(data, dict):
-                    _LOGGER.error("Unexpected data type: %s", type(data))
-                    return
-                
-                _LOGGER.debug(
-                    "Raw data update for %s: %s", 
-                    self._host,
-                    text
-                )
+                    
+                    if not isinstance(data, dict):
+                        _LOGGER.error("Unexpected data type: %s", type(data))
+                        return
+                    
+                    self._data = data
+                    self._available = True
+                    self._last_update = time.time()
+                    self._error_count = 0
 
-                self._data = data
-                self._available = True
-                self._last_update = time.time()
-                self._error_count = 0
-
-                for entity in self._entities:
-                    try:
-                        entity.async_write_ha_state()
-                    except Exception as err:
-                        _LOGGER.error(
-                            "Error updating entity %s: %s",
-                            getattr(entity, 'name', 'unknown'),
-                            str(err)
-                        )
+                    for entity in self._entities:
+                        try:
+                            entity.async_write_ha_state()
+                        except Exception as err:
+                            _LOGGER.error(
+                                "Error updating entity %s: %s",
+                                getattr(entity, 'name', 'unknown'),
+                                str(err)
+                            )
+                            
+                except ValueError as json_err:
+                    _LOGGER.error("Invalid JSON received: %s. Raw data: %s", json_err, text)
+                    return
 
         except aiohttp.ClientError as err:
             self._error_count += 1
             self._available = False if self._error_count >= self._max_errors else True
             _LOGGER.error("Connection error for %s: %s", self._host, str(err))
-        except asyncio.TimeoutError as err:
+            
+        except asyncio.TimeoutError:
             self._error_count += 1
             self._available = False if self._error_count >= self._max_errors else True
-            _LOGGER.error("Timeout error for %s: %s", self._host, str(err))
+            _LOGGER.error("Timeout error for %s", self._host)
+            
         except Exception as err:
             self._error_count += 1
             self._available = False if self._error_count >= self._max_errors else True
             _LOGGER.error("Error updating data for %s: %s", self._host, str(err), exc_info=True)
             
-    async def async_shutdown(self) -> None:
-        """Shutdown the updater."""
-        if self._update_task:
-            self._update_task.cancel()
-            try:
-                await self._update_task
-            except asyncio.CancelledError:
-                pass
-        if self._session and not self._session.closed:
-            await self._session.close()
-
+        finally:
+            # Always close the current session
+            if session and not session.closed:
+                await session.close()
+            self._session = None  # Force new session creation on next update
+            
 class BaseEveusEntity(RestoreEntity, Entity):
     """Base implementation for all Eveus entities."""
 
