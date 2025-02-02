@@ -8,7 +8,6 @@ from homeassistant.components.number import (
     NumberEntity,
     NumberMode,
     NumberDeviceClass,
-    RestoreNumber,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -35,7 +34,15 @@ from .common import (
 
 _LOGGER = logging.getLogger(__name__)
 
-class EveusCurrentNumber(RestoreNumber, BaseEveusEntity):
+class EveusNumberEntity(BaseEveusEntity, NumberEntity):
+    """Base number entity for Eveus."""
+    
+    def __init__(self, updater: EveusUpdater) -> None:
+        """Initialize the entity."""
+        super().__init__(updater)
+        self._attr_native_value = None
+
+class EveusCurrentNumber(EveusNumberEntity):
     """Representation of Eveus current control."""
 
     ENTITY_NAME = "Charging Current"
@@ -50,23 +57,22 @@ class EveusCurrentNumber(RestoreNumber, BaseEveusEntity):
         """Initialize the current control."""
         super().__init__(updater)
         self._model = model
-        self._value = None
         
         # Set min/max values based on model
         self._attr_native_min_value = float(MIN_CURRENT)
         self._attr_native_max_value = float(MODEL_MAX_CURRENT[model])
-        self._value = min(self._attr_native_max_value, 16.0)
+        self._attr_native_value = min(self._attr_native_max_value, 16.0)
 
     @property
     def native_value(self) -> float | None:
         """Return the current value."""
         try:
-            current_set = self._updater.data.get("currentSet")
-            if current_set is not None:
-                self._value = float(current_set)
-            return self._value
+            value = self._updater.data.get("currentSet")
+            if value is not None:
+                self._attr_native_value = float(value)
+            return self._attr_native_value
         except (TypeError, ValueError):
-            return self._value
+            return self._attr_native_value
 
     async def async_set_native_value(self, value: float) -> None:
         """Set new current value."""
@@ -80,19 +86,16 @@ class EveusCurrentNumber(RestoreNumber, BaseEveusEntity):
             value,
             await self._updater._get_session()
         ):
-            self._value = float(value)
+            self._attr_native_value = float(value)
 
-    async def async_added_to_hass(self) -> None:
-        """Handle entity which will be added."""
-        await super().async_added_to_hass()
-        state = await self.async_get_last_state()
-        if state and state.state not in ('unknown', 'unavailable'):
-            try:
-                restored_value = float(state.state)
-                if self._attr_native_min_value <= restored_value <= self._attr_native_max_value:
-                    self._value = restored_value
-            except (TypeError, ValueError):
-                pass
+    async def _async_restore_state(self, state) -> None:
+        """Restore previous state."""
+        try:
+            restored_value = float(state.state)
+            if self._attr_native_min_value <= restored_value <= self._attr_native_max_value:
+                self._attr_native_value = restored_value
+        except (TypeError, ValueError):
+            pass
 
 async def async_setup_entry(
     hass: HomeAssistant,
