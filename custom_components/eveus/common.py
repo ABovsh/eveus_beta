@@ -7,9 +7,9 @@ import time
 from typing import Any
 
 import aiohttp
-from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN, SCAN_INTERVAL
 
@@ -127,7 +127,21 @@ class EveusUpdater:
         if self._session and not self._session.closed:
             await self._session.close()
 
-class BaseEveusEntity(Entity, RestoreEntity):
+class RestorableEntity(RestoreEntity):
+    """Restorable entity mixin."""
+
+    async def async_added_to_hass(self) -> None:
+        """Handle entity which will be added."""
+        await super().async_added_to_hass()
+        state = await self.async_get_last_state()
+        if state:
+            await self._async_restore_state(state)
+
+    async def _async_restore_state(self, state) -> None:
+        """Restore previous state."""
+        pass
+
+class BaseEveusEntity(RestorableEntity, Entity):
     """Base implementation for all Eveus entities."""
 
     ENTITY_NAME: str = None
@@ -138,6 +152,7 @@ class BaseEveusEntity(Entity, RestoreEntity):
 
     def __init__(self, updater: EveusUpdater) -> None:
         """Initialize the entity."""
+        super().__init__()
         self._updater = updater
         self._updater.register_entity(self)
         
@@ -178,12 +193,16 @@ class BaseEveusNumericEntity(BaseEveusEntity):
 
     _key: str = None
     _attr_suggested_display_precision = 2
+    _attr_native_value = None
 
     @property
     def native_value(self) -> float | None:
         """Return the entity value."""
         try:
-            return float(self._updater.data.get(self._key, 0))
+            value = self._updater.data.get(self._key)
+            if value is None or value == "":
+                return None
+            return float(value)
         except (TypeError, ValueError):
             return None
 
