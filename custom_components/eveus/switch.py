@@ -24,8 +24,8 @@ from .common import (
 
 _LOGGER = logging.getLogger(__name__)
 
-class BaseEveusSwitch(BaseEveusEntity, SwitchEntity):
-    """Base class for Eveus switches."""
+class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
+    """Base switch entity for Eveus."""
 
     _attr_entity_category = EntityCategory.CONFIG
     _command: str = None
@@ -55,7 +55,7 @@ class BaseEveusSwitch(BaseEveusEntity, SwitchEntity):
         ):
             self._is_on = bool(value)
 
-class EveusStopChargingSwitch(BaseEveusSwitch):
+class EveusStopChargingSwitch(BaseSwitchEntity):
     """Representation of Eveus charging control switch."""
 
     ENTITY_NAME = "Stop Charging"
@@ -75,7 +75,7 @@ class EveusStopChargingSwitch(BaseEveusSwitch):
         if self._updater.available and "evseEnabled" in self._updater.data:
             self._is_on = self._updater.data["evseEnabled"] == 1
 
-class EveusOneChargeSwitch(BaseEveusSwitch):
+class EveusOneChargeSwitch(BaseSwitchEntity):
     """Representation of Eveus one charge switch."""
 
     ENTITY_NAME = "One Charge"
@@ -95,7 +95,7 @@ class EveusOneChargeSwitch(BaseEveusSwitch):
         if self._updater.available and "oneCharge" in self._updater.data:
             self._is_on = self._updater.data["oneCharge"] == 1
 
-class EveusResetCounterASwitch(BaseEveusSwitch):
+class EveusResetCounterASwitch(BaseSwitchEntity):
     """Representation of Eveus reset counter A switch."""
 
     ENTITY_NAME = "Reset Counter A"
@@ -117,10 +117,7 @@ class EveusResetCounterASwitch(BaseEveusSwitch):
         if self._updater.available:
             try:
                 iem1_value = self._updater.data.get("IEM1")
-                if iem1_value in (None, "null", "", "undefined", "ERROR"):
-                    self._is_on = False
-                else:
-                    self._is_on = float(iem1_value) != 0
+                self._is_on = None if iem1_value in (None, "", "null", "undefined", "ERROR") else float(iem1_value) != 0
             except (TypeError, ValueError):
                 self._is_on = False
 
