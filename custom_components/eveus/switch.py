@@ -7,7 +7,7 @@ from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, State
+from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.const import (
@@ -20,12 +20,6 @@ from .const import DOMAIN
 from .common import BaseEveusEntity, EveusUpdater
 
 _LOGGER = logging.getLogger(__name__)
-
-# Constants
-COMMAND_TIMEOUT = 5
-RETRY_DELAY = 10
-MAX_STATE_VERIFICATION_TIME = 20  # Maximum time to wait for state verification
-STATE_CHECK_INTERVAL = 2  # Time between state checks
 
 class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
     """Base switch entity for Eveus."""
@@ -40,87 +34,12 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
         self._is_on = False
         self._command_lock = asyncio.Lock()
 
-    @property
-    def is_on(self) -> bool:
-        """Return true if the switch is on."""
-        try:
-            value = self._updater.data.get(self._state_key)
-            if value is not None:
-                self._is_on = bool(int(value))
-            return self._is_on
-        except (TypeError, ValueError):
-            return self._is_on
-
-    async def _async_verify_state(self, expected_state: bool) -> bool:
-        """Verify that the state matches the expected state with longer tolerance."""
-        start_time = asyncio.get_event_loop().time()
-        
-        while (asyncio.get_event_loop().time() - start_time) < MAX_STATE_VERIFICATION_TIME:
-            try:
-                current_state = bool(int(self._updater.data.get(self._state_key, 0)))
-                if current_state == expected_state:
-                    return True
-                
-                # Only log if we're still within tolerance time
-                if (asyncio.get_event_loop().time() - start_time) < (MAX_STATE_VERIFICATION_TIME - STATE_CHECK_INTERVAL):
-                    _LOGGER.debug(
-                        "%s: State not yet matched. Expected: %s, Current: %s",
-                        self.name,
-                        expected_state,
-                        current_state
-                    )
-                await asyncio.sleep(STATE_CHECK_INTERVAL)
-                
-            except Exception as err:
-                _LOGGER.debug(
-                    "Error checking state for %s: %s",
-                    self.name,
-                    str(err)
-                )
-                await asyncio.sleep(STATE_CHECK_INTERVAL)
-
-        # Only log error if final state doesn't match
-        try:
-            final_state = bool(int(self._updater.data.get(self._state_key, 0)))
-            if final_state != expected_state:
-                _LOGGER.warning(
-                    "%s: Final state mismatch. Expected: %s, Got: %s",
-                    self.name,
-                    expected_state,
-                    final_state
-                )
-        except Exception:
-            pass
-            
-        return False
-
-    async def _async_send_command(self, command_value: int) -> bool:
-        """Send command with relaxed verification."""
+    async def _async_send_command(self, command_value: int) -> None:
+        """Send command to device."""
         async with self._command_lock:
-            try:
-                # Send command
-                if not await self._updater.send_command(self._command, command_value):
-                    # Single retry after delay
-                    await asyncio.sleep(RETRY_DELAY)
-                    if not await self._updater.send_command(self._command, command_value):
-                        _LOGGER.error("%s: Failed to send command", self.name)
-                        return False
-
-                # Update state immediately to improve responsiveness
+            if await self._updater.send_command(self._command, command_value):
                 self._is_on = bool(command_value)
                 self.async_write_ha_state()
-
-                # Verify state change in background
-                asyncio.create_task(self._async_verify_state(bool(command_value)))
-                return True
-
-            except Exception as err:
-                _LOGGER.error(
-                    "Error sending command to %s: %s",
-                    self.name,
-                    str(err)
-                )
-                return False
 
     async def _async_restore_state(self, state: State) -> None:
         """Restore previous state."""
@@ -131,6 +50,31 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
                 await self.async_turn_off()
         except Exception as err:
             _LOGGER.error("Error restoring state for %s: %s", self.name, err)
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        try:
+            value = self._updater.data.get(self._state_key)
+            if value is not None:
+                new_state = bool(int(value))
+                if new_state != self._is_on:
+                    self._is_on = new_state
+                    self.async_write_ha_state()
+        except (TypeError, ValueError):
+            pass
+
+    @property
+    def is_on(self) -> bool:
+        """Return true if the switch is on."""
+        return self._is_on
+
+    @property
+    def available(self) -> bool:
+        """Return if entity is available."""
+        if not super().available:
+            return False
+        return self._state_key in self._updater.data
 
 class EveusStopChargingSwitch(BaseSwitchEntity):
     """Representation of Eveus charging control switch."""
@@ -210,7 +154,6 @@ async def async_setup_entry(
     if "entities" not in data:
         data["entities"] = {}
 
-    # Store switch references
     data["entities"]["switch"] = {
         switch.unique_id: switch for switch in switches
     }
