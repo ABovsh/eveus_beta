@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 import aiohttp
 
@@ -282,7 +282,6 @@ class EveusSessionTimeSensor(BaseEveusEntity, SensorEntity):
 
     ENTITY_NAME = "Session Time"
     _attr_icon = "mdi:timer"
-    _attr_device_class = SensorDeviceClass.DURATION
 
     @property
     def native_value(self) -> str:
