@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import asyncio
 import time
+import json  # Added import
 from typing import Any
 
 import aiohttp
@@ -98,20 +99,20 @@ class EveusUpdater:
         try:
             session = await self._get_session()
             
-            # Create timeout context for this specific request
+            # Timeout context
             timeout = aiohttp.ClientTimeout(total=5, connect=3)
             
             async with session.post(
                 f"http://{self._host}/main",
                 auth=aiohttp.BasicAuth(self._username, self._password),
                 timeout=timeout,
-                headers={"Connection": "close"},  # Force connection close after request
+                headers={"Connection": "close"},
             ) as response:
                 response.raise_for_status()
                 text = await response.text()
                 
                 try:
-                    data = response.json(content=text)
+                    data = json.loads(text)  # Fixed JSON parsing
                     
                     if not isinstance(data, dict):
                         _LOGGER.error("Unexpected data type: %s", type(data))
@@ -156,6 +157,19 @@ class EveusUpdater:
             if session and not session.closed:
                 await session.close()
             self._session = None  # Force new session creation on next update
+            
+    async def async_shutdown(self) -> None:
+        """Shutdown the updater and cleanup resources."""
+        if self._update_task:
+            self._update_task.cancel()
+            try:
+                await self._update_task
+            except asyncio.CancelledError:
+                _LOGGER.debug("Update task for %s was cancelled", self._host)
+            self._update_task = None
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
             
 class BaseEveusEntity(RestoreEntity, Entity):
     """Base implementation for all Eveus entities."""
