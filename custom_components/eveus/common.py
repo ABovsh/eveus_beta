@@ -69,43 +69,34 @@ class EveusUpdater:
         self._data = {}
         self._available = True
         self._session = None
-        self._entities = set()  # Changed to set to prevent duplicates
+        self._entities = set()  # Using set to prevent duplicates
         self._update_task = None
         self._last_update = 0
         self._update_lock = asyncio.Lock()
         self._command_lock = asyncio.Lock()
         self._retry_count = 0
-        self._max_retries = 1  # Only one retry as requested
-
-    def register_entity(self, entity: "BaseEveusEntity") -> None:
-        """Register an entity for updates."""
-        self._entities.add(entity)
-
-    @property
-    def data(self) -> dict:
-        """Return the latest data."""
-        return self._data
-
-    @property
-    def available(self) -> bool:
-        """Return if updater is available."""
-        return self._available
+        self._max_retries = 1
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create client session."""
-        if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=5, connect=3)
-            connector = aiohttp.TCPConnector(
-                limit=1,
-                force_close=True,
-                enable_cleanup_closed=True,
-                ssl=False
-            )
-            self._session = aiohttp.ClientSession(
-                timeout=timeout,
-                connector=connector,
-                headers={"Connection": "close"}
-            )
+        # Always close old session if exists
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
+            
+        # Create new session
+        timeout = aiohttp.ClientTimeout(total=5, connect=3)
+        connector = aiohttp.TCPConnector(
+            limit=1,
+            force_close=True,
+            enable_cleanup_closed=True,
+            ssl=False
+        )
+        self._session = aiohttp.ClientSession(
+            timeout=timeout,
+            connector=connector,
+            headers={"Connection": "close"}
+        )
         return self._session
 
     async def _update(self) -> None:
@@ -128,15 +119,25 @@ class EveusUpdater:
                     if not isinstance(data, dict):
                         raise ValueError(f"Unexpected data type: {type(data)}")
                     
-                    self._data = data
-                    self._available = True
-                    self._last_update = time.time()
-                    self._retry_count = 0
+                    # Only update if data has changed
+                    if data != self._data:
+                        self._data = data
+                        self._available = True
+                        self._last_update = time.time()
+                        self._retry_count = 0
 
-                    # Update registered entities
-                    for entity in self._entities:
-                        if entity.hass:  # Only update if entity is properly initialized
-                            entity.async_write_ha_state()
+                        # Update all registered entities
+                        for entity in self._entities:
+                            if hasattr(entity, 'hass') and entity.hass:
+                                try:
+                                    entity.async_write_ha_state()
+                                    _LOGGER.debug("Updated entity: %s", entity.name)
+                                except Exception as err:
+                                    _LOGGER.error(
+                                        "Error updating entity %s: %s",
+                                        getattr(entity, 'name', 'unknown'),
+                                        str(err)
+                                    )
                     
                 except ValueError as json_err:
                     _LOGGER.error("Invalid JSON received: %s. Raw data: %s", json_err, text)
@@ -152,19 +153,16 @@ class EveusUpdater:
                 )
                 await asyncio.sleep(RETRY_DELAY)
             else:
+                self._retry_count = 0
                 _LOGGER.error("Connection error for %s: %s", self._host, str(err))
                 
-        except Exception as err:
-            self._available = False
-            _LOGGER.error("Error updating data for %s: %s", self._host, str(err))
-            
         finally:
             if session and not session.closed:
                 await session.close()
             self._session = None
 
     async def send_command(self, command: str, value: Any) -> bool:
-        """Send command to device."""
+        """Send command to device with proper session management."""
         session = None
         try:
             session = await self._get_session()
@@ -177,6 +175,9 @@ class EveusUpdater:
                     timeout=COMMAND_TIMEOUT,
                 ) as response:
                     response.raise_for_status()
+                    
+                    # Force an immediate update after command
+                    await self._update()
                     return True
 
         except Exception as err:
@@ -186,39 +187,6 @@ class EveusUpdater:
         finally:
             if session and not session.closed:
                 await session.close()
-            self._session = None
-
-    async def async_start_updates(self) -> None:
-        """Start the update loop."""
-        if self._update_task is None:
-            self._update_task = asyncio.create_task(self.update_loop())
-
-    async def update_loop(self) -> None:
-        """Handle update loop."""
-        _LOGGER.debug("Starting update loop for %s", self._host)
-        while True:
-            try:
-                async with self._update_lock:
-                    await self._update()
-                await asyncio.sleep(SCAN_INTERVAL.total_seconds())
-            except asyncio.CancelledError:
-                break
-            except Exception as err:
-                _LOGGER.error("Error in update loop: %s", str(err))
-                await asyncio.sleep(RETRY_DELAY)
-
-    async def async_shutdown(self) -> None:
-        """Shutdown the updater."""
-        if self._update_task:
-            self._update_task.cancel()
-            try:
-                await self._update_task
-            except asyncio.CancelledError:
-                pass
-            self._update_task = None
-            
-        if self._session and not self._session.closed:
-            await self._session.close()
             self._session = None
 
 class BaseEveusEntity(RestoreEntity, Entity):
