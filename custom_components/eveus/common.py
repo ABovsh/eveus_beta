@@ -207,6 +207,74 @@ class BaseEveusEntity(RestoreEntity, Entity):
         """Return if entity is available."""
         return self._updater.available
 
+    @property
+    def is_on(self) -> bool:
+        """Return true if the switch is on."""
+        return self._is_on
+
+    async def _send_switch_command(self, value: int) -> None:
+        """Send command to switch."""
+        if self._command is None:
+            raise NotImplementedError("_command must be defined")
+            
+        _LOGGER.debug("Sending command %s=%s to %s", self._command, value, self._updater._host)
+        
+        if await send_eveus_command(
+            self._updater._host,
+            self._updater._username,
+            self._updater._password,
+            self._command,
+            value,
+            await self._updater._get_session()
+        ):
+            self._is_on = bool(value)
+            _LOGGER.debug("Command sent successfully, new state: %s", self._is_on)
+            self.async_write_ha_state()
+        else:
+            _LOGGER.error("Failed to send command %s=%s to %s", self._command, value, self._updater._host)
+
+    def _get_state_from_value(self, value: Any) -> bool:
+        """Convert value to boolean state."""
+        if value is None:
+            return False
+            
+        try:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)):
+                return bool(value)
+            if isinstance(value, str):
+                return value.lower() in ('true', 'on', 'yes', '1', '1.0')
+            return False
+        except Exception as err:
+            _LOGGER.error("Error converting %s to boolean: %s", value, err)
+            return False
+
+    async def async_update(self) -> None:
+        """Update state."""
+        try:
+            if not self._updater.available:
+                return
+                
+            if not self._state_key:
+                return
+                
+            value = self._updater.data.get(self._state_key)
+            new_state = self._get_state_from_value(value)
+            
+            if new_state != self._is_on:
+                _LOGGER.debug(
+                    "%s state changed: value=%s, new_state=%s",
+                    self.name,
+                    value,
+                    new_state
+                )
+                self._is_on = new_state
+                self.async_write_ha_state()
+                
+        except Exception as err:
+            _LOGGER.error("Error updating %s: %s", self.name, err)
+
 class BaseEveusNumericEntity(BaseEveusEntity):
     """Base class for numeric entities."""
 
