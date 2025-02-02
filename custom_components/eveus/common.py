@@ -101,7 +101,12 @@ class EveusUpdater:
                 timeout=UPDATE_TIMEOUT
             ) as response:
                 response.raise_for_status()
-                self._data = await response.json()
+                data = await response.json()
+                
+                if not isinstance(data, dict):
+                    raise ValueError(f"Invalid data format received: {type(data)}")
+                
+                self._data = data
                 self._available = True
                 self._last_update = time.time()
                 self._error_count = 0
@@ -116,11 +121,19 @@ class EveusUpdater:
                             str(entity_err)
                         )
 
+        except aiohttp.ClientError as err:
+            self._error_count += 1
+            self._available = False if self._error_count >= self._max_errors else True
+            _LOGGER.error("Connection error: %s", str(err))
+        except ValueError as err:
+            self._error_count += 1
+            self._available = False if self._error_count >= self._max_errors else True
+            _LOGGER.error("Data error: %s", str(err))
         except Exception as err:
             self._error_count += 1
             self._available = False if self._error_count >= self._max_errors else True
-            _LOGGER.error("Error updating data: %s", str(err))
-
+            _LOGGER.error("Unexpected error: %s", str(err))
+            
     async def async_shutdown(self) -> None:
         """Shutdown the updater."""
         if self._update_task:
