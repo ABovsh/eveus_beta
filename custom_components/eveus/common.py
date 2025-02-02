@@ -66,34 +66,8 @@ class EveusUpdater:
         if self._update_task is None:
             self._update_task = asyncio.create_task(self._update_loop())
 
-    async def _update_loop(self) -> None:
-            """Handle updates with improved error handling."""
-            while True:
-                try:
-                    start_time = time.time()
-                    await self._update()
-                    
-                    # Calculate sleep time to maintain exact interval
-                    elapsed = time.time() - start_time
-                    sleep_time = max(0, SCAN_INTERVAL.total_seconds() - elapsed)
-                    await asyncio.sleep(sleep_time)
-                except asyncio.CancelledError:
-                    break
-                except Exception as err:
-                    _LOGGER.error("Error updating data: %s", str(err))
-                    await asyncio.sleep(5)  # Short retry on error
-
-    async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create client session."""
-        if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=10, connect=5)
-            connector = aiohttp.TCPConnector(limit=1, force_close=True)
-            self._session = aiohttp.ClientSession(timeout=timeout, connector=connector)
-        return self._session
-
     async def _update(self) -> None:
         """Update the data."""
-        session = None
         try:
             session = await self._get_session()
             async with session.post(
@@ -102,40 +76,53 @@ class EveusUpdater:
                 timeout=UPDATE_TIMEOUT,
             ) as response:
                 response.raise_for_status()
-                data = await response.text()  # First get raw text
-                _LOGGER.debug("Raw response: %s", data)
-                
                 try:
-                    self._data = {} if not data else response.json()
-                except ValueError as json_err:
-                    _LOGGER.error("Failed to parse JSON response: %s. Raw data: %s", json_err, data)
+                    data = await response.json()
+                    if isinstance(data, dict):
+                        self._data = data
+                        self._available = True
+                        self._last_update = time.time()
+                        self._error_count = 0
+
+                        # Log data for debugging
+                        _LOGGER.debug(
+                            "Data update success. evseEnabled=%s, oneCharge=%s, IEM1=%s",
+                            data.get("evseEnabled"),
+                            data.get("oneCharge"),
+                            data.get("IEM1")
+                        )
+
+                        # Update entities
+                        for entity in self._entities:
+                            try:
+                                entity.async_write_ha_state()
+                            except Exception as err:
+                                _LOGGER.error(
+                                    "Error updating entity %s: %s",
+                                    getattr(entity, 'name', 'unknown'),
+                                    str(err),
+                                )
+                    else:
+                        raise ValueError(f"Expected dict, got {type(data)}")
+
+                except ValueError as err:
+                    _LOGGER.error("Data parsing error: %s", str(err))
+                    self._error_count += 1
                     return
 
-                self._available = True
-                self._last_update = time.time()
-                self._error_count = 0
-
-                for entity in self._entities:
-                    try:
-                        entity.async_write_ha_state()
-                    except Exception as entity_err:
-                        _LOGGER.error(
-                            "Error updating entity %s: %s",
-                            getattr(entity, 'name', 'unknown'),
-                            str(entity_err),
-                        )
+        except aiohttp.ClientResponseError as err:
+            self._error_count += 1
+            _LOGGER.error("HTTP error %d: %s", err.status, err.message)
+            raise
 
         except aiohttp.ClientError as err:
             self._error_count += 1
-            self._available = False if self._error_count >= self._max_errors else True
             _LOGGER.error("Connection error: %s", str(err))
+            raise
+
         except Exception as err:
             self._error_count += 1
-            self._available = False if self._error_count >= self._max_errors else True
-            _LOGGER.error("Unexpected error: %s", str(err), exc_info=True)
-        finally:
-            if session and not session.closed:
-                await session.close()
+            _LOGGER.exception("Unexpected error during update")
             
     async def async_shutdown(self) -> None:
         """Shutdown the updater."""
