@@ -90,8 +90,8 @@ class EveusNumericSensor(EveusSensorBase):
         except (TypeError, ValueError):
             return None
 
-class EveusDiagnosticSensor(EveusSensorBase):
-    """Base class for diagnostic sensors."""
+class EveusDiagnosticSensor(BaseEveusEntity, SensorEntity):
+    """Base diagnostic sensor."""
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:information"
 
@@ -241,7 +241,7 @@ class EveusPlugTemperatureSensor(EveusNumericSensor):
     _attr_icon = "mdi:thermometer-high"
     _attr_suggested_display_precision = 0
 
-class EveusSystemTimeSensor(EveusSensorBase):
+class EveusSystemTimeSensor(BaseEveusEntity, SensorEntity):
     """System time sensor with timezone correction."""
 
     ENTITY_NAME = "System Time"
@@ -265,7 +265,7 @@ class EveusSystemTimeSensor(EveusSensorBase):
         except (TypeError, ValueError):
             return None
 
-class EveusSessionTimeSecondsSensor(EveusNumericSensor):
+class EveusSessionTimeSecondsSensor(BaseEveusNumericEntity):
     """Session time in seconds sensor."""
 
     ENTITY_NAME = "Session Time Seconds"
@@ -277,7 +277,7 @@ class EveusSessionTimeSecondsSensor(EveusNumericSensor):
     _attr_suggested_display_precision = 0
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-class EveusSessionTimeSensor(EveusSensorBase):
+class EveusSessionTimeSensor(BaseEveusEntity, SensorEntity):
     """Formatted session time sensor."""
 
     ENTITY_NAME = "Session Time"
@@ -467,10 +467,10 @@ async def async_setup_entry(
         EveusBoxTemperatureSensor(updater),
         EveusPlugTemperatureSensor(updater),
         EveusBatteryVoltageSensor(updater),
-        EveusSystemTimeSensor(updater),
         EveusSessionTimeSensor(updater),
         EveusSessionTimeSecondsSensor(updater),
-        EveusConnectionErrorsSensor(updater)
+        EveusSystemTimeSensor(updater),
+        EveusConnectionErrorsSensor(updater),
         EveusCounterAEnergySensor(updater),
         EveusCounterBEnergySensor(updater),
         EveusCounterACostSensor(updater),
