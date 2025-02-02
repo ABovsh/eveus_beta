@@ -29,11 +29,12 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
 
     _attr_entity_category = EntityCategory.CONFIG
     _command: str = None
+    _default_state: bool = False
     
     def __init__(self, updater: EveusUpdater) -> None:
         """Initialize the switch."""
         super().__init__(updater)
-        self._is_on = False
+        self._is_on = self._default_state
 
     @property
     def is_on(self) -> bool:
@@ -54,6 +55,7 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
             await self._updater._get_session()
         ):
             self._is_on = bool(value)
+            self.async_write_ha_state()
 
 class EveusStopChargingSwitch(BaseSwitchEntity):
     """Representation of Eveus charging control switch."""
@@ -61,6 +63,7 @@ class EveusStopChargingSwitch(BaseSwitchEntity):
     ENTITY_NAME = "Stop Charging"
     _attr_icon = "mdi:ev-station"
     _command = "evseEnabled"
+    _default_state = True  # Default to enabled
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn on charging."""
@@ -72,8 +75,10 @@ class EveusStopChargingSwitch(BaseSwitchEntity):
 
     async def async_update(self) -> None:
         """Update state."""
-        if self._updater.available and "evseEnabled" in self._updater.data:
-            self._is_on = self._updater.data["evseEnabled"] == 1
+        if self._updater.available:
+            value = self._updater.data.get("evseEnabled")
+            if value is not None:
+                self._is_on = bool(value)
 
 class EveusOneChargeSwitch(BaseSwitchEntity):
     """Representation of Eveus one charge switch."""
@@ -81,6 +86,7 @@ class EveusOneChargeSwitch(BaseSwitchEntity):
     ENTITY_NAME = "One Charge"
     _attr_icon = "mdi:lightning-bolt"
     _command = "oneCharge"
+    _default_state = True  # Default to enabled
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Enable one charge mode."""
@@ -92,8 +98,10 @@ class EveusOneChargeSwitch(BaseSwitchEntity):
 
     async def async_update(self) -> None:
         """Update state."""
-        if self._updater.available and "oneCharge" in self._updater.data:
-            self._is_on = self._updater.data["oneCharge"] == 1
+        if self._updater.available:
+            value = self._updater.data.get("oneCharge")
+            if value is not None:
+                self._is_on = bool(value)
 
 class EveusResetCounterASwitch(BaseSwitchEntity):
     """Representation of Eveus reset counter A switch."""
@@ -101,23 +109,26 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
     ENTITY_NAME = "Reset Counter A"
     _attr_icon = "mdi:counter"
     _command = "rstEM1"
+    _default_state = False  # Always default to off
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Reset counter A."""
         await self._send_switch_command(0)
         self._is_on = False  # Always false as it's a momentary switch
+        self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Reset command for off state."""
         await self._send_switch_command(0)
         self._is_on = False
+        self.async_write_ha_state()
 
     async def async_update(self) -> None:
         """Update state."""
         if self._updater.available:
             try:
-                iem1_value = self._updater.data.get("IEM1")
-                self._is_on = None if iem1_value in (None, "", "null", "undefined", "ERROR") else float(iem1_value) != 0
+                # Reset switch is always off, it's momentary
+                self._is_on = False
             except (TypeError, ValueError):
                 self._is_on = False
 
