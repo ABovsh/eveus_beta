@@ -7,9 +7,9 @@ import time
 from typing import Any
 
 import aiohttp
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.restore_state import RestoreEntity
-from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN, SCAN_INTERVAL
 
@@ -64,7 +64,29 @@ class EveusUpdater:
     async def async_start_updates(self) -> None:
         """Start the update loop."""
         if self._update_task is None:
-            self._update_task = asyncio.create_task(self._update_loop())
+            self._update_task = asyncio.create_task(self.update_loop())
+
+    async def update_loop(self) -> None:
+        """Handle update loop."""
+        _LOGGER.debug("Starting update loop for %s", self._host)
+        while True:
+            try:
+                async with self._update_lock:
+                    await self._update()
+                await asyncio.sleep(SCAN_INTERVAL.total_seconds())
+            except asyncio.CancelledError:
+                break
+            except Exception as err:
+                _LOGGER.error("Error in update loop: %s", str(err))
+                await asyncio.sleep(RETRY_DELAY)
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create client session."""
+        if self._session is None or self._session.closed:
+            timeout = aiohttp.ClientTimeout(total=10, connect=5)
+            connector = aiohttp.TCPConnector(limit=1, force_close=True)
+            self._session = aiohttp.ClientSession(timeout=timeout, connector=connector)
+        return self._session
 
     async def _update(self) -> None:
         """Update the data."""
@@ -76,54 +98,38 @@ class EveusUpdater:
                 timeout=UPDATE_TIMEOUT,
             ) as response:
                 response.raise_for_status()
-                try:
-                    data = await response.json()
-                    if isinstance(data, dict):
-                        self._data = data
-                        self._available = True
-                        self._last_update = time.time()
-                        self._error_count = 0
+                data = await response.json()
+                
+                if not isinstance(data, dict):
+                    raise ValueError(f"Expected dict, got {type(data)}")
+                
+                _LOGGER.debug(
+                    "Data update for %s - evseEnabled: %s, oneCharge: %s",
+                    self._host, 
+                    data.get("evseEnabled"),
+                    data.get("oneCharge")
+                )
 
-                        # Log data for debugging
-                        _LOGGER.debug(
-                            "Data update success. evseEnabled=%s, oneCharge=%s, IEM1=%s",
-                            data.get("evseEnabled"),
-                            data.get("oneCharge"),
-                            data.get("IEM1")
+                self._data = data
+                self._available = True
+                self._last_update = time.time()
+                self._error_count = 0
+
+                for entity in self._entities:
+                    try:
+                        entity.async_write_ha_state()
+                    except Exception as err:
+                        _LOGGER.error(
+                            "Error updating entity %s: %s",
+                            getattr(entity, 'name', 'unknown'),
+                            str(err)
                         )
-
-                        # Update entities
-                        for entity in self._entities:
-                            try:
-                                entity.async_write_ha_state()
-                            except Exception as err:
-                                _LOGGER.error(
-                                    "Error updating entity %s: %s",
-                                    getattr(entity, 'name', 'unknown'),
-                                    str(err),
-                                )
-                    else:
-                        raise ValueError(f"Expected dict, got {type(data)}")
-
-                except ValueError as err:
-                    _LOGGER.error("Data parsing error: %s", str(err))
-                    self._error_count += 1
-                    return
-
-        except aiohttp.ClientResponseError as err:
-            self._error_count += 1
-            _LOGGER.error("HTTP error %d: %s", err.status, err.message)
-            raise
-
-        except aiohttp.ClientError as err:
-            self._error_count += 1
-            _LOGGER.error("Connection error: %s", str(err))
-            raise
 
         except Exception as err:
             self._error_count += 1
-            _LOGGER.exception("Unexpected error during update")
-            
+            self._available = False if self._error_count >= self._max_errors else True
+            _LOGGER.error("Error updating data for %s: %s", self._host, str(err))
+
     async def async_shutdown(self) -> None:
         """Shutdown the updater."""
         if self._update_task:
@@ -135,21 +141,7 @@ class EveusUpdater:
         if self._session and not self._session.closed:
             await self._session.close()
 
-class RestorableEntity(RestoreEntity):
-    """Restorable entity mixin."""
-
-    async def async_added_to_hass(self) -> None:
-        """Handle entity which will be added."""
-        await super().async_added_to_hass()
-        state = await self.async_get_last_state()
-        if state:
-            await self._async_restore_state(state)
-
-    async def _async_restore_state(self, state) -> None:
-        """Restore previous state."""
-        pass
-
-class BaseEveusEntity(RestorableEntity, Entity):
+class BaseEveusEntity(RestoreEntity, Entity):
     """Base implementation for all Eveus entities."""
 
     ENTITY_NAME: str = None
@@ -160,7 +152,6 @@ class BaseEveusEntity(RestorableEntity, Entity):
 
     def __init__(self, updater: EveusUpdater) -> None:
         """Initialize the entity."""
-        super().__init__()
         self._updater = updater
         self._updater.register_entity(self)
         
@@ -173,7 +164,14 @@ class BaseEveusEntity(RestorableEntity, Entity):
     async def async_added_to_hass(self) -> None:
         """Handle entity which will be added."""
         await super().async_added_to_hass()
+        state = await self.async_get_last_state()
+        if state:
+            await self._async_restore_state(state)
         await self._updater.async_start_updates()
+
+    async def _async_restore_state(self, state) -> None:
+        """Restore previous state."""
+        pass
 
     async def async_will_remove_from_hass(self) -> None:
         """Handle entity removal."""
@@ -208,7 +206,7 @@ class BaseEveusNumericEntity(BaseEveusEntity):
         """Return the entity value."""
         try:
             value = self._updater.data.get(self._key)
-            if value is None or value == "":
+            if value in (None, "", "undefined", "null"):
                 return None
             return float(value)
         except (TypeError, ValueError):
