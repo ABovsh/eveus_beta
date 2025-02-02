@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Any
+import aiohttp
 
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
