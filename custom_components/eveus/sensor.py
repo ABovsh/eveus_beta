@@ -252,7 +252,7 @@ class EveusSystemTimeSensor(BaseEveusEntity, SensorEntity):
     def native_value(self) -> str:
         """Return timezone-corrected system time."""
         try:
-            timestamp = self._updater.data.get("systemTime")
+            timestamp = self._updater.data.get(ATTR_SYSTEM_TIME)
             timezone_offset = self._updater.data.get("timeZone", 0)
             
             if timestamp is None:
@@ -270,13 +270,12 @@ class EveusSessionTimeSecondsSensor(BaseEveusNumericEntity):
     """Session time in seconds sensor."""
 
     ENTITY_NAME = "Session Time Seconds"
-    _key = "sessionTime"
+    _key = ATTR_SESSION_TIME
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.SECONDS
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:timer"
     _attr_suggested_display_precision = 0
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
 class EveusSessionTimeSensor(BaseEveusEntity, SensorEntity):
     """Formatted session time sensor."""
@@ -289,7 +288,7 @@ class EveusSessionTimeSensor(BaseEveusEntity, SensorEntity):
     def native_value(self) -> str:
         """Return formatted session time."""
         try:
-            seconds = int(self._updater.data.get("sessionTime", 0))
+            seconds = int(self._updater.data.get(ATTR_SESSION_TIME, 0))
             days = seconds // 86400
             hours = (seconds % 86400) // 3600
             minutes = (seconds % 3600) // 60
