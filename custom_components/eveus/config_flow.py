@@ -34,26 +34,8 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
     }
 )
 
-REQUIRED_HELPERS = [
-    "input_number.ev_battery_capacity",
-    "input_number.ev_initial_soc",
-    "input_number.ev_soc_correction",
-    "input_number.ev_target_soc",
-]
-
-async def _validate_helper_entities(hass: HomeAssistant) -> bool:
-    """Validate that required helper entities exist."""
-    for entity_id in REQUIRED_HELPERS:
-        if not hass.states.get(entity_id):
-            return False
-    return True
-
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     """Validate the user input allows us to connect."""
-    if not await _validate_helper_entities(hass):
-        _LOGGER.error("Required input_number entities missing")
-        raise InvalidInput
-
     try:
         session = aiohttp_client.async_get_clientsession(hass)
         timeout = aiohttp.ClientTimeout(total=10)
@@ -77,10 +59,10 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
         if err.status == 401:
             raise InvalidAuth from err
         raise CannotConnect from err
-    except (asyncio.TimeoutError, aiohttp.ClientError):
-        raise CannotConnect
+    except (asyncio.TimeoutError, aiohttp.ClientError) as err:
+        raise CannotConnect from err
     except Exception as err:
-        _LOGGER.exception("Unexpected error: %s", str(err))
+        _LOGGER.error("Unexpected error: %s", str(err))
         raise CannotConnect from err
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -97,6 +79,10 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             try:
                 info = await validate_input(self.hass, user_input)
+
+                await self.async_set_unique_id(user_input[CONF_HOST])
+                self._abort_if_unique_id_configured()
+
                 return self.async_create_entry(
                     title=info["title"],
                     data=user_input
@@ -105,8 +91,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
                 errors["base"] = "invalid_auth"
-            except InvalidInput:
-                errors["base"] = "input_missing"
             except Exception:
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
@@ -122,6 +106,3 @@ class CannotConnect(HomeAssistantError):
 
 class InvalidAuth(HomeAssistantError):
     """Error to indicate there is invalid auth."""
-
-class InvalidInput(HomeAssistantError):
-    """Error to indicate missing input_number entities."""
