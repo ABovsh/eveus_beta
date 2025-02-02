@@ -233,7 +233,7 @@ class BaseEveusEntity(RestoreEntity, Entity):
             raise NotImplementedError("ENTITY_NAME must be defined in child class")
 
         self._attr_name = self.ENTITY_NAME
-        self._attr_unique_id = f"{updater.host}_{self.ENTITY_NAME.lower().replace(' ', '_')}"
+        self._attr_unique_id = f"eveus_{self.ENTITY_NAME.lower().replace(' ', '_')}"
 
     @property
     def available(self) -> bool:
@@ -245,10 +245,10 @@ class BaseEveusEntity(RestoreEntity, Entity):
         """Return device information."""
         return {
             "identifiers": {(DOMAIN, self._updater.host)},
-            "name": f"Eveus ({self._updater.host})",
+            "name": "Eveus EV Charger",
             "manufacturer": "Eveus",
             "model": "Eveus EV Charger",
-            "sw_version": f"Firmware: {self._updater.data.get('verFWMain', 'Unknown')}",
+            "sw_version": self._updater.data.get('verFWMain', 'Unknown'),
         }
 
     async def async_added_to_hass(self) -> None:
