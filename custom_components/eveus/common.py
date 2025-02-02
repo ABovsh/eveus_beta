@@ -5,7 +5,7 @@ import logging
 import asyncio
 import time
 import json
-from typing import Any, Optional
+from typing import Any
 from contextlib import asynccontextmanager
 
 import aiohttp
@@ -20,11 +20,10 @@ from .const import DOMAIN, SCAN_INTERVAL
 _LOGGER = logging.getLogger(__name__)
 
 # Constants
-RETRY_DELAY = 10  # Single retry after 10 seconds
+RETRY_DELAY = 10
 COMMAND_TIMEOUT = 5
 UPDATE_TIMEOUT = 5
 SESSION_TIMEOUT = aiohttp.ClientTimeout(total=10, connect=3)
-CONNECTION_POOL_SIZE = 2
 
 class EveusError(HomeAssistantError):
     """Base class for Eveus errors."""
@@ -34,12 +33,12 @@ class EveusConnectionError(EveusError):
 
 @asynccontextmanager
 async def get_eveus_session(hass: HomeAssistant) -> aiohttp.ClientSession:
-    """Get aiohttp session with proper configuration."""
+    """Get aiohttp session."""
     session = aiohttp_client.async_get_clientsession(hass)
     try:
         yield session
     finally:
-        # Session will be closed by HA
+        pass  # Session managed by HA
 
 async def send_eveus_command(
     host: str, 
@@ -47,9 +46,9 @@ async def send_eveus_command(
     password: str, 
     command: str, 
     value: Any,
-    session: Optional[aiohttp.ClientSession] = None
+    session: aiohttp.ClientSession | None = None
 ) -> bool:
-    """Send command to Eveus device with simple retry."""
+    """Send command to Eveus device."""
     try:
         async with session.post(
             f"http://{host}/pageEvent",
@@ -92,17 +91,7 @@ class EveusUpdater:
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create client session."""
         if not self._session or self._session.closed:
-            connector = aiohttp.TCPConnector(
-                limit=CONNECTION_POOL_SIZE,
-                force_close=True,
-                enable_cleanup_closed=True,
-                ssl=False
-            )
-            self._session = aiohttp.ClientSession(
-                timeout=SESSION_TIMEOUT,
-                connector=connector,
-                headers={"Connection": "close"}
-            )
+            self._session = aiohttp_client.async_get_clientsession(self._hass)
         return self._session
 
     def register_entity(self, entity: "BaseEveusEntity") -> None:
@@ -122,7 +111,7 @@ class EveusUpdater:
         return self._available
 
     async def _update(self) -> None:
-        """Update the data with simple retry."""
+        """Update the data."""
         try:
             session = await self._get_session()
             async with session.post(
@@ -170,7 +159,7 @@ class EveusUpdater:
             _LOGGER.error("Error updating data for %s: %s", self.host, str(err))
 
     async def send_command(self, command: str, value: Any) -> bool:
-        """Send command to device with proper session management."""
+        """Send command to device."""
         async with self._command_lock:
             return await send_eveus_command(
                 self.host,
@@ -188,14 +177,13 @@ class EveusUpdater:
             _LOGGER.debug("Started update loop for %s", self.host)
 
     async def update_loop(self) -> None:
-        """Handle update loop with simple retry."""
+        """Handle update loop."""
         _LOGGER.debug("Starting update loop for %s", self.host)
         while True:
             try:
                 async with self._update_lock:
                     await self._update()
                     
-                # Simple retry after 10 seconds if needed
                 if self._retry_needed:
                     await asyncio.sleep(RETRY_DELAY)
                     continue
@@ -209,7 +197,7 @@ class EveusUpdater:
                 await asyncio.sleep(RETRY_DELAY)
 
     async def async_shutdown(self) -> None:
-        """Shutdown the updater with proper cleanup."""
+        """Shutdown the updater."""
         if self._update_task:
             self._update_task.cancel()
             try:
@@ -217,10 +205,6 @@ class EveusUpdater:
             except asyncio.CancelledError:
                 pass
             self._update_task = None
-            
-        if self._session and not self._session.closed:
-            await self._session.close()
-            self._session = None
 
 class BaseEveusEntity(RestoreEntity, Entity):
     """Base implementation for Eveus entities."""
