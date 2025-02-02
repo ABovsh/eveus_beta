@@ -61,9 +61,9 @@ class EveusUpdater:
 
     def __init__(self, host: str, username: str, password: str, hass: HomeAssistant) -> None:
         """Initialize the updater."""
-        self.host = host  # CHANGED: Make public
-        self.username = username  # CHANGED: Make public
-        self.password = password  # CHANGED: Make public
+        self.host = host  # Public attribute
+        self.username = username
+        self.password = password
         self._hass = hass
         self._data = {}
         self._available = True
@@ -111,13 +111,12 @@ class EveusUpdater:
 
     async def _update(self) -> None:
         """Update the data."""
-        session = None
         try:
             session = await self._get_session()
-            
+            # Corrected: Use self.host instead of self._host
             async with session.post(
-                f"http://{self._host}/main",
-                auth=aiohttp.BasicAuth(self._username, self._password),
+                f"http://{self.host}/main",
+                auth=aiohttp.BasicAuth(self.username, self.password),
                 timeout=aiohttp.ClientTimeout(total=5, connect=3),
                 headers={"Connection": "close"},
             ) as response:
@@ -238,7 +237,8 @@ class BaseEveusEntity(RestoreEntity, Entity):
             raise NotImplementedError("ENTITY_NAME must be defined in child class")
 
         self._attr_name = self.ENTITY_NAME
-        self._attr_unique_id = f"{updater._host}_{self.ENTITY_NAME.lower().replace(' ', '_')}"
+        # Corrected: Use updater.host instead of updater._host
+        self._attr_unique_id = f"{updater.host}_{self.ENTITY_NAME.lower().replace(' ', '_')}"
 
     @property
     def available(self) -> bool:
@@ -249,10 +249,11 @@ class BaseEveusEntity(RestoreEntity, Entity):
     def device_info(self) -> dict[str, Any]:
         """Return device information."""
         return {
-            "identifiers": {(DOMAIN, self._updater._host)},
+            # Corrected: Use self._updater.host instead of self._updater._host
+            "identifiers": {(DOMAIN, self._updater.host)},
             "name": "Eveus EV Charger",
             "manufacturer": "Eveus",
-            "model": f"Eveus ({self._updater._host})",
+            "model": f"Eveus ({self._updater.host})",
             "sw_version": self._updater.data.get("verFWMain", "Unknown"),
             "hw_version": self._updater.data.get("verHW", "Unknown"),
         }
