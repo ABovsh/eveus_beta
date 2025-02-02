@@ -47,10 +47,22 @@ async def send_eveus_command(
         ) as response:
             response.raise_for_status()
             return True
-
+    
+    except aiohttp.ClientResponseError as err:
+        _LOGGER.error(
+            "Command %s failed with HTTP %s: %s", 
+            command,
+            err.status,
+            err.message
+        )
+    
     except Exception as err:
-        _LOGGER.error("Failed to send command %s: %s", command, str(err))
-        return False
+        _LOGGER.error(
+            "Command %s failed: %s (Host: %s)",  # <-- Added host context
+            command,
+            str(err),
+            host
+        )
 
     finally:
         if should_close and session and not session.closed:
