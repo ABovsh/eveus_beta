@@ -29,7 +29,6 @@ from homeassistant.const import (
 
 from .common import (
     BaseEveusEntity,
-    BaseEveusNumericEntity,
     EveusUpdater,
 )
 from .const import (
@@ -62,11 +61,33 @@ _LOGGER = logging.getLogger(__name__)
 
 class EveusSensorBase(BaseEveusEntity, SensorEntity):
     """Base sensor with additional sensor-specific attributes."""
-    pass
 
-class EveusNumericSensor(EveusSensorBase, BaseEveusNumericEntity):
+    def __init__(self, updater: EveusUpdater) -> None:
+        """Initialize the sensor."""
+        super().__init__(updater)
+        self._attr_native_value = None
+
+    @property
+    def native_value(self) -> Any | None:
+        """Return sensor value."""
+        return self._attr_native_value
+
+class EveusNumericSensor(EveusSensorBase):
     """Base class for numeric sensors."""
-    pass
+
+    _key: str = None
+    _attr_suggested_display_precision = 2
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the sensor value."""
+        try:
+            value = self._updater.data.get(self._key)
+            if value is None or value == "":
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
 class EveusDiagnosticSensor(EveusSensorBase):
     """Base class for diagnostic sensors."""
@@ -80,7 +101,6 @@ class EveusEnergyBaseSensor(EveusNumericSensor):
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_suggested_display_precision = 1
 
-# Regular Sensors
 class EveusVoltageSensor(EveusNumericSensor):
     ENTITY_NAME = "Voltage"
     _key = ATTR_VOLTAGE
@@ -127,7 +147,6 @@ class EveusTotalEnergySensor(EveusEnergyBaseSensor):
     _key = ATTR_TOTAL_ENERGY
     _attr_icon = "mdi:battery-charging-100"
 
-# State Sensors
 class EveusStateSensor(EveusDiagnosticSensor):
     ENTITY_NAME = "State"
 
@@ -135,9 +154,12 @@ class EveusStateSensor(EveusDiagnosticSensor):
     def native_value(self) -> str:
         """Return charging state."""
         try:
-            return CHARGING_STATES.get(self._updater.data.get(ATTR_STATE, -1), "Unknown")
+            state_value = self._updater.data.get(ATTR_STATE)
+            if state_value is None:
+                return None
+            return CHARGING_STATES.get(state_value, "Unknown")
         except (TypeError, ValueError):
-            return "Unknown"
+            return None
 
 class EveusSubstateSensor(EveusDiagnosticSensor):
     ENTITY_NAME = "Substate"
@@ -149,11 +171,14 @@ class EveusSubstateSensor(EveusDiagnosticSensor):
             state = self._updater.data.get(ATTR_STATE)
             substate = self._updater.data.get(ATTR_SUBSTATE)
             
+            if state is None or substate is None:
+                return None
+                
             if state == 7:  # Error state
                 return ERROR_STATES.get(substate, "Unknown Error")
             return NORMAL_SUBSTATES.get(substate, "Unknown State")
         except (TypeError, ValueError):
-            return "Unknown"
+            return None
 
 class EveusEnabledSensor(EveusDiagnosticSensor):
     ENTITY_NAME = "Enabled"
@@ -163,9 +188,12 @@ class EveusEnabledSensor(EveusDiagnosticSensor):
     def native_value(self) -> str:
         """Return if charging is enabled."""
         try:
-            return "Yes" if self._updater.data.get(ATTR_ENABLED) == 1 else "No"
+            value = self._updater.data.get(ATTR_ENABLED)
+            if value is None:
+                return None
+            return "Yes" if value == 1 else "No"
         except (TypeError, ValueError):
-            return "Unknown"
+            return None
 
 class EveusGroundSensor(EveusDiagnosticSensor):
     ENTITY_NAME = "Ground"
@@ -175,11 +203,13 @@ class EveusGroundSensor(EveusDiagnosticSensor):
     def native_value(self) -> str:
         """Return ground status."""
         try:
-            return "Connected" if self._updater.data.get(ATTR_GROUND) == 1 else "Not Connected"
+            value = self._updater.data.get(ATTR_GROUND)
+            if value is None:
+                return None
+            return "Connected" if value == 1 else "Not Connected"
         except (TypeError, ValueError):
-            return "Unknown"
+            return None
 
-# Temperature Sensors
 class EveusBoxTemperatureSensor(EveusNumericSensor):
     ENTITY_NAME = "Box Temperature"
     _key = ATTR_TEMPERATURE_BOX
@@ -198,7 +228,6 @@ class EveusPlugTemperatureSensor(EveusNumericSensor):
     _attr_icon = "mdi:thermometer-high"
     _attr_suggested_display_precision = 0
 
-# System Time and Duration Sensors
 class EveusSystemTimeSensor(EveusSensorBase):
     ENTITY_NAME = "System Time"
     _attr_icon = "mdi:clock-outline"
@@ -207,10 +236,12 @@ class EveusSystemTimeSensor(EveusSensorBase):
     def native_value(self) -> str:
         """Return formatted system time."""
         try:
-            timestamp = int(self._updater.data.get(ATTR_SYSTEM_TIME, 0))
-            return datetime.fromtimestamp(timestamp).strftime("%H:%M")
+            timestamp = self._updater.data.get(ATTR_SYSTEM_TIME)
+            if timestamp is None:
+                return None
+            return datetime.fromtimestamp(int(timestamp)).strftime("%H:%M")
         except (TypeError, ValueError):
-            return "unknown"
+            return None
 
 class EveusSessionTimeSensor(EveusNumericSensor):
     ENTITY_NAME = "Session Time"
@@ -224,9 +255,9 @@ class EveusSessionTimeSensor(EveusNumericSensor):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional state attributes."""
-        attrs = super().extra_state_attributes
+        attrs = super().extra_state_attributes or {}
         try:
-            seconds = int(self.native_value)
+            seconds = int(self.native_value or 0)
             days = seconds // 86400
             hours = (seconds % 86400) // 3600
             minutes = (seconds % 3600) // 60
@@ -245,7 +276,6 @@ class EveusSessionTimeSensor(EveusNumericSensor):
             
         return attrs
 
-# Counter Sensors
 class EveusCounterAEnergySensor(EveusEnergyBaseSensor):
     ENTITY_NAME = "Counter A Energy"
     _key = ATTR_COUNTER_A_ENERGY
@@ -280,7 +310,6 @@ class EveusBatteryVoltageSensor(EveusNumericSensor):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:battery"
 
-# SOC Sensors
 class EVSocKwhSensor(EveusSensorBase):
     ENTITY_NAME = "SOC Energy"
     _attr_device_class = SensorDeviceClass.ENERGY
@@ -297,6 +326,9 @@ class EVSocKwhSensor(EveusSensorBase):
             max_capacity = float(self.hass.states.get("input_number.ev_battery_capacity").state)
             energy_charged = float(self._updater.data.get("IEM1", 0))
             correction = float(self.hass.states.get("input_number.ev_soc_correction").state)
+
+            if None in (initial_soc, max_capacity, energy_charged, correction):
+                return None
 
             if initial_soc < 0 or initial_soc > 100 or max_capacity <= 0:
                 return None
@@ -325,10 +357,11 @@ class EVSocPercentSensor(EveusSensorBase):
             soc_kwh = float(self.hass.states.get("sensor.eveus_ev_charger_soc_energy").state)
             max_capacity = float(self.hass.states.get("input_number.ev_battery_capacity").state)
             
-            if soc_kwh >= 0 and max_capacity > 0:
-                percentage = round((soc_kwh / max_capacity * 100), 0)
-                return max(0, min(percentage, 100))
-            return None
+            if None in (soc_kwh, max_capacity) or max_capacity <= 0:
+                return None
+
+            percentage = round((soc_kwh / max_capacity * 100), 0)
+            return max(0, min(percentage, 100))
         except (TypeError, ValueError, AttributeError):
             return None
 
@@ -349,7 +382,13 @@ class TimeToTargetSocSensor(TextEntity, BaseEveusEntity):
             battery_capacity = float(self.hass.states.get("input_number.ev_battery_capacity").state)
             correction = float(self.hass.states.get("input_number.ev_soc_correction").state)
 
+            if None in (current_soc, target_soc, power_meas, battery_capacity, correction):
+                return "-"
+
             remaining_kwh = (target_soc - current_soc) * battery_capacity / 100
+            if remaining_kwh <= 0:
+                return "-"
+                
             efficiency = (1 - correction / 100)
             power_kw = power_meas * efficiency / 1000
             
