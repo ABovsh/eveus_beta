@@ -113,7 +113,7 @@ class EveusUpdater:
         """Update the data."""
         try:
             session = await self._get_session()
-            # Corrected: Use self.host instead of self._host
+            # Corrected: Use self.host instead of self.host
             async with session.post(
                 f"http://{self.host}/main",
                 auth=aiohttp.BasicAuth(self.username, self.password),
@@ -157,16 +157,16 @@ class EveusUpdater:
                 self._retry_count += 1
                 _LOGGER.warning(
                     "Connection error for %s (retry %d/%d): %s",
-                    self._host, self._retry_count, self._max_retries, str(err)
+                    self.host, self._retry_count, self._max_retries, str(err)
                 )
                 await asyncio.sleep(RETRY_DELAY)
             else:
                 self._retry_count = 0
-                _LOGGER.error("Connection error for %s: %s", self._host, str(err))
+                _LOGGER.error("Connection error for %s: %s", self.host, str(err))
                 
         except Exception as err:
             self._available = False
-            _LOGGER.error("Error updating data for %s: %s", self._host, str(err))
+            _LOGGER.error("Error updating data for %s: %s", self.host, str(err))
             
         finally:
             if session and not session.closed:
@@ -190,11 +190,11 @@ class EveusUpdater:
         """Start the update loop."""
         if self._update_task is None:
             self._update_task = asyncio.create_task(self.update_loop())
-            _LOGGER.debug("Started update loop for %s", self._host)
+            _LOGGER.debug("Started update loop for %s", self.host)
 
     async def update_loop(self) -> None:
         """Handle update loop."""
-        _LOGGER.debug("Starting update loop for %s", self._host)
+        _LOGGER.debug("Starting update loop for %s", self.host)
         while True:
             try:
                 async with self._update_lock:
@@ -237,7 +237,7 @@ class BaseEveusEntity(RestoreEntity, Entity):
             raise NotImplementedError("ENTITY_NAME must be defined in child class")
 
         self._attr_name = self.ENTITY_NAME
-        # Corrected: Use updater.host instead of updater._host
+        # Corrected: Use updater.host instead of updater.host
         self._attr_unique_id = f"{updater.host}_{self.ENTITY_NAME.lower().replace(' ', '_')}"
 
     @property
@@ -249,7 +249,7 @@ class BaseEveusEntity(RestoreEntity, Entity):
     def device_info(self) -> dict[str, Any]:
         """Return device information."""
         return {
-            # Corrected: Use self._updater.host instead of self._updater._host
+            # Corrected: Use self._updater.host instead of self._updater.host
             "identifiers": {(DOMAIN, self._updater.host)},
             "name": "Eveus EV Charger",
             "manufacturer": "Eveus",
