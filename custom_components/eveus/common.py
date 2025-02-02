@@ -98,16 +98,21 @@ class EveusUpdater:
                 timeout=UPDATE_TIMEOUT,
             ) as response:
                 response.raise_for_status()
-                data = await response.json()
+                text = await response.text()
+                try:
+                    data = response.json(content=text)
+                except ValueError:
+                    _LOGGER.error("Invalid JSON received: %s", text)
+                    return
                 
                 if not isinstance(data, dict):
-                    raise ValueError(f"Expected dict, got {type(data)}")
+                    _LOGGER.error("Unexpected data type: %s", type(data))
+                    return
                 
                 _LOGGER.debug(
-                    "Data update for %s - evseEnabled: %s, oneCharge: %s",
-                    self._host, 
-                    data.get("evseEnabled"),
-                    data.get("oneCharge")
+                    "Raw data update for %s: %s", 
+                    self._host,
+                    text
                 )
 
                 self._data = data
@@ -125,11 +130,19 @@ class EveusUpdater:
                             str(err)
                         )
 
+        except aiohttp.ClientError as err:
+            self._error_count += 1
+            self._available = False if self._error_count >= self._max_errors else True
+            _LOGGER.error("Connection error for %s: %s", self._host, str(err))
+        except asyncio.TimeoutError as err:
+            self._error_count += 1
+            self._available = False if self._error_count >= self._max_errors else True
+            _LOGGER.error("Timeout error for %s: %s", self._host, str(err))
         except Exception as err:
             self._error_count += 1
             self._available = False if self._error_count >= self._max_errors else True
-            _LOGGER.error("Error updating data for %s: %s", self._host, str(err))
-
+            _LOGGER.error("Error updating data for %s: %s", self._host, str(err), exc_info=True)
+            
     async def async_shutdown(self) -> None:
         """Shutdown the updater."""
         if self._update_task:
