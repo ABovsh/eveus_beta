@@ -343,12 +343,6 @@ class TimeToTargetSocSensor(TextEntity, BaseEveusEntity):
     def native_value(self) -> str:
         """Calculate and return formatted time to target."""
         try:
-            current_soc = float(self.hass.states.get("sensor.eveus_ev_charger_soc_percent").state
-
-    @property
-    def native_value(self) -> str:
-        """Calculate and return formatted time to target."""
-        try:
             current_soc = float(self.hass.states.get("sensor.eveus_ev_charger_soc_percent").state)
             target_soc = float(self.hass.states.get("input_number.ev_target_soc").state)
             power_meas = float(self._updater.data.get(ATTR_POWER, 0))
