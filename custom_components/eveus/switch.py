@@ -112,7 +112,7 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
     """Representation of Eveus reset counter A switch."""
 
     ENTITY_NAME = "Reset Counter A"
-    _attr_icon = "mdi:counter"
+    _attr_icon = "mdi:refresh-circle"
     _command = "rstEM1"
     _state_key = "IEM1"
 
