@@ -75,6 +75,7 @@ class EveusStopChargingSwitch(BaseSwitchEntity):
     ENTITY_NAME = "Stop Charging"
     _attr_icon = "mdi:ev-station"
     _command = "evseEnabled"
+    _state_key = "evseEnabled"
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn on charging."""
@@ -84,19 +85,13 @@ class EveusStopChargingSwitch(BaseSwitchEntity):
         """Turn off charging."""
         await self._send_switch_command(0)
 
-    async def async_update(self) -> None:
-        """Update state."""
-        if self._updater.available:
-            value = self._updater.data.get("evseEnabled")
-            if value is not None:
-                self._is_on = bool(value)
-
 class EveusOneChargeSwitch(BaseSwitchEntity):
     """Representation of Eveus one charge switch."""
 
     ENTITY_NAME = "One Charge"
     _attr_icon = "mdi:lightning-bolt"
     _command = "oneCharge"
+    _state_key = "oneCharge"
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Enable one charge mode."""
@@ -106,24 +101,18 @@ class EveusOneChargeSwitch(BaseSwitchEntity):
         """Disable one charge mode."""
         await self._send_switch_command(0)
 
-    async def async_update(self) -> None:
-        """Update state."""
-        if self._updater.available:
-            value = self._updater.data.get("oneCharge")
-            if value is not None:
-                self._is_on = bool(value)
-
 class EveusResetCounterASwitch(BaseSwitchEntity):
     """Representation of Eveus reset counter A switch."""
 
     ENTITY_NAME = "Reset Counter A"
     _attr_icon = "mdi:refresh-circle"
     _command = "rstEM1"
+    _state_key = "IEM1"
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Reset counter A."""
         await self._send_switch_command(0)
-        self._is_on = True  # Update local state
+        self._is_on = True
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
@@ -135,12 +124,15 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
     async def async_update(self) -> None:
         """Update state based on IEM1 value."""
         if self._updater.available:
-            try:
-                iem1_value = self._updater.data.get("IEM1")
-                self._is_on = False if iem1_value in (None, "", 0, "0", "null", "undefined", "ERROR") else True
-            except (TypeError, ValueError):
-                self._is_on = False
-
+            value = self._updater.data.get(self._state_key)
+            if value is not None:
+                try:
+                    float_value = float(value)
+                    self._is_on = float_value > 0
+                    _LOGGER.debug("Reset Counter A value: %s, state: %s", float_value, self._is_on)
+                except (ValueError, TypeError):
+                    self._is_on = False
+                    
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
