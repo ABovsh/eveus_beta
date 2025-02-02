@@ -37,6 +37,11 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
         self._is_on = False
 
     @property
+    def available(self) -> bool:
+        """Return if entity is available."""
+        return self._updater.available and self._state_key in self._updater.data
+
+    @property
     def is_on(self) -> bool:
         """Return true if the switch is on."""
         return self._is_on
@@ -45,8 +50,6 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
         """Send command to switch."""
         if self._command is None:
             raise NotImplementedError("_command must be defined")
-        
-        _LOGGER.debug("Sending command %s=%s to %s", self._command, value, self._updater._host)
             
         if await send_eveus_command(
             self._updater._host,
@@ -59,15 +62,34 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
             self._is_on = bool(value)
             self.async_write_ha_state()
 
+    def _get_state_from_value(self, value: Any) -> bool:
+        """Convert value to boolean state."""
+        if value is None:
+            return False
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            try:
+                return bool(int(value))
+            except ValueError:
+                return value.lower() in ('true', 'on', 'yes', '1')
+        return False
+
     async def async_update(self) -> None:
         """Update state."""
         if self._updater.available and self._state_key:
             value = self._updater.data.get(self._state_key)
-            if value is not None:
-                new_state = bool(int(value))
-                if new_state != self._is_on:
-                    self._is_on = new_state
-                    _LOGGER.debug("%s state updated to %s", self.name, self._is_on)
+            new_state = self._get_state_from_value(value)
+            if new_state != self._is_on:
+                _LOGGER.debug(
+                    "%s state changed: value=%s, new_state=%s",
+                    self.name,
+                    value,
+                    new_state
+                )
+                self._is_on = new_state
                     
 class EveusStopChargingSwitch(BaseSwitchEntity):
     """Representation of Eveus charging control switch."""
