@@ -26,7 +26,7 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
     _attr_entity_category = EntityCategory.CONFIG
     _command: str = None
     _state_key: str = None
-    
+
     def __init__(self, updater: EveusUpdater) -> None:
         """Initialize the switch."""
         super().__init__(updater)
@@ -43,22 +43,6 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
         except (TypeError, ValueError):
             return self._is_on
 
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn on the switch."""
-        if await self._updater.send_command(self._command, 1):
-            self._is_on = True
-            self.async_write_ha_state()
-        else:
-            _LOGGER.error("%s: Failed to set state to 1", self.name)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn off the switch."""
-        if await self._updater.send_command(self._command, 0):
-            self._is_on = False
-            self.async_write_ha_state()
-        else:
-            _LOGGER.error("%s: Failed to set state to 0", self.name)
-
     async def _async_restore_state(self, state: State) -> None:
         """Restore previous state."""
         try:
@@ -72,7 +56,7 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
 class EveusStopChargingSwitch(BaseSwitchEntity):
     """Representation of Eveus charging control switch."""
 
-    _attr_name = "Stop Charging"
+    ENTITY_NAME = "Stop Charging"
     _attr_icon = "mdi:ev-station"
     _command = "evseEnabled"
     _state_key = "evseEnabled"
@@ -96,7 +80,7 @@ class EveusStopChargingSwitch(BaseSwitchEntity):
 class EveusOneChargeSwitch(BaseSwitchEntity):
     """Representation of Eveus one charge switch."""
 
-    _attr_name = "One Charge"
+    ENTITY_NAME = "One Charge"
     _attr_icon = "mdi:lightning-bolt"
     _command = "oneCharge"
     _state_key = "oneCharge"
@@ -120,7 +104,7 @@ class EveusOneChargeSwitch(BaseSwitchEntity):
 class EveusResetCounterASwitch(BaseSwitchEntity):
     """Representation of Eveus reset counter A switch."""
 
-    _attr_name = "Reset Counter A"
+    ENTITY_NAME = "Reset Counter A"
     _attr_icon = "mdi:counter"
     _command = "rstEM1"
     _state_key = "IEM1"
@@ -134,7 +118,7 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
             _LOGGER.error("%s: Failed to reset counter", self.name)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Reset command for off state."""
+        """Reset counter - off state is same as on for reset."""
         if await self._updater.send_command(self._command, 0):
             self._is_on = False
             self.async_write_ha_state()
