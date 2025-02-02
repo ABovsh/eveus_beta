@@ -21,6 +21,42 @@ RETRY_DELAY = 10  # Single retry after 10 seconds
 COMMAND_TIMEOUT = 5
 UPDATE_TIMEOUT = 5
 
+async def send_eveus_command(
+    host: str, 
+    username: str, 
+    password: str, 
+    command: str, 
+    value: Any,
+    session: aiohttp.ClientSession | None = None
+) -> bool:
+    """Send command to Eveus device."""
+    should_close = False
+
+    if session is None:
+        timeout = aiohttp.ClientTimeout(total=COMMAND_TIMEOUT, connect=2)
+        connector = aiohttp.TCPConnector(limit=1, force_close=True, ssl=False)
+        session = aiohttp.ClientSession(timeout=timeout, connector=connector)
+        should_close = True
+
+    try:
+        async with session.post(
+            f"http://{host}/pageEvent",
+            auth=aiohttp.BasicAuth(username, password),
+            headers={"Content-type": "application/x-www-form-urlencoded"},
+            data=f"pageevent={command}&{command}={value}",
+            timeout=COMMAND_TIMEOUT,
+        ) as response:
+            response.raise_for_status()
+            return True
+
+    except Exception as err:
+        _LOGGER.error("Failed to send command %s: %s", command, str(err))
+        return False
+
+    finally:
+        if should_close and session and not session.closed:
+            await session.close()
+
 class EveusUpdater:
     """Class to handle Eveus data updates."""
 
@@ -79,7 +115,8 @@ class EveusUpdater:
             connector = aiohttp.TCPConnector(
                 limit=1, 
                 force_close=True,
-                enable_cleanup_closed=True
+                enable_cleanup_closed=True,
+                ssl=False
             )
             self._session = aiohttp.ClientSession(
                 timeout=timeout,
@@ -91,92 +128,57 @@ class EveusUpdater:
     async def _update(self) -> None:
         """Update the data."""
         session = None
-        retry_count = 0
-        max_retries = 1  # Only retry once
-
-        while retry_count <= max_retries:
-            try:
-                session = await self._get_session()
-                
-                async with session.post(
-                    f"http://{self._host}/main",
-                    auth=aiohttp.BasicAuth(self._username, self._password),
-                    timeout=aiohttp.ClientTimeout(total=5, connect=3),
-                    headers={"Connection": "close"},
-                ) as response:
-                    response.raise_for_status()
-                    text = await response.text()
-                    data = json.loads(text)
-                    
-                    if not isinstance(data, dict):
-                        raise ValueError(f"Unexpected data type: {type(data)}")
-                    
-                    self._data = data
-                    self._available = True
-                    self._last_update = time.time()
-
-                    for entity in self._entities:
-                        try:
-                            entity.async_write_ha_state()
-                        except Exception as err:
-                            _LOGGER.error(
-                                "Error updating entity %s: %s",
-                                getattr(entity, 'name', 'unknown'),
-                                str(err)
-                            )
-                    return
-
-            except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-                self._available = False
-                if retry_count < max_retries:
-                    _LOGGER.warning(
-                        "Connection error for %s (retrying in %ds): %s",
-                        self._host, RETRY_DELAY, str(err)
-                    )
-                    await asyncio.sleep(RETRY_DELAY)
-                    retry_count += 1
-                else:
-                    _LOGGER.error(
-                        "Connection error for %s after retry: %s",
-                        self._host, str(err)
-                    )
-                    break
-                    
-            except Exception as err:
-                self._available = False
-                _LOGGER.error(
-                    "Error updating data for %s: %s",
-                    self._host, str(err)
-                )
-                break
-
-            finally:
-                if session and not session.closed:
-                    await session.close()
-                self._session = None
-
-    async def send_command(self, command: str, value: Any) -> bool:
-        """Send command to device."""
-        session = None
         try:
             session = await self._get_session()
-            async with self._command_lock:
-                async with session.post(
-                    f"http://{self._host}/pageEvent",
-                    auth=aiohttp.BasicAuth(self._username, self._password),
-                    headers={"Content-type": "application/x-www-form-urlencoded"},
-                    data=f"pageevent={command}&{command}={value}",
-                    timeout=COMMAND_TIMEOUT,
-                ) as response:
-                    response.raise_for_status()
-                    return True
+            
+            async with session.post(
+                f"http://{self._host}/main",
+                auth=aiohttp.BasicAuth(self._username, self._password),
+                timeout=aiohttp.ClientTimeout(total=5, connect=3),
+                headers={"Connection": "close"},
+            ) as response:
+                response.raise_for_status()
+                text = await response.text()
+                data = json.loads(text)
+                
+                if not isinstance(data, dict):
+                    raise ValueError(f"Unexpected data type: {type(data)}")
+                
+                self._data = data
+                self._available = True
+                self._last_update = time.time()
+
+                for entity in self._entities:
+                    try:
+                        entity.async_write_ha_state()
+                    except Exception as err:
+                        _LOGGER.error(
+                            "Error updating entity %s: %s",
+                            getattr(entity, 'name', 'unknown'),
+                            str(err)
+                        )
+                return
+
         except Exception as err:
-            _LOGGER.error("Failed to send command %s: %s", command, str(err))
-            return False
+            _LOGGER.error("Error updating data for %s: %s", self._host, str(err))
+            self._available = False
+                
         finally:
             if session and not session.closed:
                 await session.close()
             self._session = None
+
+    async def send_command(self, command: str, value: Any) -> bool:
+        """Send command to device."""
+        async with self._command_lock:
+            return await send_eveus_command(
+                self._host,
+                self._username,
+                self._password,
+                command,
+                value,
+                await self._get_session()
+            )
 
     async def async_shutdown(self) -> None:
         """Shutdown the updater."""
