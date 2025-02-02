@@ -30,6 +30,7 @@ from homeassistant.const import (
 
 from .common import (
     BaseEveusEntity,
+    BaseEveusNumericEntity,
     EveusUpdater,
 )
 from .const import (
@@ -449,7 +450,6 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the Eveus sensors."""
-    # FIXED: Get existing updater from hass.data
     data = hass.data[DOMAIN][entry.entry_id]
     updater = data["updater"]
 
