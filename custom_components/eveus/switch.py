@@ -26,7 +26,7 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
     _attr_entity_category = EntityCategory.CONFIG
     _command: str = None
     _state_key: str = None
-
+    
     def __init__(self, updater: EveusUpdater) -> None:
         """Initialize the switch."""
         super().__init__(updater)
@@ -43,17 +43,31 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
         except (TypeError, ValueError):
             return self._is_on
 
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn on the switch."""
+        if await self._updater.send_command(self._command, 1):
+            self._is_on = True
+            self.async_write_ha_state()
+        else:
+            _LOGGER.error("%s: Failed to set state to 1", self.name)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn off the switch."""
+        if await self._updater.send_command(self._command, 0):
+            self._is_on = False
+            self.async_write_ha_state()
+        else:
+            _LOGGER.error("%s: Failed to set state to 0", self.name)
+
     async def _async_restore_state(self, state: State) -> None:
         """Restore previous state."""
         try:
             if state.state == "on":
-                self._is_on = True
                 await self.async_turn_on()
             elif state.state == "off":
-                self._is_on = False
                 await self.async_turn_off()
         except Exception as err:
-            _LOGGER.error("%s: Error restoring state: %s", self.name, err)
+            _LOGGER.error("Error restoring state for %s: %s", self.name, err)
 
 class EveusStopChargingSwitch(BaseSwitchEntity):
     """Representation of Eveus charging control switch."""
