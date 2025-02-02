@@ -87,6 +87,7 @@ class EveusUpdater:
         self._update_lock = asyncio.Lock()
         self._command_lock = asyncio.Lock()
         self._retry_needed = False
+        self._failed_requests = 0
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create client session."""
@@ -110,6 +111,11 @@ class EveusUpdater:
         """Return if updater is available."""
         return self._available
 
+    @property
+    def failed_requests(self) -> int:
+        """Return number of consecutive failed requests."""
+        return self._failed_requests
+
     async def _update(self) -> None:
         """Update the data."""
         try:
@@ -117,7 +123,7 @@ class EveusUpdater:
             async with session.post(
                 f"http://{self.host}/main",
                 auth=aiohttp.BasicAuth(self.username, self.password),
-                timeout=SESSION_TIMEOUT,
+                timeout=aiohttp.ClientTimeout(total=10),
             ) as response:
                 response.raise_for_status()
                 text = await response.text()
@@ -132,6 +138,7 @@ class EveusUpdater:
                         self._available = True
                         self._last_update = time.time()
                         self._retry_needed = False
+                        self._failed_requests = 0  # Reset on successful update
 
                         # Update registered entities
                         for entity in self._entities:
@@ -147,15 +154,18 @@ class EveusUpdater:
                     
                 except ValueError as json_err:
                     _LOGGER.error("Invalid JSON received: %s", json_err)
+                    self._failed_requests += 1
                     raise
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             self._available = False
             self._retry_needed = True
+            self._failed_requests += 1
             _LOGGER.error("Connection error for %s: %s", self.host, str(err))
             
         except Exception as err:
             self._available = False
+            self._failed_requests += 1
             _LOGGER.error("Error updating data for %s: %s", self.host, str(err))
 
     async def send_command(self, command: str, value: Any) -> bool:
@@ -235,11 +245,10 @@ class BaseEveusEntity(RestoreEntity, Entity):
         """Return device information."""
         return {
             "identifiers": {(DOMAIN, self._updater.host)},
-            "name": "Eveus EV Charger",
+            "name": f"Eveus ({self._updater.host})",
             "manufacturer": "Eveus",
-            "model": f"Eveus ({self._updater.host})",
-            "sw_version": self._updater.data.get("verFWMain", "Unknown"),
-            "hw_version": self._updater.data.get("verHW", "Unknown"),
+            "model": "Eveus EV Charger",
+            "sw_version": f"Firmware: {self._updater.data.get('verFWMain', 'Unknown')}",
         }
 
     async def async_added_to_hass(self) -> None:
