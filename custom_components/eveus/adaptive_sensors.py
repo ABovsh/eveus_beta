@@ -13,7 +13,7 @@ from homeassistant.const import (
     UnitOfElectricCurrent,
 )
 
-from .common import EveusSensorBase
+from .common import EveusSensorBase, EveusUpdater
 
 _LOGGER = logging.getLogger(__name__)
 
