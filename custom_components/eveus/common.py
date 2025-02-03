@@ -13,6 +13,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers import aiohttp_client
+from homeassistant.components.sensor import SensorEntity
 from homeassistant.exceptions import HomeAssistantError
 
 from .const import DOMAIN, SCAN_INTERVAL
