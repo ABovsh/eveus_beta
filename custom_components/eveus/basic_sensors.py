@@ -20,19 +20,6 @@ from .common import EveusSensorBase, EveusUpdater
 
 _LOGGER = logging.getLogger(__name__)
 
-class EveusSensorBase(BaseEveusEntity, SensorEntity):
-    """Base sensor entity for Eveus."""
-    
-    def __init__(self, updater: EveusUpdater) -> None:
-        """Initialize the sensor."""
-        super().__init__(updater)
-        self._attr_native_value = None
-
-    @property
-    def native_value(self) -> Any | None:
-        """Return sensor value."""
-        return self._attr_native_value
-
 class EveusVoltageSensor(EveusSensorBase):
     """Voltage measurement sensor."""
     
