@@ -16,7 +16,7 @@ from homeassistant.const import (
     UnitOfTime,
 )
 
-from .common import BaseEveusEntity, SensorEntity
+from .common import EveusSensorBase, EveusUpdater
 
 _LOGGER = logging.getLogger(__name__)
 
