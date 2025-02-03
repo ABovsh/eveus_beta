@@ -154,26 +154,37 @@ class EveusConnectionErrorsSensor(EveusDiagnosticSensor):
 
     ENTITY_NAME = "Connection Errors"
     _attr_icon = "mdi:connection"
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = None
+
+    def __init__(self, updater: EveusUpdater) -> None:
+        """Initialize the sensor."""
+        super().__init__(updater)
+        self._attr_native_value = 0
+        self._last_check_time = 0
 
     @property
     def native_value(self) -> int:
-        """Return number of consecutive failed requests."""
+        """Return cumulative number of failed requests."""
         return self._updater.failed_requests
 
-class EveusStateSensor(EveusDiagnosticSensor):
-    ENTITY_NAME = "State"
-
     @property
-    def native_value(self) -> str:
-        """Return charging state."""
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return additional sensor state attributes."""
+        return {
+            "last_error_time": time.strftime('%Y-%m-%d %H:%M:%S', 
+                time.localtime(self._updater.last_error_time)) if self._updater.last_error_time else None,
+            "last_error_type": self._updater.last_error_type,
+            "consecutive_errors": self._updater.consecutive_errors,
+        }
+
+    async def _async_restore_state(self, state) -> None:
+        """Restore previous error count on restart."""
         try:
-            state_value = self._updater.data.get(ATTR_STATE)
-            if state_value is None:
-                return None
-            return CHARGING_STATES.get(state_value, "Unknown")
-        except (TypeError, ValueError):
-            return None
+            if state.state.isnumeric():
+                self._attr_native_value = int(state.state)
+        except (TypeError, ValueError) as err:
+            _LOGGER.error("Error restoring connection error count: %s", err)
 
 class EveusSubstateSensor(EveusDiagnosticSensor):
     ENTITY_NAME = "Substate"
