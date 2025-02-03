@@ -6,15 +6,11 @@ from datetime import timedelta
 DOMAIN = "eveus"
 SCAN_INTERVAL = timedelta(seconds=30)
 
-# Model constants
-MODEL_16A = "16A"
-MODEL_32A = "32A"
-MODELS = [MODEL_16A, MODEL_32A]
+MIN_CURRENT = 7
 MODEL_MAX_CURRENT = {
-    MODEL_16A: 16,
-    MODEL_32A: 32,
+    "16A": 16,
+    "32A": 32
 }
-MIN_CURRENT = 8
 
 # Configuration
 CONF_MODEL = "model"
