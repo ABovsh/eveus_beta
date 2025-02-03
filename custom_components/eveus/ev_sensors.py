@@ -3,16 +3,13 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-import time
 
 from homeassistant.components.text import TextEntity
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorStateClass,
 )
-from homeassistant.const import (
-    UnitOfEnergy,
-)
+from homeassistant.const import UnitOfEnergy
 
 from .common import (
     BaseEveusEntity,
@@ -41,9 +38,11 @@ class EVSocKwhSensor(EveusSensorBase):
             correction = float(self.hass.states.get("input_number.ev_soc_correction").state)
 
             if None in (initial_soc, max_capacity, energy_charged, correction):
+                _LOGGER.debug("Missing required values for SOC calculation")
                 return None
 
             if initial_soc < 0 or initial_soc > 100 or max_capacity <= 0:
+                _LOGGER.debug("Invalid values for SOC calculation")
                 return None
 
             initial_kwh = (initial_soc / 100) * max_capacity
@@ -52,6 +51,7 @@ class EVSocKwhSensor(EveusSensorBase):
             total_kwh = initial_kwh + charged_kwh
             
             return round(max(0, min(total_kwh, max_capacity)), 2)
+
         except (TypeError, ValueError, AttributeError) as err:
             _LOGGER.error("Error calculating SOC in kWh: %s", err)
             return None
@@ -74,6 +74,7 @@ class EVSocPercentSensor(EveusSensorBase):
             max_capacity = float(self.hass.states.get("input_number.ev_battery_capacity").state)
             
             if None in (soc_kwh, max_capacity) or max_capacity <= 0:
+                _LOGGER.debug("Missing or invalid values for SOC percentage calculation")
                 return None
 
             percentage = round((soc_kwh / max_capacity * 100), 0)
@@ -103,6 +104,7 @@ class TimeToTargetSocSensor(TextEntity, BaseEveusEntity):
 
             # Validate inputs
             if any(x is None for x in [current_soc, target_soc, power_meas, battery_capacity, correction]):
+                _LOGGER.debug("Missing required values for time to target calculation")
                 return "Not charging"
 
             if power_meas <= 0:
