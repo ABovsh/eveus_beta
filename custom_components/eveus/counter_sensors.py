@@ -10,7 +10,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import UnitOfEnergy
 
-from .common import EveusSensorBase
+from .common import EveusSensorBase, EveusUpdater
 
 _LOGGER = logging.getLogger(__name__)
 
