@@ -97,7 +97,10 @@ class EveusCurrentNumber(EveusNumberEntity):
             if await self._updater.send_command(self._state_key, value):
                 self._attr_native_value = float(value)
                 self.async_write_ha_state()
-        except Exception as err:
+            else:
+                _LOGGER.error("Failed to set current value to %s", value)
+                
+        except (TypeError, ValueError, ConnectionError, TimeoutError) as err:
             _LOGGER.error("Error setting current value: %s", err)
 
     async def _async_restore_state(self, state) -> None:
@@ -108,7 +111,7 @@ class EveusCurrentNumber(EveusNumberEntity):
                 self._attr_native_value = restored_value
         except (TypeError, ValueError) as err:
             _LOGGER.error("Error restoring current value: %s", err)
-
+            
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
