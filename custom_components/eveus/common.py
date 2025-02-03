@@ -6,6 +6,7 @@ import asyncio
 import time
 import json
 from typing import Any
+from contextlib import asynccontextmanager
 
 import aiohttp
 from homeassistant.core import HomeAssistant
@@ -13,7 +14,6 @@ from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers import aiohttp_client
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.components.sensor import SensorEntity
 
 from .const import DOMAIN, SCAN_INTERVAL
 
@@ -286,3 +286,26 @@ class EveusSensorBase(BaseEveusEntity, SensorEntity):
     def native_value(self) -> Any | None:
         """Return sensor value."""
         return self._attr_native_value
+
+async def send_eveus_command(
+    session: aiohttp.ClientSession,
+    host: str,
+    username: str,
+    password: str,
+    command: str,
+    value: Any
+) -> bool:
+    """Send command to Eveus device."""
+    try:
+        async with session.post(
+            f"http://{host}/pageEvent",
+            auth=aiohttp.BasicAuth(username, password),
+            headers={"Content-type": "application/x-www-form-urlencoded"},
+            data=f"pageevent={command}&{command}={value}",
+            timeout=aiohttp.ClientTimeout(total=5)
+        ) as response:
+            response.raise_for_status()
+            return True
+    except Exception as err:
+        logging.error("Command %s failed: %s", command, str(err))
+        return False
