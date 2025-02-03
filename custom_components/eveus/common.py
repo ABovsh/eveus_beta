@@ -6,7 +6,6 @@ import asyncio
 import time
 import json
 from typing import Any
-from contextlib import asynccontextmanager
 
 import aiohttp
 from homeassistant.core import HomeAssistant
