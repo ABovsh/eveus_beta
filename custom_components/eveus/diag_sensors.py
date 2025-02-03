@@ -6,17 +6,13 @@ from typing import Any
 import time
 
 from homeassistant.components.sensor import (
-    SensorEntity,
-    SensorStateClass,
     SensorDeviceClass,
+    SensorStateClass,
 )
 from homeassistant.const import UnitOfTemperature
 from homeassistant.helpers.entity import EntityCategory
 
-from .common import (
-    BaseEveusEntity,
-    EveusSensorBase,
-)
+from .common import EveusSensorBase, EveusUpdater
 from .const import (
     CHARGING_STATES,
     ERROR_STATES,
