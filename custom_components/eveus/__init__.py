@@ -42,13 +42,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     entry.data[CONF_USERNAME],
                     entry.data[CONF_PASSWORD]
                 ),
-                timeout=5
+                timeout=15
             ) as response:
                 response.raise_for_status()
                 
-        except Exception as err:
-            _LOGGER.error("Connection test failed: %s", str(err))
-            raise ConfigEntryNotReady("Failed to connect to device") from err
+        except aiohttp.ClientError as err:
+            _LOGGER.error("Connection error to %s: %s", entry.data[CONF_HOST], str(err))
+            raise ConfigEntryNotReady(f"Connection error: {str(err)}") from err
+        except asyncio.TimeoutError:
+            _LOGGER.error("Timeout connecting to %s", entry.data[CONF_HOST])
+            raise ConfigEntryNotReady("Connection timeout") from None
         
         # Create updater instance
         updater = EveusUpdater(
