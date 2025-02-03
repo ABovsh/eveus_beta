@@ -335,5 +335,6 @@ class BaseEveusNumericEntity(BaseEveusEntity):
             if value in (None, "", "undefined", "null"):
                 return None
             return float(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as err:
+            _LOGGER.error("Error converting value for %s: %s", self._key, err)
             return None
