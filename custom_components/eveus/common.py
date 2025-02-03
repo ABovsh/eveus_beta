@@ -20,16 +20,23 @@ from .const import DOMAIN, SCAN_INTERVAL
 _LOGGER = logging.getLogger(__name__)
 
 # Constants
-RETRY_DELAY = 10
+RETRY_DELAY = 15  # Changed from 10 to 15 seconds
 COMMAND_TIMEOUT = 5
-UPDATE_TIMEOUT = 5
+UPDATE_TIMEOUT = 20  # Changed from 5 to 20 seconds
 SESSION_TIMEOUT = aiohttp.ClientTimeout(total=10, connect=3)
+MAX_RETRIES = 1  # Limit to one retry
 
 class EveusError(HomeAssistantError):
     """Base class for Eveus errors."""
 
 class EveusConnectionError(EveusError):
     """Error indicating connection issues."""
+
+class EveusResponseError(EveusError):
+    """Error indicating invalid response."""
+
+class EveusTimeoutError(EveusError):
+    """Error indicating timeout."""
 
 @asynccontextmanager
 async def get_eveus_session(hass: HomeAssistant) -> aiohttp.ClientSession:
@@ -60,6 +67,15 @@ async def send_eveus_command(
             response.raise_for_status()
             return True
     
+    except aiohttp.ClientTimeout as err:
+        _LOGGER.error(
+            "Command %s timed out: %s (Host: %s)",
+            command,
+            str(err),
+            host
+        )
+        raise EveusTimeoutError(f"Command timeout: {err}") from err
+        
     except aiohttp.ClientError as err:
         _LOGGER.error(
             "Command %s failed: %s (Host: %s)",
@@ -67,7 +83,7 @@ async def send_eveus_command(
             str(err),
             host
         )
-        return False
+        raise EveusConnectionError(f"Command failed: {err}") from err
 
 class EveusUpdater:
     """Class to handle Eveus data updates."""
@@ -86,8 +102,9 @@ class EveusUpdater:
         self._last_update = 0
         self._update_lock = asyncio.Lock()
         self._command_lock = asyncio.Lock()
-        self._retry_needed = False
+        self._retry_count = 0
         self._failed_requests = 0
+        self._last_retry_time = 0
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create client session."""
@@ -118,12 +135,21 @@ class EveusUpdater:
 
     async def _update(self) -> None:
         """Update the data."""
+        current_time = time.time()
+        
         try:
+            # Check if we should retry based on timing
+            if (self._retry_count > 0 and 
+                current_time - self._last_retry_time < RETRY_DELAY):
+                return
+                
+            self._last_retry_time = current_time
             session = await self._get_session()
+            
             async with session.post(
                 f"http://{self.host}/main",
                 auth=aiohttp.BasicAuth(self.username, self.password),
-                timeout=aiohttp.ClientTimeout(total=10),
+                timeout=aiohttp.ClientTimeout(total=UPDATE_TIMEOUT),
             ) as response:
                 response.raise_for_status()
                 text = await response.text()
@@ -131,14 +157,14 @@ class EveusUpdater:
                 try:
                     data = json.loads(text)
                     if not isinstance(data, dict):
-                        raise ValueError(f"Unexpected data type: {type(data)}")
+                        raise EveusResponseError(f"Unexpected data type: {type(data)}")
                     
                     if data != self._data:
                         self._data = data
                         self._available = True
-                        self._last_update = time.time()
-                        self._retry_needed = False
-                        self._failed_requests = 0  # Reset on successful update
+                        self._last_update = current_time
+                        self._retry_count = 0
+                        self._failed_requests = 0
 
                         # Update registered entities
                         for entity in self._entities:
@@ -152,33 +178,61 @@ class EveusUpdater:
                                         str(err)
                                     )
                     
-                except ValueError as json_err:
-                    _LOGGER.error("Invalid JSON received: %s", json_err)
+                except (ValueError, json.JSONDecodeError) as err:
+                    _LOGGER.error("Invalid JSON received: %s", err)
                     self._failed_requests += 1
-                    raise
+                    raise EveusResponseError(f"Invalid JSON: {err}") from err
 
-        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-            self._available = False
-            self._retry_needed = True
-            self._failed_requests += 1
-            _LOGGER.error("Connection error for %s: %s", self.host, str(err))
+        except asyncio.TimeoutError as err:
+            self._handle_update_error("Timeout error", err)
+            
+        except aiohttp.ClientError as err:
+            self._handle_update_error("Connection error", err)
+            
+        except EveusError as err:
+            self._handle_update_error("Eveus error", err)
             
         except Exception as err:
+            self._handle_update_error("Unexpected error", err)
+
+    def _handle_update_error(self, error_type: str, error: Exception) -> None:
+        """Handle update errors consistently."""
+        self._failed_requests += 1
+        
+        if self._retry_count < MAX_RETRIES:
+            self._retry_count += 1
+            _LOGGER.warning(
+                "%s for %s (attempt %d/%d): %s",
+                error_type,
+                self.host,
+                self._retry_count,
+                MAX_RETRIES + 1,
+                str(error)
+            )
+        else:
             self._available = False
-            self._failed_requests += 1
-            _LOGGER.error("Error updating data for %s: %s", self.host, str(err))
+            _LOGGER.error(
+                "%s for %s (max retries reached): %s",
+                error_type,
+                self.host,
+                str(error)
+            )
 
     async def send_command(self, command: str, value: Any) -> bool:
         """Send command to device."""
         async with self._command_lock:
-            return await send_eveus_command(
-                self.host,
-                self.username,
-                self.password,
-                command,
-                value,
-                await self._get_session()
-            )
+            try:
+                return await send_eveus_command(
+                    self.host,
+                    self.username,
+                    self.password,
+                    command,
+                    value,
+                    await self._get_session()
+                )
+            except EveusError as err:
+                _LOGGER.error("Failed to send command %s: %s", command, err)
+                return False
 
     async def async_start_updates(self) -> None:
         """Start the update loop."""
@@ -194,11 +248,10 @@ class EveusUpdater:
                 async with self._update_lock:
                     await self._update()
                     
-                if self._retry_needed:
+                if self._retry_count > 0 and self._retry_count <= MAX_RETRIES:
                     await asyncio.sleep(RETRY_DELAY)
-                    continue
-                    
-                await asyncio.sleep(SCAN_INTERVAL.total_seconds())
+                else:
+                    await asyncio.sleep(SCAN_INTERVAL.total_seconds())
                     
             except asyncio.CancelledError:
                 break
