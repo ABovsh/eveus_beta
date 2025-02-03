@@ -10,7 +10,7 @@ from homeassistant.components.number import (
     NumberDeviceClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.const import (
@@ -52,6 +52,7 @@ class EveusCurrentNumber(EveusNumberEntity):
     _attr_device_class = NumberDeviceClass.CURRENT
     _attr_icon = "mdi:current-ac"
     _attr_entity_category = EntityCategory.CONFIG
+    _state_key = "currentSet"
 
     def __init__(self, updater: EveusUpdater, model: str) -> None:
         """Initialize the current control."""
@@ -63,23 +64,41 @@ class EveusCurrentNumber(EveusNumberEntity):
         self._attr_native_max_value = float(MODEL_MAX_CURRENT[model])
         self._attr_native_value = min(self._attr_native_max_value, 16.0)
 
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        try:
+            value = self._updater.data.get(self._state_key)
+            if value is not None:
+                new_value = float(value)
+                if new_value != self._attr_native_value:
+                    self._attr_native_value = new_value
+                    self.async_write_ha_state()
+        except (TypeError, ValueError) as err:
+            _LOGGER.error("Error updating current value: %s", err)
+
     @property
     def native_value(self) -> float | None:
         """Return the current value."""
         try:
-            value = self._updater.data.get("currentSet")
+            value = self._updater.data.get(self._state_key)
             if value is not None:
                 self._attr_native_value = float(value)
             return self._attr_native_value
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as err:
+            _LOGGER.error("Error getting current value: %s", err)
             return self._attr_native_value
 
     async def async_set_native_value(self, value: float) -> None:
         """Set new current value."""
-        value = int(min(self._attr_native_max_value, max(self._attr_native_min_value, value)))
-        
-        if await self._updater.send_command("currentSet", value):
-            self._attr_native_value = float(value)
+        try:
+            value = int(min(self._attr_native_max_value, max(self._attr_native_min_value, value)))
+            
+            if await self._updater.send_command(self._state_key, value):
+                self._attr_native_value = float(value)
+                self.async_write_ha_state()
+        except Exception as err:
+            _LOGGER.error("Error setting current value: %s", err)
 
     async def _async_restore_state(self, state) -> None:
         """Restore previous state."""
@@ -87,8 +106,8 @@ class EveusCurrentNumber(EveusNumberEntity):
             restored_value = float(state.state)
             if self._attr_native_min_value <= restored_value <= self._attr_native_max_value:
                 self._attr_native_value = restored_value
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as err:
+            _LOGGER.error("Error restoring current value: %s", err)
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -96,7 +115,6 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the Eveus number entities."""
-    # FIXED: Get existing updater from hass.data
     data = hass.data[DOMAIN][entry.entry_id]
     updater = data["updater"]
     model = entry.data[CONF_MODEL]
