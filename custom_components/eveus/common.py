@@ -14,17 +14,26 @@ from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers import aiohttp_client
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.components.sensor import SensorEntity
 
 from .const import DOMAIN, SCAN_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
 
+__all__ = [
+    'EveusError',
+    'EveusConnectionError',
+    'EveusResponseError',
+    'EveusUpdater',
+    'BaseEveusEntity',
+    'EveusSensorBase',
+]
+
 # Constants
-RETRY_DELAY = 15  # Changed from 10 to 15 seconds
+RETRY_DELAY = 15
 COMMAND_TIMEOUT = 5
-UPDATE_TIMEOUT = 20  # Changed from 5 to 20 seconds
+UPDATE_TIMEOUT = 20
 SESSION_TIMEOUT = aiohttp.ClientTimeout(total=10, connect=3)
-MAX_RETRIES = 1  # Limit to one retry
 
 class EveusError(HomeAssistantError):
     """Base class for Eveus errors."""
