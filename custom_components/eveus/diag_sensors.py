@@ -5,6 +5,7 @@ import logging
 from typing import Any
 import time
 
+from homeassistant.components.sensor import SensorStateClass
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.const import UnitOfTemperature
 from homeassistant.helpers.entity import EntityCategory
@@ -28,7 +29,7 @@ class EveusConnectionErrorsSensor(EveusDiagnosticSensor):
 
     ENTITY_NAME = "Connection Errors"
     _attr_icon = "mdi:connection"
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING 
 
     @property
     def native_value(self) -> int:
