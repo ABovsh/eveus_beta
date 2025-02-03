@@ -380,8 +380,9 @@ class EVSocPercentSensor(EveusSensorBase):
             return None
 
 class TimeToTargetSocSensor(TextEntity, BaseEveusEntity):
-    """Time to target SOC text entity."""
-    ENTITY_NAME = "Time to Target"
+    """Time to target SOC text entity with improved error handling."""
+    
+    ENTITY_NAME = "Time to Target SOC"
     _attr_icon = "mdi:timer"
     _attr_pattern = None
     _attr_mode = "text"
@@ -390,25 +391,34 @@ class TimeToTargetSocSensor(TextEntity, BaseEveusEntity):
     def native_value(self) -> str:
         """Calculate and return formatted time to target."""
         try:
+            # Get state values with validation
             current_soc = float(self.hass.states.get("sensor.eveus_ev_charger_soc_percent").state)
             target_soc = float(self.hass.states.get("input_number.ev_target_soc").state)
-            power_meas = float(self._updater.data.get(ATTR_POWER, 0))
+            power_meas = float(self._updater.data.get("powerMeas", 0))
             battery_capacity = float(self.hass.states.get("input_number.ev_battery_capacity").state)
             correction = float(self.hass.states.get("input_number.ev_soc_correction").state)
 
-            if None in (current_soc, target_soc, power_meas, battery_capacity, correction):
-                return "-"
+            # Validate inputs
+            if any(x is None for x in [current_soc, target_soc, power_meas, battery_capacity, correction]):
+                return "Not charging"
 
+            if power_meas <= 0:
+                return "Not charging"
+
+            # Calculate remaining energy needed
             remaining_kwh = (target_soc - current_soc) * battery_capacity / 100
+            
             if remaining_kwh <= 0:
-                return "-"
-                
+                return "Target reached"
+
+            # Calculate time with efficiency correction
             efficiency = (1 - correction / 100)
             power_kw = power_meas * efficiency / 1000
             
             if power_kw <= 0:
-                return "-"
+                return "Not charging"
 
+            # Calculate time components
             total_minutes = round((remaining_kwh / power_kw * 60), 0)
             
             if total_minutes < 1:
@@ -418,6 +428,7 @@ class TimeToTargetSocSensor(TextEntity, BaseEveusEntity):
             hours = int((total_minutes % 1440) // 60)
             minutes = int(total_minutes % 60)
 
+            # Format time string with validation
             parts = []
             if days > 0:
                 parts.append(f"{days}d")
@@ -428,8 +439,12 @@ class TimeToTargetSocSensor(TextEntity, BaseEveusEntity):
 
             return " ".join(parts)
 
-        except (TypeError, ValueError, AttributeError):
-            return "-"
+        except (TypeError, ValueError, AttributeError) as err:
+            _LOGGER.debug("Error calculating time to target: %s", err)
+            return "Not charging"
+        except Exception as err:
+            _LOGGER.error("Unexpected error calculating time to target: %s", err)
+            return "Error"
 
 async def async_setup_entry(
     hass: HomeAssistant,
