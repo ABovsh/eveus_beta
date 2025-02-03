@@ -9,12 +9,10 @@ from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorStateClass,
 )
+from homeassistant.components.text import TextEntity
 from homeassistant.const import UnitOfEnergy
 
-from .common import (
-    BaseEveusEntity,
-    EveusSensorBase,
-)
+from .common import BaseEveusEntity, EveusSensorBase, EveusUpdater
 
 _LOGGER = logging.getLogger(__name__)
 
