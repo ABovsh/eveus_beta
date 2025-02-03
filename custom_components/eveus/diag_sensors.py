@@ -5,14 +5,11 @@ import logging
 from typing import Any
 import time
 
-from homeassistant.components.sensor import (
-    SensorDeviceClass,
-    SensorStateClass,
-)
+from homeassistant.components.sensor import SensorEntity
 from homeassistant.const import UnitOfTemperature
 from homeassistant.helpers.entity import EntityCategory
 
-from .common import EveusSensorBase, EveusUpdater
+from .common import BaseEveusEntity  # Added missing import
 from .const import (
     CHARGING_STATES,
     ERROR_STATES,
