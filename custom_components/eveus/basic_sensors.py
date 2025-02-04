@@ -109,12 +109,14 @@ class EveusCurrentSetSensor(EveusSensorBase):
             return None
 
 class EveusSessionTimeSensor(EveusSensorBase):
-    """Session time sensor in seconds."""
+    """Session time sensor."""
 
     ENTITY_NAME = "Session Time"
+    _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.SECONDS
+    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:timer"
-    _attr_state_class = SensorStateClass.TOTAL
+    _attr_suggested_display_precision = 0
 
     @property
     def native_value(self) -> int | None:
@@ -127,6 +129,30 @@ class EveusSessionTimeSensor(EveusSensorBase):
         except (TypeError, ValueError) as err:
             _LOGGER.error("Error getting session time: %s", err)
             return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return additional state attributes."""
+        attrs = {}
+        try:
+            seconds = int(self.native_value or 0)
+            days = seconds // 86400
+            hours = (seconds % 86400) // 3600
+            minutes = (seconds % 3600) // 60
+
+            if days > 0:
+                formatted_time = f"{days}d {hours:02d}h {minutes:02d}m"
+            elif hours > 0:
+                formatted_time = f"{hours}h {minutes:02d}m"
+            else:
+                formatted_time = f"{minutes}m"
+            
+            attrs["formatted_time"] = formatted_time
+            
+        except (TypeError, ValueError):
+            attrs["formatted_time"] = "0m"
+            
+        return attrs
 
 class EveusFormattedSessionTimeSensor(EveusSensorBase):
     """Formatted session time sensor."""
