@@ -38,11 +38,6 @@ from .diag_sensors import (
     EveusBatteryVoltageSensor,
     EveusSystemTimeSensor,
 )
-from .adaptive_sensors import (
-    EveusAdaptiveVoltageSensor,
-    EveusAdaptiveCurrentSensor,
-    EveusAdaptiveStatusSensor,
-)
 from .counter_sensors import (
     EveusCounterAEnergySensor,
     EveusCounterACostSensor,
@@ -72,12 +67,7 @@ async def async_setup_entry(
         EveusFormattedSessionTimeSensor(updater),
         EveusSessionEnergySensor(updater),
         EveusTotalEnergySensor(updater),
-        
-        # Adaptive mode sensors
-        EveusAdaptiveVoltageSensor(updater),
-        EveusAdaptiveCurrentSensor(updater),
-        EveusAdaptiveStatusSensor(updater),
-        
+              
         # Counter sensors
         EveusCounterAEnergySensor(updater),
         EveusCounterACostSensor(updater),
