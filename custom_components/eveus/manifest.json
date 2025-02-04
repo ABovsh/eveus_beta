@@ -10,8 +10,7 @@
     "issue_tracker": "https://github.com/ABovsh/eveus/issues",
     "requirements": [
         "aiohttp>=3.0.0",
-        "voluptuous>=0.13.1",
-        "pytz>=2022.1
+        "voluptuous>=0.13.1"
     ],
     "version": "1.0.0"
 }
