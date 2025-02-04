@@ -5,16 +5,18 @@ import logging
 import asyncio
 import time
 import json
-from typing import Any
+from datetime import datetime
+from typing import Any, Optional
 from contextlib import asynccontextmanager
 
 import aiohttp
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers import aiohttp_client
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.util import utcnow
 
 from .const import DOMAIN, SCAN_INTERVAL
 
@@ -24,6 +26,8 @@ _LOGGER = logging.getLogger(__name__)
 RETRY_DELAY = 15
 COMMAND_TIMEOUT = 5
 UPDATE_TIMEOUT = 20
+MAX_RETRIES = 3
+ERROR_COOLDOWN = 300  # 5 minutes
 SESSION_TIMEOUT = aiohttp.ClientTimeout(total=10, connect=3)
 
 class EveusError(HomeAssistantError):
@@ -44,11 +48,11 @@ class EveusUpdater:
         self.username = username
         self.password = password
         self._hass = hass
-        self._data = {}
+        self._data: dict = {}
         self._available = True
-        self._session = None
+        self._session: Optional[aiohttp.ClientSession] = None
         self._entities = set()
-        self._update_task = None
+        self._update_task: Optional[asyncio.Task] = None
         self._last_update = 0
         self._update_lock = asyncio.Lock()
         self._command_lock = asyncio.Lock()
@@ -57,23 +61,15 @@ class EveusUpdater:
         self._consecutive_errors = 0
         self._last_error_time = 0
         self._last_error_type = None
-
-    async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create client session."""
-        if not self._session or self._session.closed:
-            self._session = aiohttp_client.async_get_clientsession(self._hass)
-        return self._session
-
-    def register_entity(self, entity: "BaseEveusEntity") -> None:
-        """Register an entity for updates."""
-        if entity not in self._entities:
-            self._entities.add(entity)
-            _LOGGER.debug("Registered entity: %s", entity.name)
+        self._shutdown_event = asyncio.Event()
+        self._last_command_time = 0
+        self._command_queue = asyncio.Queue()
+        self._command_task: Optional[asyncio.Task] = None
 
     @property
     def data(self) -> dict:
         """Return the latest data."""
-        return self._data
+        return self._data.copy()
 
     @property
     def available(self) -> bool:
@@ -100,6 +96,70 @@ class EveusUpdater:
         """Return number of consecutive errors."""
         return self._consecutive_errors
 
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create client session."""
+        if not self._session or self._session.closed:
+            self._session = aiohttp_client.async_get_clientsession(self._hass)
+        return self._session
+
+    def register_entity(self, entity: BaseEveusEntity) -> None:
+        """Register an entity for updates."""
+        if entity not in self._entities:
+            self._entities.add(entity)
+            _LOGGER.debug("Registered entity: %s", entity.name)
+
+    async def _process_command_queue(self) -> None:
+        """Process commands in the queue."""
+        while not self._shutdown_event.is_set():
+            try:
+                command, value, future = await self._command_queue.get()
+                try:
+                    result = await self._send_command_internal(command, value)
+                    future.set_result(result)
+                except Exception as err:
+                    future.set_exception(err)
+                finally:
+                    self._command_queue.task_done()
+            except asyncio.CancelledError:
+                break
+            except Exception as err:
+                _LOGGER.error("Error processing command queue: %s", err)
+                await asyncio.sleep(1)
+
+    async def _send_command_internal(self, command: str, value: Any) -> bool:
+        """Internal command sending with rate limiting."""
+        async with self._command_lock:
+            # Rate limiting
+            time_since_last = time.time() - self._last_command_time
+            if time_since_last < 1:  # Minimum 1 second between commands
+                await asyncio.sleep(1 - time_since_last)
+
+            try:
+                session = await self._get_session()
+                async with session.post(
+                    f"http://{self.host}/pageEvent",
+                    auth=aiohttp.BasicAuth(self.username, self.password),
+                    headers={"Content-type": "application/x-www-form-urlencoded"},
+                    data=f"pageevent={command}&{command}={value}",
+                    timeout=COMMAND_TIMEOUT,
+                ) as response:
+                    response.raise_for_status()
+                    self._last_command_time = time.time()
+                    return True
+            except Exception as err:
+                _LOGGER.error("Command %s failed: %s", command, str(err))
+                raise
+
+    async def send_command(self, command: str, value: Any) -> bool:
+        """Send command to device."""
+        future = self._hass.loop.create_future()
+        await self._command_queue.put((command, value, future))
+        try:
+            return await future
+        except Exception as err:
+            _LOGGER.error("Command execution failed: %s", err)
+            return False
+
     async def _update(self) -> None:
         """Update the data."""
         try:
@@ -125,6 +185,8 @@ class EveusUpdater:
                         self._failed_requests = 0
                         self._consecutive_errors = 0
 
+                        # Update all registered entities
+                        update_tasks = []
                         for entity in self._entities:
                             if hasattr(entity, 'hass') and entity.hass:
                                 try:
@@ -149,19 +211,25 @@ class EveusUpdater:
 
     def _handle_error(self, error_type: str, error: Exception) -> None:
         """Handle update errors."""
+        current_time = time.time()
         self._failed_requests += 1
         self._consecutive_errors += 1
-        self._last_error_time = time.time()
+        self._last_error_time = current_time
         self._last_error_type = error_type
         
-        if self._retry_count < 1:
+        # Reset consecutive errors if enough time has passed
+        if (current_time - self._last_error_time) > ERROR_COOLDOWN:
+            self._consecutive_errors = 1
+        
+        if self._retry_count < MAX_RETRIES:
             self._retry_count += 1
             _LOGGER.warning(
-                "%s for %s: %s (attempt %d/2)",
+                "%s for %s: %s (attempt %d/%d)",
                 error_type,
                 self.host,
                 str(error),
-                self._retry_count
+                self._retry_count,
+                MAX_RETRIES
             )
         else:
             self._available = False
@@ -172,33 +240,18 @@ class EveusUpdater:
                 str(error)
             )
 
-    async def send_command(self, command: str, value: Any) -> bool:
-        """Send command to device."""
-        async with self._command_lock:
-            try:
-                async with (await self._get_session()).post(
-                    f"http://{self.host}/pageEvent",
-                    auth=aiohttp.BasicAuth(self.username, self.password),
-                    headers={"Content-type": "application/x-www-form-urlencoded"},
-                    data=f"pageevent={command}&{command}={value}",
-                    timeout=COMMAND_TIMEOUT,
-                ) as response:
-                    response.raise_for_status()
-                    return True
-            except Exception as err:
-                _LOGGER.error("Command %s failed: %s", command, str(err))
-                return False
-
     async def async_start_updates(self) -> None:
         """Start the update loop."""
         if self._update_task is None:
+            self._shutdown_event.clear()
             self._update_task = asyncio.create_task(self.update_loop())
+            self._command_task = asyncio.create_task(self._process_command_queue())
             _LOGGER.debug("Started update loop for %s", self.host)
 
     async def update_loop(self) -> None:
         """Handle update loop."""
         _LOGGER.debug("Starting update loop for %s", self.host)
-        while True:
+        while not self._shutdown_event.is_set():
             try:
                 async with self._update_lock:
                     await self._update()
@@ -216,6 +269,16 @@ class EveusUpdater:
 
     async def async_shutdown(self) -> None:
         """Shutdown the updater."""
+        self._shutdown_event.set()
+        
+        if self._command_task:
+            self._command_task.cancel()
+            try:
+                await self._command_task
+            except asyncio.CancelledError:
+                pass
+            self._command_task = None
+
         if self._update_task:
             self._update_task.cancel()
             try:
@@ -223,6 +286,15 @@ class EveusUpdater:
             except asyncio.CancelledError:
                 pass
             self._update_task = None
+
+        # Clear queue
+        while not self._command_queue.empty():
+            try:
+                _, _, future = self._command_queue.get_nowait()
+                if not future.done():
+                    future.set_exception(EveusError("Updater shutting down"))
+            except asyncio.QueueEmpty:
+                break
 
 class BaseEveusEntity(RestoreEntity, Entity):
     """Base implementation for Eveus entities."""
@@ -257,6 +329,7 @@ class BaseEveusEntity(RestoreEntity, Entity):
             "manufacturer": "Eveus",
             "model": "Eveus EV Charger",
             "sw_version": self._updater.data.get('verFWMain', 'Unknown'),
+            "configuration_url": f"http://{self._updater.host}",
         }
 
     async def async_added_to_hass(self) -> None:
@@ -273,7 +346,8 @@ class BaseEveusEntity(RestoreEntity, Entity):
 
     async def async_will_remove_from_hass(self) -> None:
         """Handle entity removal."""
-        await self._updater.async_shutdown()
+        # Note: Don't call updater.async_shutdown() here as other entities might still be using it
+        pass
 
 class EveusSensorBase(BaseEveusEntity, SensorEntity):
     """Base sensor entity for Eveus."""
@@ -308,5 +382,5 @@ async def send_eveus_command(
             response.raise_for_status()
             return True
     except Exception as err:
-        logging.error("Command %s failed: %s", command, str(err))
+        _LOGGER.error("Command %s failed: %s", command, str(err))
         return False
