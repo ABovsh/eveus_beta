@@ -108,28 +108,6 @@ class EveusCurrentSetSensor(EveusSensorBase):
             _LOGGER.error("Error getting current set value: %s", err)
             return None
 
-class EveusCurrentDesignedSensor(EveusSensorBase):
-    """Current designed sensor."""
-
-    ENTITY_NAME = "Current Designed"
-    _attr_device_class = SensorDeviceClass.CURRENT
-    _attr_native_unit_of_measurement = UnitOfElectricCurrent.AMPERE
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:current-ac"
-    _attr_suggested_display_precision = 0
-
-    @property
-    def native_value(self) -> float | None:
-        """Return designed current value."""
-        try:
-            value = self._updater.data.get("curDesign")
-            if value is None:
-                return None
-            return float(value)
-        except (TypeError, ValueError) as err:
-            _LOGGER.error("Error getting designed current: %s", err)
-            return None
-
 class EveusSessionTimeSensor(EveusSensorBase):
     """Session time sensor in seconds."""
 
