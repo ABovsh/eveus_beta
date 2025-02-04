@@ -11,6 +11,7 @@
     "requirements": [
         "aiohttp>=3.0.0",
         "voluptuous>=0.13.1"
+        "pytz>=2022.1
     ],
     "version": "1.0.0"
 }
