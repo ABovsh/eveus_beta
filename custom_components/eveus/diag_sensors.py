@@ -177,6 +177,14 @@ class EveusSystemTimeSensor(EveusDiagnosticSensor):
     ENTITY_NAME = "System Time"
     _attr_icon = "mdi:clock-outline"
 
+    def _is_dst(self, timezone_str: str, dt: datetime) -> bool:
+        """Check if the given datetime is in DST for the timezone."""
+        try:
+            tz = pytz.timezone(timezone_str)
+            return dt.astimezone(tz).dst() != timedelta(0)
+        except Exception:
+            return False
+
     @property
     def native_value(self) -> str:
         """Return timezone-corrected system time."""
@@ -187,23 +195,35 @@ class EveusSystemTimeSensor(EveusDiagnosticSensor):
                 
             # Get HA timezone
             ha_timezone = self.hass.config.time_zone
-            if ha_timezone:
-                from datetime import datetime
-                import pytz
-                
-                # Convert timestamp to datetime in UTC
-                dt_utc = datetime.fromtimestamp(int(timestamp), tz=pytz.UTC)
-                
-                # Convert to local timezone
-                local_tz = pytz.timezone(ha_timezone)
-                dt_local = dt_utc.astimezone(local_tz)
-                
-                return dt_local.strftime("%H:%M")
-            else:
-                # Fallback if no timezone is set
-                dt = time.localtime(int(timestamp))
-                return time.strftime("%H:%M", dt)
+            if not ha_timezone:
+                _LOGGER.warning("No timezone set in Home Assistant configuration")
+                return None
+
+            from datetime import datetime, timedelta
+            import pytz
+            
+            # Convert timestamp to datetime in UTC
+            base_timestamp = int(timestamp)
+            dt_utc = datetime.fromtimestamp(base_timestamp, tz=pytz.UTC)
+            
+            # Get local timezone
+            local_tz = pytz.timezone(ha_timezone)
+            
+            # Check if we're in DST
+            offset = 7200  # Base offset (2 hours)
+            if self._is_dst(ha_timezone, dt_utc):
+                offset += 3600  # Add 1 hour during DST
+            
+            # Apply correction
+            corrected_timestamp = base_timestamp - offset
+            dt_corrected = datetime.fromtimestamp(corrected_timestamp, tz=pytz.UTC)
+            dt_local = dt_corrected.astimezone(local_tz)
+            
+            return dt_local.strftime("%H:%M")
                 
         except (TypeError, ValueError) as err:
             _LOGGER.error("Error getting system time: %s", err)
+            return None
+        except Exception as err:
+            _LOGGER.error("Unexpected error getting system time: %s", err)
             return None
