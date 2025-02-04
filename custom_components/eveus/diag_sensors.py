@@ -87,24 +87,6 @@ class EveusSubstateSensor(EveusDiagnosticSensor):
             _LOGGER.error("Error getting charger substate: %s", err)
             return None
 
-class EveusEnabledSensor(EveusDiagnosticSensor):
-    """Enabled state sensor."""
-    
-    ENTITY_NAME = "Enabled"
-    _attr_icon = "mdi:power"
-
-    @property
-    def native_value(self) -> str:
-        """Return if charging is enabled."""
-        try:
-            value = self._updater.data.get("evseEnabled")
-            if value is None:
-                return None
-            return "Yes" if value == 1 else "No"
-        except (TypeError, ValueError) as err:
-            _LOGGER.error("Error getting enabled state: %s", err)
-            return None
-
 class EveusGroundSensor(EveusDiagnosticSensor):
     """Ground connection sensor."""
     
