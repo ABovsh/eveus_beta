@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import asyncio
 import socket
+import re
 from typing import Any
 from urllib.parse import urlparse
 
@@ -12,7 +13,7 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import aiohttp_client
@@ -233,10 +234,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         )
 
 class CannotConnect(HomeAssistantError):
-    """Error to indicate we cannot connect."""
+    """Error to indicate we cannot connect to the device."""
 
 class InvalidAuth(HomeAssistantError):
-    """Error to indicate there is invalid auth."""
+    """Error to indicate there is invalid authentication."""
 
 class InvalidInput(HomeAssistantError):
     """Error to indicate invalid user input."""
