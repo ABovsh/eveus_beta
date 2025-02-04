@@ -32,104 +32,93 @@ async def async_setup_entry(
 
     async_add_entities(entities)
 
-class EveusNumberEntity(BaseEveusEntity, NumberEntity):
-    """Base number entity for Eveus."""
+class EveusCurrentLimitNumber(BaseEveusEntity, NumberEntity):
+    """Number entity for current limit adjustment."""
     
-    def __init__(self, updater: EveusUpdater) -> None:
-        """Initialize the entity."""
-        super().__init__(updater)
-        self._attr_native_value = None
-
-class EveusCurrentNumber(EveusNumberEntity):
-    """Representation of Eveus current control."""
-
-    ENTITY_NAME = "Charging Current"
-    _attr_native_step = 1.0
-    _attr_mode = NumberMode.SLIDER
-    _attr_native_unit_of_measurement = UnitOfElectricCurrent.AMPERE
-    _attr_device_class = NumberDeviceClass.CURRENT
+    ENTITY_NAME = "Current Limit"
     _attr_icon = "mdi:current-ac"
-    _attr_entity_category = EntityCategory.CONFIG
-    _state_key = "currentSet"
+    _attr_native_min_value = MIN_CURRENT
+    _attr_native_step = 1
 
-    def __init__(self, updater: EveusUpdater, model: str) -> None:
-        """Initialize the current control."""
+    def __init__(self, updater: EveusUpdater, model: str):
         super().__init__(updater)
-        self._model = model
-        
-        # Set min/max values based on model
-        self._attr_native_min_value = float(MIN_CURRENT)
-        self._attr_native_max_value = float(MODEL_MAX_CURRENT[model])
-        self._attr_native_value = min(self._attr_native_max_value, 16.0)
-
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator."""
-        try:
-            value = self._updater.data.get(self._state_key)
-            if value is not None:
-                new_value = float(value)
-                if new_value != self._attr_native_value:
-                    self._attr_native_value = new_value
-                    self.async_write_ha_state()
-        except (TypeError, ValueError) as err:
-            _LOGGER.error("Error updating current value: %s", err)
+        self._attr_native_max_value = MODEL_MAX_CURRENT.get(model, 16)
+        self._attr_unique_id = f"{super().unique_id}_current_limit"
 
     @property
-    def native_value(self) -> float | None:
-        """Return the current value."""
-        try:
-            value = self._updater.data.get(self._state_key)
-            if value is not None:
-                self._attr_native_value = float(value)
-            return self._attr_native_value
-        except (TypeError, ValueError) as err:
-            _LOGGER.error("Error getting current value: %s", err)
-            return self._attr_native_value
+    def native_value(self) -> float:
+        """Return current limit value."""
+        return float(self._updater.data.get("currentSet", 0))
 
     async def async_set_native_value(self, value: float) -> None:
-        """Set new current value."""
-        try:
-            value = int(min(self._attr_native_max_value, max(self._attr_native_min_value, value)))
-            
-            if await self._updater.send_command(self._state_key, value):
-                self._attr_native_value = float(value)
-                self.async_write_ha_state()
-            else:
-                _LOGGER.error("Failed to set current value to %s", value)
-                
-        except (TypeError, ValueError, ConnectionError, TimeoutError) as err:
-            _LOGGER.error("Error setting current value: %s", err)
+        """Set new current limit."""
+        success = await send_eveus_command(
+            session=await self._updater._get_session(),
+            host=self._updater.host,
+            username=self._updater.username,
+            password=self._updater.password,
+            command="currentSet",
+            value=int(value)
+        )
+        
+        if success:
+            self._updater.data["currentSet"] = int(value)
+            self.async_write_ha_state()
 
-    async def _async_restore_state(self, state) -> None:
-        """Restore previous state."""
-        try:
-            restored_value = float(state.state)
-            if self._attr_native_min_value <= restored_value <= self._attr_native_max_value:
-                self._attr_native_value = restored_value
-        except (TypeError, ValueError) as err:
-            _LOGGER.error("Error restoring current value: %s", err)
-            
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-) -> None:
-    """Set up the Eveus number entities."""
-    data = hass.data[DOMAIN][entry.entry_id]
-    updater = data["updater"]
-    model = entry.data[CONF_MODEL]
-
-    entities = [
-        EveusCurrentNumber(updater, model),
-    ]
-
-    # Initialize entities dict if needed
-    if "entities" not in data:
-        data["entities"] = {}
+class EveusEnergyLimitNumber(BaseEveusEntity, NumberEntity):
+    """Number entity for energy limit adjustment."""
     
-    data["entities"]["number"] = {
-        entity.unique_id: entity for entity in entities
-    }
+    ENTITY_NAME = "Energy Limit"
+    _attr_icon = "mdi:lightning-bolt"
+    _attr_native_min_value = 0
+    _attr_native_max_value = 100
+    _attr_native_step = 0.1
 
-    async_add_entities(entities)
+    @property
+    def native_value(self) -> float:
+        """Return energy limit value."""
+        return float(self._updater.data.get("energyLimit", 0))
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Set new energy limit."""
+        success = await send_eveus_command(
+            session=await self._updater._get_session(),
+            host=self._updater.host,
+            username=self._updater.username,
+            password=self._updater.password,
+            command="energyLimit",
+            value=value
+        )
+        
+        if success:
+            self._updater.data["energyLimit"] = value
+            self.async_write_ha_state()
+
+class EveusCostLimitNumber(BaseEveusEntity, NumberEntity):
+    """Number entity for cost limit adjustment."""
+    
+    ENTITY_NAME = "Cost Limit"
+    _attr_icon = "mdi:cash"
+    _attr_native_min_value = 0
+    _attr_native_max_value = 1000
+    _attr_native_step = 1
+
+    @property
+    def native_value(self) -> float:
+        """Return cost limit value."""
+        return float(self._updater.data.get("costLimit", 0))
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Set new cost limit."""
+        success = await send_eveus_command(
+            session=await self._updater._get_session(),
+            host=self._updater.host,
+            username=self._updater.username,
+            password=self._updater.password,
+            command="costLimit",
+            value=value
+        )
+        
+        if success:
+            self._updater.data["costLimit"] = value
+            self.async_write_ha_state()
