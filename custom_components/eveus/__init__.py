@@ -113,17 +113,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         setup_tasks = []
         for platform in PLATFORMS:
             try:
-                setup_tasks.append(
-                    hass.config_entries.async_forward_entry_setup(entry, platform)
-                )
+                await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
             except Exception as err:
                 _LOGGER.error(
-                    "Failed to setup platform %s: %s", 
-                    platform, 
+                    "Failed to setup platforms: %s", 
                     str(err)
                 )
-                # Continue with other platforms even if one fails
-                continue
+                raise
         
         if setup_tasks:
             await asyncio.gather(*setup_tasks)
