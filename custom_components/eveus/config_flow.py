@@ -233,4 +233,13 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         )
 
 class CannotConnect(HomeAssistantError):
-    """Error to indicate we cannot
+    """Error to indicate we cannot connect."""
+
+class InvalidAuth(HomeAssistantError):
+    """Error to indicate there is invalid auth."""
+
+class InvalidInput(HomeAssistantError):
+    """Error to indicate invalid user input."""
+
+class InvalidDevice(HomeAssistantError):
+    """Error to indicate invalid device response or capabilities."""
