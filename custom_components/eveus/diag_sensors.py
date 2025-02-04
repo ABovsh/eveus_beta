@@ -182,13 +182,28 @@ class EveusSystemTimeSensor(EveusDiagnosticSensor):
         """Return timezone-corrected system time."""
         try:
             timestamp = self._updater.data.get("systemTime")
-            timezone_offset = self._updater.data.get("timeZone", 0)
-            
             if timestamp is None:
                 return None
                 
-            dt = time.localtime(int(timestamp))
-            return time.strftime("%H:%M", dt)
+            # Get HA timezone
+            ha_timezone = self.hass.config.time_zone
+            if ha_timezone:
+                from datetime import datetime
+                import pytz
+                
+                # Convert timestamp to datetime in UTC
+                dt_utc = datetime.fromtimestamp(int(timestamp), tz=pytz.UTC)
+                
+                # Convert to local timezone
+                local_tz = pytz.timezone(ha_timezone)
+                dt_local = dt_utc.astimezone(local_tz)
+                
+                return dt_local.strftime("%H:%M")
+            else:
+                # Fallback if no timezone is set
+                dt = time.localtime(int(timestamp))
+                return time.strftime("%H:%M", dt)
+                
         except (TypeError, ValueError) as err:
             _LOGGER.error("Error getting system time: %s", err)
             return None
