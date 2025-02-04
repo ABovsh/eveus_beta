@@ -15,7 +15,6 @@ from .basic_sensors import (
     EveusCurrentSensor,
     EveusPowerSensor,
     EveusCurrentSetSensor,
-    EveusCurrentDesignedSensor,
     EveusSessionTimeSensor,
     EveusFormattedSessionTimeSensor,
     EveusSessionEnergySensor,
@@ -26,12 +25,10 @@ from .ev_sensors import (
     EVSocPercentSensor,
     TimeToTargetSocSensor,
 )
-# Correct the import list
 from .diag_sensors import (
     EveusConnectionErrorsSensor,
     EveusStateSensor,
     EveusSubstateSensor,
-    EveusEnabledSensor,
     EveusGroundSensor,
     EveusBoxTemperatureSensor,
     EveusPlugTemperatureSensor,
@@ -62,7 +59,6 @@ async def async_setup_entry(
         EveusCurrentSensor(updater),
         EveusPowerSensor(updater),
         EveusCurrentSetSensor(updater),
-        EveusCurrentDesignedSensor(updater),
         EveusSessionTimeSensor(updater),
         EveusFormattedSessionTimeSensor(updater),
         EveusSessionEnergySensor(updater),
@@ -78,7 +74,6 @@ async def async_setup_entry(
         EveusConnectionErrorsSensor(updater),
         EveusStateSensor(updater),
         EveusSubstateSensor(updater),
-        EveusEnabledSensor(updater),
         EveusGroundSensor(updater),
         EveusBoxTemperatureSensor(updater),
         EveusPlugTemperatureSensor(updater),
