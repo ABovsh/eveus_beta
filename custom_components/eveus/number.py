@@ -11,7 +11,7 @@ from homeassistant.components.number import (
     NumberDeviceClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.const import (
@@ -49,12 +49,14 @@ class EveusNumberEntity(BaseEveusEntity, NumberEntity):
     async def async_added_to_hass(self) -> None:
         """Handle entity which will be added."""
         await super().async_added_to_hass()
-        self._handle_coordinator_update()
+        state = await self.async_get_last_state()
+        if state:
+            await self._async_restore_state(state)
         
-    @property
-    def available(self) -> bool:
-        """Return if entity is available."""
-        return self._updater.available
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        self.async_write_ha_state()
 
 class EveusCurrentNumber(EveusNumberEntity):
     """Representation of Eveus current control."""
@@ -85,7 +87,7 @@ class EveusCurrentNumber(EveusNumberEntity):
         try:
             value = self._updater.data.get(self._command)
             if value is not None:
-                return float(value)
+                self._attr_native_value = float(value)
             return self._attr_native_value
         except (TypeError, ValueError) as err:
             _LOGGER.error("Error getting current value: %s", err)
@@ -101,6 +103,17 @@ class EveusCurrentNumber(EveusNumberEntity):
                     self.async_write_ha_state()
             except Exception as err:
                 _LOGGER.error("Failed to set current value: %s", err)
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        try:
+            value = self._updater.data.get(self._command)
+            if value is not None:
+                self._attr_native_value = float(value)
+            self.async_write_ha_state()
+        except (TypeError, ValueError) as err:
+            _LOGGER.error("Error handling update: %s", err)
 
     async def _async_restore_state(self, state) -> None:
         """Restore previous state."""
