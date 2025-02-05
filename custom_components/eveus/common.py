@@ -24,11 +24,11 @@ _LOGGER = logging.getLogger(__name__)
 
 # Constants
 RETRY_DELAY = 15
-COMMAND_TIMEOUT = 5
+COMMAND_TIMEOUT = 25  # Increased from 5
 UPDATE_TIMEOUT = 20
 MAX_RETRIES = 3
 ERROR_COOLDOWN = 300  # 5 minutes
-SESSION_TIMEOUT = aiohttp.ClientTimeout(total=10, connect=3)
+SESSION_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=5)  # Increased timeouts
 
 class EveusError(HomeAssistantError):
     """Base class for Eveus errors."""
@@ -114,10 +114,18 @@ class EveusUpdater:
             try:
                 command, value, future = await self._command_queue.get()
                 try:
-                    result = await self._send_command_internal(command, value)
-                    future.set_result(result)
+                    if not future.done():
+                        result = await asyncio.wait_for(
+                            self._send_command_internal(command, value),
+                            timeout=25
+                        )
+                        future.set_result(result)
+                except asyncio.TimeoutError:
+                    if not future.done():
+                        future.set_exception(asyncio.TimeoutError("Command timed out"))
                 except Exception as err:
-                    future.set_exception(err)
+                    if not future.done():
+                        future.set_exception(err)
                 finally:
                     self._command_queue.task_done()
             except asyncio.CancelledError:
@@ -131,14 +139,14 @@ class EveusUpdater:
         async with self._command_lock:
             retries = 3
             delay = 1  # Initial delay in seconds
-    
+
             for attempt in range(retries):
                 try:
                     # Rate limiting
                     time_since_last = time.time() - self._last_command_time
                     if time_since_last < 1:  # Minimum 1 second between commands
                         await asyncio.sleep(1 - time_since_last)
-    
+
                     session = await self._get_session()
                     async with session.post(
                         f"http://{self.host}/pageEvent",
@@ -164,15 +172,18 @@ class EveusUpdater:
                 except Exception as err:
                     _LOGGER.error("Unexpected error executing command %s: %s", command, str(err))
                     raise
-    
+
             return False
 
     async def send_command(self, command: str, value: Any) -> bool:
         """Send command to device."""
-        future = self._hass.loop.create_future()
-        await self._command_queue.put((command, value, future))
         try:
-            return await future
+            future = self._hass.loop.create_future()
+            await self._command_queue.put((command, value, future))
+            return await asyncio.wait_for(future, timeout=30)
+        except asyncio.TimeoutError:
+            _LOGGER.error("Command execution timed out")
+            return False
         except Exception as err:
             _LOGGER.error("Command execution failed: %s", err)
             return False
@@ -203,7 +214,6 @@ class EveusUpdater:
                         self._consecutive_errors = 0
 
                         # Update all registered entities
-                        update_tasks = []
                         for entity in self._entities:
                             if hasattr(entity, 'hass') and entity.hass:
                                 try:
@@ -394,7 +404,7 @@ async def send_eveus_command(
             auth=aiohttp.BasicAuth(username, password),
             headers={"Content-type": "application/x-www-form-urlencoded"},
             data=f"pageevent={command}&{command}={value}",
-            timeout=aiohttp.ClientTimeout(total=5)
+            timeout=aiohttp.ClientTimeout(total=30)
         ) as response:
             response.raise_for_status()
             return True
