@@ -141,66 +141,16 @@ class EveusSessionTimeSensor(EveusSensorBase):
             minutes = (seconds % 3600) // 60
 
             if days > 0:
-                formatted_time = f"{days}d {hours:02d}h {minutes:02d}m"
+                attrs["formatted_time"] = f"{days}d {hours:02d}h {minutes:02d}m"
             elif hours > 0:
-                formatted_time = f"{hours}h {minutes:02d}m"
+                attrs["formatted_time"] = f"{hours}h {minutes:02d}m"
             else:
-                formatted_time = f"{minutes}m"
-            
-            attrs["formatted_time"] = formatted_time
+                attrs["formatted_time"] = f"{minutes}m"
             
         except (TypeError, ValueError):
             attrs["formatted_time"] = "0m"
             
         return attrs
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return additional state attributes."""
-        attrs = {}
-        try:
-            seconds = int(self.native_value or 0)
-            days = seconds // 86400
-            hours = (seconds % 86400) // 3600
-            minutes = (seconds % 3600) // 60
-
-            if days > 0:
-                formatted_time = f"{days}d {hours:02d}h {minutes:02d}m"
-            elif hours > 0:
-                formatted_time = f"{hours}h {minutes:02d}m"
-            else:
-                formatted_time = f"{minutes}m"
-            
-            attrs["formatted_time"] = formatted_time
-            
-        except (TypeError, ValueError):
-            attrs["formatted_time"] = "0m"
-            
-        return attrs
-
-class EveusFormattedSessionTimeSensor(EveusSensorBase):
-    """Formatted session time sensor."""
-
-    ENTITY_NAME = "Session Duration"
-    _attr_icon = "mdi:timer"
-
-    @property
-    def native_value(self) -> str | None:
-        """Return formatted session time."""
-        try:
-            seconds = int(self._updater.data.get("sessionTime", 0))
-            days = seconds // 86400
-            hours = (seconds % 86400) // 3600
-            minutes = (seconds % 3600) // 60
-            
-            if days > 0:
-                return f"{days}d {hours}h {minutes}m"
-            if hours > 0:
-                return f"{hours}h {minutes}m"
-            return f"{minutes}m"
-        except (TypeError, ValueError) as err:
-            _LOGGER.error("Error formatting session time: %s", err)
-            return None
 
 class EveusSessionEnergySensor(EveusSensorBase):
     """Session energy sensor."""
