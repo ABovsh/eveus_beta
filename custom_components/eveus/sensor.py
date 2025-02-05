@@ -16,7 +16,6 @@ from .basic_sensors import (
     EveusPowerSensor,
     EveusCurrentSetSensor,
     EveusSessionTimeSensor,
-    EveusFormattedSessionTimeSensor,
     EveusSessionEnergySensor,
     EveusTotalEnergySensor,
 )
