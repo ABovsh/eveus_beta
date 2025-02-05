@@ -50,6 +50,12 @@ async def async_setup_entry(
 ) -> None:
     """Set up the Eveus sensors."""
     data = hass.data[DOMAIN][entry.entry_id]
+    
+    # Check if sensors are already set up
+    if "entities" in data and "sensor" in data["entities"]:
+        _LOGGER.warning("Sensors already set up for this entry")
+        return
+
     updater = data["updater"]
 
     sensors = [
