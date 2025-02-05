@@ -127,28 +127,45 @@ class EveusUpdater:
                 await asyncio.sleep(1)
 
     async def _send_command_internal(self, command: str, value: Any) -> bool:
-        """Internal command sending with rate limiting."""
+        """Internal command sending with rate limiting and retry."""
         async with self._command_lock:
-            # Rate limiting
-            time_since_last = time.time() - self._last_command_time
-            if time_since_last < 1:  # Minimum 1 second between commands
-                await asyncio.sleep(1 - time_since_last)
-
-            try:
-                session = await self._get_session()
-                async with session.post(
-                    f"http://{self.host}/pageEvent",
-                    auth=aiohttp.BasicAuth(self.username, self.password),
-                    headers={"Content-type": "application/x-www-form-urlencoded"},
-                    data=f"pageevent={command}&{command}={value}",
-                    timeout=COMMAND_TIMEOUT,
-                ) as response:
-                    response.raise_for_status()
-                    self._last_command_time = time.time()
-                    return True
-            except Exception as err:
-                _LOGGER.error("Command %s failed: %s", command, str(err))
-                raise
+            retries = 3
+            delay = 1  # Initial delay in seconds
+    
+            for attempt in range(retries):
+                try:
+                    # Rate limiting
+                    time_since_last = time.time() - self._last_command_time
+                    if time_since_last < 1:  # Minimum 1 second between commands
+                        await asyncio.sleep(1 - time_since_last)
+    
+                    session = await self._get_session()
+                    async with session.post(
+                        f"http://{self.host}/pageEvent",
+                        auth=aiohttp.BasicAuth(self.username, self.password),
+                        headers={"Content-type": "application/x-www-form-urlencoded"},
+                        data=f"pageevent={command}&{command}={value}",
+                        timeout=COMMAND_TIMEOUT,
+                    ) as response:
+                        response.raise_for_status()
+                        self._last_command_time = time.time()
+                        return True
+                        
+                except aiohttp.ClientError as err:
+                    if attempt == retries - 1:  # Last attempt
+                        _LOGGER.error("Command %s failed after %d retries: %s", command, retries, str(err))
+                        raise
+                    _LOGGER.warning(
+                        "Command %s failed (attempt %d/%d): %s", 
+                        command, attempt + 1, retries, str(err)
+                    )
+                    await asyncio.sleep(delay)
+                    delay *= 2  # Exponential backoff
+                except Exception as err:
+                    _LOGGER.error("Unexpected error executing command %s: %s", command, str(err))
+                    raise
+    
+            return False
 
     async def send_command(self, command: str, value: Any) -> bool:
         """Send command to device."""
