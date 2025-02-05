@@ -110,47 +110,28 @@ class EveusCurrentSetSensor(EveusSensorBase):
 
 class EveusSessionTimeSensor(EveusSensorBase):
     """Session time sensor."""
-
+    
     ENTITY_NAME = "Session Time"
-    _attr_device_class = SensorDeviceClass.DURATION
-    _attr_native_unit_of_measurement = UnitOfTime.SECONDS
-    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:timer"
-    _attr_suggested_display_precision = 0
-
+    
     @property
-    def native_value(self) -> int | None:
-        """Return session time in seconds."""
+    def native_value(self) -> str:
+        """Return formatted session time."""
         try:
-            value = self._updater.data.get("sessionTime")
-            if value is None:
-                return None
-            return int(value)
-        except (TypeError, ValueError) as err:
-            _LOGGER.error("Error getting session time: %s", err)
-            return None
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return additional state attributes."""
-        attrs = {}
-        try:
-            seconds = int(self.native_value or 0)
+            seconds = int(self._updater.data.get("sessionTime", 0))
             days = seconds // 86400
             hours = (seconds % 86400) // 3600
             minutes = (seconds % 3600) // 60
-
+            
             if days > 0:
-                attrs["formatted_time"] = f"{days}d {hours:02d}h {minutes:02d}m"
+                return f"{days}d {hours:02d}h {minutes:02d}m"
             elif hours > 0:
-                attrs["formatted_time"] = f"{hours}h {minutes:02d}m"
-            else:
-                attrs["formatted_time"] = f"{minutes}m"
+                return f"{hours}h {minutes:02d}m"
+            return f"{minutes}m"
             
-        except (TypeError, ValueError):
-            attrs["formatted_time"] = "0m"
-            
-        return attrs
+        except (TypeError, ValueError) as err:
+            _LOGGER.error("Error formatting session time: %s", err)
+            return "0m"
 
 class EveusSessionEnergySensor(EveusSensorBase):
     """Session energy sensor."""
