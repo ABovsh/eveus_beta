@@ -9,7 +9,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .common import EveusSensorBase
 from .basic_sensors import (
     EveusVoltageSensor,
     EveusCurrentSensor,
@@ -50,12 +49,6 @@ async def async_setup_entry(
 ) -> None:
     """Set up the Eveus sensors."""
     data = hass.data[DOMAIN][entry.entry_id]
-    
-    # Check if sensors are already set up
-    if "entities" in data and "sensor" in data["entities"]:
-        _LOGGER.warning("Sensors already set up for this entry")
-        return
-
     updater = data["updater"]
 
     sensors = [
@@ -89,13 +82,5 @@ async def async_setup_entry(
         EVSocPercentSensor(updater),
         TimeToTargetSocSensor(updater),
     ]
-
-    # Initialize entities dict if needed
-    if "entities" not in data:
-        data["entities"] = {}
-
-    data["entities"]["sensor"] = {
-        sensor.unique_id: sensor for sensor in sensors
-    }
 
     async_add_entities(sensors)
