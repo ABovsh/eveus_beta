@@ -85,8 +85,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         
         # Initialize data structure
         hass.data.setdefault(DOMAIN, {})
+        hass.data[DOMAIN][entry.entry_id] = {
+            "title": entry.title,
+            "host": entry.data[CONF_HOST],
+            "username": entry.data[CONF_USERNAME],
+            "password": entry.data[CONF_PASSWORD],
+            "entities": {},
+        }
         
-        # Create updater instance with retry mechanism
+        # Create updater instance with error handling
         try:
             updater = EveusUpdater(
                 host=entry.data[CONF_HOST],
@@ -94,37 +101,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 password=entry.data[CONF_PASSWORD],
                 hass=hass,
             )
+            hass.data[DOMAIN][entry.entry_id]["updater"] = updater
         except Exception as err:
             raise ConfigEntryNotReady(f"Failed to initialize updater: {err}")
 
-        # Store entry data with validation
-        entry_data = {
-            "title": entry.title,
-            "updater": updater,
-            "host": entry.data[CONF_HOST],
-            "username": entry.data[CONF_USERNAME],
-            "password": entry.data[CONF_PASSWORD],
-            "entities": {},
-        }
-        
-        hass.data[DOMAIN][entry.entry_id] = entry_data
-
-        # Set up platforms with error handling
-        setup_tasks = []
+        # Set up platforms with increased timeout
         for platform in PLATFORMS:
             try:
-                await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-            except Exception as err:
-                _LOGGER.error(
-                    "Failed to setup platforms: %s", 
-                    str(err)
+                await asyncio.wait_for(
+                    hass.config_entries.async_forward_entry_setup(entry, platform),
+                    timeout=60  # Increase platform setup timeout
                 )
-                raise
-        
-        if setup_tasks:
-            await asyncio.gather(*setup_tasks)
-        
-        # Register update listener for config changes
+            except asyncio.TimeoutError:
+                _LOGGER.error("Setup timeout for platform %s", platform)
+                continue
+            except Exception as err:
+                _LOGGER.error("Error setting up platform %s: %s", platform, err)
+                continue
+
+        # Register update listener
         entry.async_on_unload(entry.add_update_listener(update_listener))
         
         return True
