@@ -65,7 +65,6 @@ async def async_setup_entry(
         EveusPowerSensor(updater),
         EveusCurrentSetSensor(updater),
         EveusSessionTimeSensor(updater),
-        EveusFormattedSessionTimeSensor(updater),
         EveusSessionEnergySensor(updater),
         EveusTotalEnergySensor(updater),
               
