@@ -81,13 +81,11 @@ class EVSocPercentSensor(EveusSensorBase):
             _LOGGER.error("Error calculating SOC percentage: %s", err)
             return None
 
-class TimeToTargetSocSensor(TextEntity, BaseEveusEntity):
-    """Time to target SOC text entity."""
+class TimeToTargetSocSensor(EveusSensorBase):
+    """Time to target SOC sensor."""
     
     ENTITY_NAME = "Time to Target SOC"
     _attr_icon = "mdi:timer"
-    _attr_pattern = None
-    _attr_mode = "text"
 
     @property
     def native_value(self) -> str:
@@ -102,8 +100,7 @@ class TimeToTargetSocSensor(TextEntity, BaseEveusEntity):
 
             # Validate inputs
             if any(x is None for x in [current_soc, target_soc, power_meas, battery_capacity, correction]):
-                _LOGGER.debug("Missing required values for time to target calculation")
-                return "Not charging"
+                return "unavailable"
 
             if power_meas <= 0:
                 return "Not charging"
@@ -131,20 +128,16 @@ class TimeToTargetSocSensor(TextEntity, BaseEveusEntity):
             hours = int((total_minutes % 1440) // 60)
             minutes = int(total_minutes % 60)
 
-            # Format time string with validation
-            parts = []
+            # Format time string
             if days > 0:
-                parts.append(f"{days}d")
+                return f"{days}d {hours}h {minutes}m"
             if hours > 0:
-                parts.append(f"{hours}h")
-            if minutes > 0 or not parts:
-                parts.append(f"{minutes}m")
-
-            return " ".join(parts)
+                return f"{hours}h {minutes}m"
+            return f"{minutes}m"
 
         except (TypeError, ValueError, AttributeError) as err:
             _LOGGER.debug("Error calculating time to target: %s", err)
-            return "Not charging"
+            return "unavailable"
         except Exception as err:
             _LOGGER.error("Unexpected error calculating time to target: %s", err)
-            return "Error"
+            return "unavailable"
