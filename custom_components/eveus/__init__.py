@@ -93,7 +93,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "entities": {},
         }
         
-        # Create updater instance with error handling
+        # Create updater instance
         try:
             updater = EveusUpdater(
                 host=entry.data[CONF_HOST],
@@ -105,20 +105,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except Exception as err:
             raise ConfigEntryNotReady(f"Failed to initialize updater: {err}")
 
-        # Set up platforms with increased timeout
-        for platform in PLATFORMS:
-            try:
-                await asyncio.wait_for(
-                    hass.config_entries.async_forward_entry_setup(entry, platform),
-                    timeout=60  # Increase platform setup timeout
-                )
-            except asyncio.TimeoutError:
-                _LOGGER.error("Setup timeout for platform %s", platform)
-                continue
-            except Exception as err:
-                _LOGGER.error("Error setting up platform %s: %s", platform, err)
-                continue
-
+        # Set up platforms
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        
         # Register update listener
         entry.async_on_unload(entry.add_update_listener(update_listener))
         
@@ -160,18 +149,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return True
 
         # Unload platforms
-        unload_ok = await asyncio.gather(
-            *(
-                hass.config_entries.async_forward_entry_unload(entry, platform)
-                for platform in PLATFORMS
-            ),
-            return_exceptions=True
-        )
-        
-        # Check for any platform unload failures
-        if any(isinstance(result, Exception) for result in unload_ok):
-            _LOGGER.error("Error unloading platforms: %s", unload_ok)
-            return False
+        unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
         
         if updater:
             try:
@@ -179,9 +157,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             except Exception as err:
                 _LOGGER.error("Error shutting down updater: %s", err)
         
-        hass.data[DOMAIN].pop(entry.entry_id)
+        if unload_ok:
+            hass.data[DOMAIN].pop(entry.entry_id)
         
-        return True
+        return unload_ok
 
     except Exception as ex:
         _LOGGER.error(
