@@ -324,6 +324,74 @@ class EveusUpdater:
                 "%s for %s: %s (attempt %d/%d)",
                 error_type,
                 self.host,
+                str(error),
+                self._retry_count,
+                MAX_RETRIES
+            )
+        else:
+            self._available = False
+            _LOGGER.error(
+                "%s for %s: %s (max retries reached)",
+                error_type,
+                self.host,
+                str(error)
+            )
+
+    async def async_start_updates(self) -> None:
+        """Start the update loop."""
+        if self._update_task is None:
+            self._shutdown_event.clear()
+            self._update_task = asyncio.create_task(self.update_loop())
+            self._command_task = asyncio.create_task(self._process_command_queue())
+            _LOGGER.debug("Started update loop for %s", self.host)
+
+    async def update_loop(self) -> None:
+        """Handle update loop."""
+        _LOGGER.debug("Starting update loop for %s", self.host)
+        while not self._shutdown_event.is_set():
+            try:
+                async with self._update_lock:
+                    await self._update()
+                    
+                if self._retry_count > 0:
+                    await asyncio.sleep(RETRY_DELAY)
+                else:
+                    await asyncio.sleep(SCAN_INTERVAL.total_seconds())
+                    
+            except asyncio.CancelledError:
+                break
+            except Exception as err:
+                _LOGGER.error("Error in update loop: %s", str(err))
+                await asyncio.sleep(RETRY_DELAY)
+
+    async def async_shutdown(self) -> None:
+        """Shutdown the updater."""
+        self._shutdown_event.set()
+        
+        if self._command_task:
+            self._command_task.cancel()
+            try:
+                await self._command_task
+            except asyncio.CancelledError:
+                pass
+            self._command_task = None
+
+        if self._update_task:
+            self._update_task.cancel()
+            try:
+                await self._update_task
+            except asyncio.CancelledError:
+                pass
+            self._update_task = None
+
+        # Clear queue
+        while not self._command_queue.empty():
+            try:
+                _, _, future = self._command_queue.get_nowait()
+                if not future.done():
+                    future.set_exception(EveusError("Updater shutting down"))
+            except asyncio.QueueEmpty:
+                break
                 
 class EveusSensorBase(BaseEveusEntity, SensorEntity):
     """Base sensor entity for Eveus."""
