@@ -163,8 +163,7 @@ class EveusUpdater:
 
     def async_add_listener(self, listener) -> None:
         """Add a listener for data updates."""
-        if hasattr(listener, '_handle_coordinator_update'):
-            self.register_entity(listener)
+        self.register_entity(listener)
 
     async def _process_command_queue(self) -> None:
         """Process commands in the queue."""
@@ -263,25 +262,27 @@ class EveusUpdater:
                     if not isinstance(data, dict):
                         raise ValueError(f"Unexpected data type: {type(data)}")
                     
-                    if data != self._data:
-                        self._data = data
-                        self._available = True
-                        self._last_update = time.time()
-                        self._retry_count = 0
-                        self._failed_requests = 0
-                        self._consecutive_errors = 0
+                    # Always update data and trigger entity updates on successful fetch
+                    self._data = data
+                    self._available = True
+                    self._last_update = time.time()
+                    self._retry_count = 0
+                    self._failed_requests = 0
+                    self._consecutive_errors = 0
 
-                        # Update all registered entities
-                        for entity in self._entities:
-                            if hasattr(entity, '_handle_coordinator_update'):
-                                try:
+                    # Update all registered entities
+                    for entity in self._entities:
+                        if hasattr(entity, 'hass') and entity.hass:
+                            try:
+                                if hasattr(entity, '_handle_coordinator_update'):
                                     entity._handle_coordinator_update()
-                                except Exception as err:
-                                    _LOGGER.error(
-                                        "Error updating entity %s: %s",
-                                        getattr(entity, 'name', 'unknown'),
-                                        str(err)
-                                    )
+                                entity.async_write_ha_state()
+                            except Exception as err:
+                                _LOGGER.error(
+                                    "Error updating entity %s: %s",
+                                    getattr(entity, 'name', 'unknown'),
+                                    str(err)
+                                )
                     
                 except ValueError as err:
                     _LOGGER.error("Invalid JSON received: %s", err)
