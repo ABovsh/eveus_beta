@@ -163,8 +163,9 @@ class EveusUpdater:
 
     def async_add_listener(self, listener) -> None:
         """Add a listener for data updates."""
-        self.register_entity(listener)
-    
+        if hasattr(listener, '_handle_coordinator_update'):
+            self.register_entity(listener)
+
     async def _process_command_queue(self) -> None:
         """Process commands in the queue."""
         while not self._shutdown_event.is_set():
@@ -272,9 +273,9 @@ class EveusUpdater:
 
                         # Update all registered entities
                         for entity in self._entities:
-                            if hasattr(entity, 'hass') and entity.hass:
+                            if hasattr(entity, '_handle_coordinator_update'):
                                 try:
-                                    entity.async_write_ha_state()
+                                    entity._handle_coordinator_update()
                                 except Exception as err:
                                     _LOGGER.error(
                                         "Error updating entity %s: %s",
