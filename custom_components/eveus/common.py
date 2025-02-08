@@ -162,8 +162,8 @@ class EveusUpdater:
             _LOGGER.debug("Registered entity: %s", entity.name)
 
     def async_add_listener(self, listener) -> None:
-    """Add a listener for data updates."""
-    self.register_entity(listener)
+        """Add a listener for data updates."""
+        self.register_entity(listener)
     
     async def _process_command_queue(self) -> None:
         """Process commands in the queue."""
