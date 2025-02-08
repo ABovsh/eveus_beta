@@ -39,6 +39,59 @@ class EveusConnectionError(EveusError):
 class EveusResponseError(EveusError):
     """Error indicating invalid response."""
 
+class BaseEveusEntity(RestoreEntity, Entity):
+    """Base implementation for Eveus entities."""
+
+    ENTITY_NAME: str = None
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+
+    def __init__(self, updater: EveusUpdater) -> None:
+        """Initialize the entity."""
+        super().__init__()
+        self._updater = updater
+        self._updater.register_entity(self)
+
+        if self.ENTITY_NAME is None:
+            raise NotImplementedError("ENTITY_NAME must be defined in child class")
+
+        self._attr_name = self.ENTITY_NAME
+        self._attr_unique_id = f"eveus_{self.ENTITY_NAME.lower().replace(' ', '_')}"
+
+    @property
+    def available(self) -> bool:
+        """Return if entity is available."""
+        return self._updater.available
+
+    @property
+    def device_info(self) -> dict[str, Any]:
+        """Return device information."""
+        return {
+            "identifiers": {(DOMAIN, self._updater.host)},
+            "name": "Eveus EV Charger",
+            "manufacturer": "Eveus",
+            "model": "Eveus EV Charger",
+            "sw_version": self._updater.data.get('verFWMain', 'Unknown'),
+            "configuration_url": f"http://{self._updater.host}",
+        }
+
+    async def async_added_to_hass(self) -> None:
+        """Handle entity which will be added."""
+        await super().async_added_to_hass()
+        state = await self.async_get_last_state()
+        if state:
+            await self._async_restore_state(state)
+        await self._updater.async_start_updates()
+
+    async def _async_restore_state(self, state) -> None:
+        """Restore previous state."""
+        pass
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Handle entity removal."""
+        # Note: Don't call updater.async_shutdown() here as other entities might still be using it
+        pass
+
 class EveusUpdater:
     """Class to handle Eveus data updates."""
 
@@ -322,59 +375,6 @@ class EveusUpdater:
                     future.set_exception(EveusError("Updater shutting down"))
             except asyncio.QueueEmpty:
                 break
-
-class BaseEveusEntity(RestoreEntity, Entity):
-    """Base implementation for Eveus entities."""
-
-    ENTITY_NAME: str = None
-    _attr_has_entity_name = True
-    _attr_should_poll = False
-
-    def __init__(self, updater: EveusUpdater) -> None:
-        """Initialize the entity."""
-        super().__init__()
-        self._updater = updater
-        self._updater.register_entity(self)
-
-        if self.ENTITY_NAME is None:
-            raise NotImplementedError("ENTITY_NAME must be defined in child class")
-
-        self._attr_name = self.ENTITY_NAME
-        self._attr_unique_id = f"eveus_{self.ENTITY_NAME.lower().replace(' ', '_')}"
-
-    @property
-    def available(self) -> bool:
-        """Return if entity is available."""
-        return self._updater.available
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        """Return device information."""
-        return {
-            "identifiers": {(DOMAIN, self._updater.host)},
-            "name": "Eveus EV Charger",
-            "manufacturer": "Eveus",
-            "model": "Eveus EV Charger",
-            "sw_version": self._updater.data.get('verFWMain', 'Unknown'),
-            "configuration_url": f"http://{self._updater.host}",
-        }
-
-    async def async_added_to_hass(self) -> None:
-        """Handle entity which will be added."""
-        await super().async_added_to_hass()
-        state = await self.async_get_last_state()
-        if state:
-            await self._async_restore_state(state)
-        await self._updater.async_start_updates()
-
-    async def _async_restore_state(self, state) -> None:
-        """Restore previous state."""
-        pass
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Handle entity removal."""
-        # Note: Don't call updater.async_shutdown() here as other entities might still be using it
-        pass
 
 class EveusSensorBase(BaseEveusEntity, SensorEntity):
     """Base sensor entity for Eveus."""
