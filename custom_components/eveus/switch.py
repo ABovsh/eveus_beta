@@ -138,21 +138,35 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
     def __init__(self, updater: EveusUpdater) -> None:
         """Initialize the reset counter switch."""
         super().__init__(updater)
-        self._counter_value = None
+        self._attr_state = None
+        self._stored_value = None
+        self._current_value = None
         self._is_on = False
         self._reset_in_progress = False
+        self._attr_unique_id = f"{self._updater.host}_reset_counter_a"
 
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added to hass."""
         await super().async_added_to_hass()
         
-        # Restore previous state and counter value
+        # Restore state and stored value from last shutdown
         last_state = await self.async_get_last_state()
         if last_state and last_state.attributes:
-            self._counter_value = last_state.attributes.get("counter_value")
+            self._stored_value = last_state.attributes.get("stored_value")
             
-        # Register this entity with the updater
-        self._updater.register_entity(self)
+        # Get current value from device
+        if self._state_key in self._updater.data:
+            try:
+                self._current_value = float(self._updater.data[self._state_key])
+            except (TypeError, ValueError):
+                pass
+
+        # Initialize stored value if needed
+        if self._stored_value is None and self._current_value is not None:
+            self._stored_value = self._current_value
+
+        # Register for updates
+        self._updater.async_add_listener(self._handle_coordinator_update)
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -162,32 +176,22 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
             if new_value is not None:
                 try:
                     new_value = float(new_value)
-                    
-                    # Handle initial state after HA restart
-                    if self._counter_value is None:
-                        self._counter_value = new_value
-                        self._is_on = new_value > 0
-                        self.async_write_ha_state()
-                        return
+                    self._current_value = new_value
+
+                    # Update stored value if needed
+                    if self._stored_value is None or (not self._reset_in_progress and new_value > self._stored_value):
+                        self._stored_value = new_value
                         
-                    # Normal update handling
-                    if not self._reset_in_progress:
-                        # Update only if value increases or we're not tracking a reset
-                        if new_value >= self._counter_value:
-                            self._counter_value = new_value
-                            self._is_on = new_value > 0
-                            self.async_write_ha_state()
-                    else:
-                        # If reset was in progress, check if it completed
-                        if new_value < self._counter_value:
-                            self._counter_value = new_value
-                            self._reset_in_progress = False
-                            self._is_on = new_value > 0
-                            self.async_write_ha_state()
-                            
+                    # Check for completed reset
+                    if self._reset_in_progress and new_value < self._stored_value:
+                        self._stored_value = new_value
+                        self._reset_in_progress = False
+                        
+                    self._is_on = new_value > 0
+                    self.async_write_ha_state()
+                    
                 except ValueError:
                     pass
-                    
         except Exception:
             pass
 
@@ -202,14 +206,15 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
 
     @property
     def is_on(self) -> bool:
-        """Return true if counter is active."""
-        return self._is_on
+        """Return true if counter has value."""
+        return bool(self._is_on)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the state attributes."""
         return {
-            "counter_value": self._counter_value
+            "stored_value": self._stored_value,
+            "current_value": self._current_value
         }
     
 async def async_setup_entry(
