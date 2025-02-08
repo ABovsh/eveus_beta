@@ -151,10 +151,8 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
         if last_state and last_state.attributes:
             self._counter_value = last_state.attributes.get("counter_value")
             
-        # Register for updates
-        self.async_on_remove(
-            self._updater.async_add_listener(self._handle_coordinator_update)
-        )
+        # Register this entity with the updater
+        self._updater.register_entity(self)
 
     @callback
     def _handle_coordinator_update(self) -> None:
