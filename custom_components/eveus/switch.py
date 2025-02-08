@@ -144,6 +144,10 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
         self._reset_in_progress = False
         self._last_reset_time = 0
         self._reset_events = []
+        # Initialize time-related attributes in constructor
+        current_time = time.time()
+        self._last_state_change = current_time
+        self._creation_time = current_time
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -167,14 +171,16 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
                             charging_state
                         )
                         self._last_charging_state = charging_state
+                        self._last_state_change = current_time
 
                 # Log counter changes
                 if self._last_counter_value is not None and current_value != self._last_counter_value:
                     _LOGGER.debug(
-                        "Counter A value changed from %s to %s (charging: %s)", 
+                        "Counter A value changed from %s to %s (charging: %s, time since last change: %s)", 
                         self._last_counter_value,
                         current_value,
-                        charging_state
+                        charging_state,
+                        current_time - self._last_state_change
                     )
                     
                     # Detect unauthorized resets
@@ -182,17 +188,19 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
                         # Only log if not a manual reset and not right after charging stops
                         if not self._reset_in_progress and (current_time - self._last_reset_time) > 5:
                             _LOGGER.warning(
-                                "Counter A was reset unexpectedly! Previous: %s, Current: %s, Charging: %s",
+                                "Counter A was reset unexpectedly! Previous: %s, Current: %s, Charging: %s, Time since charging state change: %s",
                                 self._last_counter_value,
                                 current_value, 
-                                charging_state
+                                charging_state,
+                                current_time - self._last_state_change
                             )
                             # Record reset event
                             self._reset_events.append({
                                 'time': current_time,
                                 'previous_value': self._last_counter_value,
                                 'new_value': current_value,
-                                'charging_state': charging_state
+                                'charging_state': charging_state,
+                                'time_since_charging_change': current_time - self._last_state_change
                             })
                             if len(self._reset_events) > 10:
                                 self._reset_events.pop(0)
@@ -231,9 +239,12 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional state attributes."""
+        current_time = time.time()
         return {
             "last_reset_events": self._reset_events[-5:],  # Return last 5 reset events
-            "total_unexpected_resets": len(self._reset_events)
+            "total_unexpected_resets": len(self._reset_events),
+            "uptime": current_time - self._creation_time,
+            "last_state_change": current_time - self._last_state_change
         }
 
 async def async_setup_entry(
