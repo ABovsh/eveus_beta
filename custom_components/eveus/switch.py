@@ -33,6 +33,8 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
         super().__init__(updater)
         self._is_on = False
         self._command_lock = asyncio.Lock()
+        self._last_state = None
+        self._last_counter_value = None
 
     async def _async_send_command(self, command_value: int) -> None:
         """Send command to device."""
@@ -116,12 +118,67 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
     _command = "rstEM1"
     _state_key = "IEM1"
 
+    def __init__(self, updater: EveusUpdater) -> None:
+        """Initialize the reset counter switch."""
+        super().__init__(updater)
+        self._last_counter_value = None
+        self._is_charging = False
+        self._last_charging_state = None
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        try:
+            # Get current counter value
+            counter_value = self._updater.data.get(self._state_key)
+            charging_state = self._updater.data.get("evseEnabled")
+
+            if counter_value is not None:
+                current_value = float(counter_value)
+                
+                # Track charging state changes
+                if charging_state is not None:
+                    charging_state = bool(int(charging_state))
+                    if charging_state != self._last_charging_state:
+                        _LOGGER.debug(
+                            "Charging state changed from %s to %s",
+                            self._last_charging_state,
+                            charging_state
+                        )
+                        self._last_charging_state = charging_state
+
+                # Log counter changes
+                if self._last_counter_value != current_value:
+                    _LOGGER.debug(
+                        "Counter A value changed from %s to %s (charging: %s)", 
+                        self._last_counter_value,
+                        current_value,
+                        charging_state
+                    )
+                    
+                    # Detect unauthorized resets
+                    if self._last_counter_value is not None and current_value < self._last_counter_value:
+                        _LOGGER.warning(
+                            "Counter A was reset unexpectedly! Previous: %s, Current: %s, Charging: %s",
+                            self._last_counter_value,
+                            current_value, 
+                            charging_state
+                        )
+
+                self._last_counter_value = current_value
+                self.async_write_ha_state()
+
+        except Exception as err:
+            _LOGGER.error("Error handling counter update: %s", err)
+
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Reset counter A."""
+        _LOGGER.info("Manually resetting Counter A")
         await self._async_send_command(0)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Reset counter - off state is same as on for reset."""
+        _LOGGER.info("Manually resetting Counter A (off)")
         await self._async_send_command(0)
 
     @property
