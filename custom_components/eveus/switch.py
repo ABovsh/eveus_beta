@@ -145,6 +145,7 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
         self._last_reset_time = 0
         self._reset_events = []
         self._restored = False
+        self._reboot_count = 0  # Add missing attribute
         # Initialize time-related attributes in constructor
         current_time = time.time()
         self._last_state_change = current_time
@@ -160,11 +161,13 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
             self._last_counter_value = float(last_state.attributes.get("last_counter_value", 0))
             self._reset_events = last_state.attributes.get("last_reset_events", [])
             self._last_charging_state = last_state.attributes.get("charging_state", False)
+            self._reboot_count = last_state.attributes.get("total_reboot_resets", 0)  # Restore reboot count
             self._restored = True
             _LOGGER.debug(
-                "Restored counter state - Last value: %s, Charging: %s",
+                "Restored counter state - Last value: %s, Charging: %s, Reboot resets: %s",
                 self._last_counter_value,
-                self._last_charging_state
+                self._last_charging_state,
+                self._reboot_count
             )
 
     @callback
@@ -200,35 +203,33 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
 
                 # Log counter changes
                 if self._last_counter_value is not None and current_value != self._last_counter_value:
-                    _LOGGER.debug(
-                        "Counter A value changed from %s to %s (charging: %s, time since last change: %s)", 
-                        self._last_counter_value,
-                        current_value,
-                        charging_state,
-                        current_time - self._last_state_change
-                    )
-                    
-                    # Detect unauthorized resets
                     if current_value < self._last_counter_value:
                         # Only log if not a manual reset and not right after charging stops
                         if not self._reset_in_progress and (current_time - self._last_reset_time) > 5:
-                            _LOGGER.warning(
-                                "Counter A was reset unexpectedly! Previous: %s, Current: %s, Charging: %s, Time since charging state change: %s",
-                                self._last_counter_value,
-                                current_value, 
-                                charging_state,
-                                current_time - self._last_state_change
-                            )
-                            # Record reset event
-                            self._reset_events.append({
-                                'time': current_time,
-                                'previous_value': self._last_counter_value,
-                                'new_value': current_value,
-                                'charging_state': charging_state,
-                                'time_since_charging_change': current_time - self._last_state_change
-                            })
-                            if len(self._reset_events) > 10:
-                                self._reset_events.pop(0)
+                            if not self._restored:
+                                # This is likely a reboot reset
+                                self._reboot_count += 1
+                                _LOGGER.info(
+                                    "Counter A reset detected after reboot. Total reboot resets: %s",
+                                    self._reboot_count
+                                )
+                            else:
+                                _LOGGER.warning(
+                                    "Counter A was reset unexpectedly! Previous: %s, Current: %s, Charging: %s",
+                                    self._last_counter_value,
+                                    current_value, 
+                                    charging_state
+                                )
+                                # Record reset event
+                                self._reset_events.append({
+                                    'time': current_time,
+                                    'previous_value': self._last_counter_value,
+                                    'new_value': current_value,
+                                    'charging_state': charging_state,
+                                    'time_since_charging_change': current_time - self._last_state_change
+                                })
+                                if len(self._reset_events) > 10:
+                                    self._reset_events.pop(0)
 
                 self._last_counter_value = current_value
                 self.async_write_ha_state()
@@ -268,45 +269,9 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
         return {
             "last_counter_value": self._last_counter_value,
             "charging_state": self._last_charging_state,
-            "last_reset_events": self._reset_events[-5:],  # Return last 5 reset events
+            "last_reset_events": self._reset_events[-5:],
             "total_unexpected_resets": len(self._reset_events),
-            "uptime": current_time - self._creation_time,
-            "last_state_change": current_time - self._last_state_change
-        }
-
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        """Reset counter A."""
-        try:
-            _LOGGER.info("Manually resetting Counter A")
-            self._reset_in_progress = True
-            self._last_reset_time = time.time()
-            await self._async_send_command(0)
-        finally:
-            self._reset_in_progress = False
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        """Reset counter - off state is same as on for reset."""
-        await self.async_turn_on()
-
-    @property
-    def is_on(self) -> bool:
-        """Return true if counter has value."""
-        try:
-            value = self._updater.data.get(self._state_key)
-            if value is not None:
-                return float(value) > 0
-            return False
-        except (TypeError, ValueError):
-            return False
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return additional state attributes."""
-        current_time = time.time()
-        return {
-            "last_reset_events": self._reset_events[-5:],  # Return last 5 reset events
-            "total_unexpected_resets": len(self._reset_events),
-            "total_reboot_resets": self._reboot_count,
+            "total_reboot_resets": self._reboot_count,  # Add reboot count to attributes
             "uptime": current_time - self._creation_time,
             "last_state_change": current_time - self._last_state_change
         }
