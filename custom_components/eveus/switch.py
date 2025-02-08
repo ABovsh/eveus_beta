@@ -138,130 +138,65 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
     def __init__(self, updater: EveusUpdater) -> None:
         """Initialize the reset counter switch."""
         super().__init__(updater)
-        self._attr_state = None
-        self._last_counter_value = None
-        self._is_charging = False
+        self._counter_value = None
+        self._is_on = False
         self._reset_in_progress = False
-        self._last_reset_time = 0
-        self._reset_events = []
-        self._reboot_count = 0
-        self._startup_complete = False
-        self._restored_state = None
-        current_time = time.time()
-        self._last_state_change = current_time
-        self._creation_time = current_time
 
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added to hass."""
         await super().async_added_to_hass()
         
-        # Restore state from storage
-        restored_state = await self.async_get_last_state()
-        if restored_state and restored_state.attributes:
-            self._restored_state = restored_state
-            self._last_counter_value = restored_state.attributes.get("last_counter_value")
-            self._reset_events = restored_state.attributes.get("last_reset_events", [])
-            self._reboot_count = restored_state.attributes.get("total_reboot_resets", 0)
-            self._is_charging = restored_state.attributes.get("charging_state", False)
+        # Restore previous state and counter value
+        last_state = await self.async_get_last_state()
+        if last_state and last_state.attributes:
+            self._counter_value = last_state.attributes.get("counter_value")
             
-            _LOGGER.info(
-                "Restored counter state from storage - Value: %s, Charging: %s",
-                self._last_counter_value,
-                self._is_charging
-            )
-
-        # Register callback for state updates
+        # Register for updates
         self.async_on_remove(
             self._updater.async_add_listener(self._handle_coordinator_update)
         )
-
-    def _get_charging_state(self) -> bool:
-        """Get charging state from evse state sensor."""
-        try:
-            # Check direct status field
-            status = self._updater.data.get("status", "").lower()
-            if status == "charging":
-                return True
-                
-            # Fallback to checking state field
-            state = self._updater.data.get("state", "").lower()
-            return state == "charging"
-            
-        except Exception as err:
-            _LOGGER.error("Error getting charging state: %s", err)
-            return False
 
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
         try:
-            # Get current counter value
-            counter_value = self._updater.data.get(self._state_key)
-            charging_state = self._get_charging_state()
-            
-            if counter_value is not None:
+            new_value = self._updater.data.get(self._state_key)
+            if new_value is not None:
                 try:
-                    current_value = float(counter_value)
-                except ValueError:
-                    _LOGGER.error("Invalid counter value: %s", counter_value)
-                    return
-
-                # Handle initial startup
-                if not self._startup_complete:
-                    self._startup_complete = True
-                    if self._last_counter_value is None:
-                        _LOGGER.info("Setting initial counter value to %s", current_value)
-                        self._last_counter_value = current_value
+                    new_value = float(new_value)
+                    
+                    # Handle initial state after HA restart
+                    if self._counter_value is None:
+                        self._counter_value = new_value
+                        self._is_on = new_value > 0
                         self.async_write_ha_state()
                         return
-                    elif current_value < self._last_counter_value:
-                        self._reboot_count += 1
-                        _LOGGER.warning(
-                            "Counter reset detected after reboot. Previous: %s, Current: %s, Total resets: %s",
-                            self._last_counter_value,
-                            current_value,
-                            self._reboot_count
-                        )
-
-                # Update charging state
-                if charging_state != self._is_charging:
-                    _LOGGER.info("Charging state changed: %s -> %s", self._is_charging, charging_state)
-                    self._is_charging = charging_state
-                    self._last_state_change = time.time()
-
-                # Track counter changes
-                if self._last_counter_value is not None and current_value != self._last_counter_value:
-                    if current_value < self._last_counter_value and not self._reset_in_progress:
-                        _LOGGER.warning(
-                            "Counter reset detected! Previous: %.2f, Current: %.2f, Charging: %s",
-                            self._last_counter_value,
-                            current_value,
-                            charging_state
-                        )
-                        self._reset_events.append({
-                            'time': time.time(),
-                            'previous_value': self._last_counter_value,
-                            'new_value': current_value,
-                            'charging_state': charging_state
-                        })
-                        if len(self._reset_events) > 10:
-                            self._reset_events.pop(0)
-
-                self._last_counter_value = current_value
-                self.async_write_ha_state()
-
-        except Exception as err:
-            _LOGGER.error("Error in counter update: %s", err)
+                        
+                    # Normal update handling
+                    if not self._reset_in_progress:
+                        # Update only if value increases or we're not tracking a reset
+                        if new_value >= self._counter_value:
+                            self._counter_value = new_value
+                            self._is_on = new_value > 0
+                            self.async_write_ha_state()
+                    else:
+                        # If reset was in progress, check if it completed
+                        if new_value < self._counter_value:
+                            self._counter_value = new_value
+                            self._reset_in_progress = False
+                            self._is_on = new_value > 0
+                            self.async_write_ha_state()
+                            
+                except ValueError:
+                    pass
+                    
+        except Exception:
+            pass
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Reset counter A."""
-        try:
-            _LOGGER.info("Manually resetting Counter A")
-            self._reset_in_progress = True
-            self._last_reset_time = time.time()
-            await self._async_send_command(0)
-        finally:
-            self._reset_in_progress = False
+        self._reset_in_progress = True
+        await self._async_send_command(0)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Reset counter - off state is same as on for reset."""
@@ -269,25 +204,14 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
 
     @property
     def is_on(self) -> bool:
-        """Return true if counter has value."""
-        try:
-            value = self._updater.data.get(self._state_key)
-            return value is not None and float(value) > 0
-        except (TypeError, ValueError):
-            return False
+        """Return true if counter is active."""
+        return self._is_on
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return additional state attributes."""
-        current_time = time.time()
+        """Return the state attributes."""
         return {
-            "last_counter_value": self._last_counter_value,
-            "charging_state": self._is_charging,
-            "last_reset_events": self._reset_events[-5:],
-            "total_unexpected_resets": len(self._reset_events),
-            "total_reboot_resets": self._reboot_count,
-            "uptime": current_time - self._creation_time,
-            "last_state_change": current_time - self._last_state_change
+            "counter_value": self._counter_value
         }
     
 async def async_setup_entry(
