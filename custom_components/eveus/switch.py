@@ -121,8 +121,20 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
         await self._async_send_command(0)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Reset counter - off state is same as on for reset."""
-        await self._async_send_command(0)
+        """No action needed for turn off."""
+        # Normally not called, but implemented to be safe
+        pass
+
+    async def _async_restore_state(self, state: State) -> None:
+        """Restore state without sending commands."""
+        try:
+            if state.state == "on":
+                self._is_on = True
+            elif state.state == "off":
+                self._is_on = False
+            self.async_write_ha_state()
+        except Exception as err:
+            _LOGGER.error("Error restoring state for %s: %s", self.name, err)
 
     @property
     def is_on(self) -> bool:
@@ -150,7 +162,6 @@ async def async_setup_entry(
         EveusResetCounterASwitch(updater),
     ]
 
-    # Initialize entities dict if needed
     if "entities" not in data:
         data["entities"] = {}
 
