@@ -10,11 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import EntityCategory
-from homeassistant.const import (
-    CONF_HOST,
-    CONF_USERNAME,
-    CONF_PASSWORD,
-)
+from homeassistant.const import CONF_HOST, CONF_USERNAME, CONF_PASSWORD
 
 from .const import DOMAIN
 from .common import BaseEveusEntity, EveusUpdater
@@ -33,6 +29,7 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
         super().__init__(updater)
         self._is_on = False
         self._command_lock = asyncio.Lock()
+        self._initial_update = False  # Track if we've received first data update
 
     async def _async_send_command(self, command_value: int) -> None:
         """Send command to device."""
@@ -42,18 +39,17 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
                 self.async_write_ha_state()
 
     async def _async_restore_state(self, state: State) -> None:
-        """Restore previous state."""
+        """Restore previous state without triggering commands."""
         try:
-            if state.state == "on":
-                await self.async_turn_on()
-            elif state.state == "off":
-                await self.async_turn_off()
+            self._is_on = state.state == "on"
+            self.async_write_ha_state()
         except Exception as err:
             _LOGGER.error("Error restoring state for %s: %s", self.name, err)
 
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
+        self._initial_update = True  # Mark that we've received live data
         try:
             value = self._updater.data.get(self._state_key)
             if value is not None:
@@ -72,9 +68,7 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
     @property
     def available(self) -> bool:
         """Return if entity is available."""
-        if not super().available:
-            return False
-        return self._state_key in self._updater.data
+        return super().available and self._state_key in self._updater.data
 
 class EveusStopChargingSwitch(BaseSwitchEntity):
     """Representation of Eveus charging control switch."""
@@ -109,50 +103,80 @@ class EveusOneChargeSwitch(BaseSwitchEntity):
         await self._async_send_command(0)
 
 class EveusResetCounterASwitch(BaseSwitchEntity):
-    """Representation of Eveus reset counter A switch."""
+    """Representation of Eveus reset counter A switch with safe handling."""
 
     ENTITY_NAME = "Reset Counter A"
     _attr_icon = "mdi:refresh-circle"
     _command = "rstEM1"
     _state_key = "IEM1"
 
+    def __init__(self, updater: EveusUpdater) -> None:
+        """Initialize with safety flags."""
+        super().__init__(updater)
+        self._pending_reset = False
+        self._safe_mode = True  # Block commands until first update
+
+    async def async_added_to_hass(self) -> None:
+        """Handle entity addition with delayed safe mode disable."""
+        await super().async_added_to_hass()
+        self.hass.async_create_task(self._disable_safe_mode())
+
+    async def _disable_safe_mode(self) -> None:
+        """Disable safe mode after first successful update."""
+        await self._updater.async_start_updates()
+        self._safe_mode = False
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Update state from live data."""
+        super()._handle_coordinator_update()
+        # Sync pending state with actual device state
+        if self._initial_update and self._pending_reset:
+            self._pending_reset = False
+
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Reset counter A."""
-        await self._async_send_command(0)
+        """Mark reset needed (visual only)."""
+        if self._safe_mode:
+            return
+        self._pending_reset = True
+        self._is_on = True
+        self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """No action needed for turn off."""
-        # Normally not called, but implemented to be safe
-        pass
+        """Perform actual reset command."""
+        if self._safe_mode or not self._pending_reset:
+            return
 
-    async def _async_restore_state(self, state: State) -> None:
-        """Restore state without sending commands."""
-        try:
-            if state.state == "on":
-                self._is_on = True
-            elif state.state == "off":
-                self._is_on = False
+        if await self._updater.send_command(self._command, 0):
+            self._pending_reset = False
+            self._is_on = False
             self.async_write_ha_state()
-        except Exception as err:
-            _LOGGER.error("Error restoring state for %s: %s", self.name, err)
 
     @property
     def is_on(self) -> bool:
-        """Return true if counter has value."""
+        """Return True if counter needs reset."""
+        if self._safe_mode:
+            return self._pending_reset
+            
         try:
-            value = self._updater.data.get(self._state_key)
-            if value is not None:
-                return float(value) > 0
-            return False
+            # Use live data when available, fallback to pending state
+            value = float(self._updater.data.get(self._state_key, 0))
+            return value > 0 or self._pending_reset
         except (TypeError, ValueError):
-            return False
+            return self._pending_reset
+
+    async def _async_restore_state(self, state: State) -> None:
+        """Restore state without immediate action."""
+        self._pending_reset = state.state == "on"
+        self._is_on = self._pending_reset
+        self.async_write_ha_state()
 
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Eveus switches."""
+    """Set up Eveus switches with safe reset handling."""
     data = hass.data[DOMAIN][entry.entry_id]
     updater = data["updater"]
 
