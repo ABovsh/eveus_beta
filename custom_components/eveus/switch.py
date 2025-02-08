@@ -39,6 +39,12 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
     async def _async_send_command(self, command_value: int) -> None:
         """Send command to device."""
         async with self._command_lock:
+            _LOGGER.debug(
+                "Sending command %s with value %s for entity %s",
+                self._command,
+                command_value,
+                self.name
+            )
             if await self._updater.send_command(self._command, command_value):
                 self._is_on = bool(command_value)
                 self.async_write_ha_state()
@@ -61,10 +67,16 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
             if value is not None:
                 new_state = bool(int(value))
                 if new_state != self._is_on:
+                    _LOGGER.debug(
+                        "%s state changed from %s to %s",
+                        self.name,
+                        self._is_on,
+                        new_state
+                    )
                     self._is_on = new_state
                     self.async_write_ha_state()
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as err:
+            _LOGGER.error("Error handling update for %s: %s", self.name, err)
 
     @property
     def is_on(self) -> bool:
@@ -88,10 +100,12 @@ class EveusStopChargingSwitch(BaseSwitchEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn on charging."""
+        _LOGGER.info("Enabling charging")
         await self._async_send_command(1)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off charging."""
+        _LOGGER.info("Disabling charging")
         await self._async_send_command(0)
 
 class EveusOneChargeSwitch(BaseSwitchEntity):
@@ -104,10 +118,12 @@ class EveusOneChargeSwitch(BaseSwitchEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Enable one charge mode."""
+        _LOGGER.info("Enabling one charge mode")
         await self._async_send_command(1)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Disable one charge mode."""
+        _LOGGER.info("Disabling one charge mode")
         await self._async_send_command(0)
 
 class EveusResetCounterASwitch(BaseSwitchEntity):
@@ -124,6 +140,9 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
         self._last_counter_value = None
         self._is_charging = False
         self._last_charging_state = None
+        self._reset_in_progress = False
+        self._last_reset_time = 0
+        self._reset_events = []
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -132,6 +151,7 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
             # Get current counter value
             counter_value = self._updater.data.get(self._state_key)
             charging_state = self._updater.data.get("evseEnabled")
+            current_time = time.time()
 
             if counter_value is not None:
                 current_value = float(counter_value)
@@ -148,7 +168,7 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
                         self._last_charging_state = charging_state
 
                 # Log counter changes
-                if self._last_counter_value != current_value:
+                if self._last_counter_value is not None and current_value != self._last_counter_value:
                     _LOGGER.debug(
                         "Counter A value changed from %s to %s (charging: %s)", 
                         self._last_counter_value,
@@ -157,13 +177,24 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
                     )
                     
                     # Detect unauthorized resets
-                    if self._last_counter_value is not None and current_value < self._last_counter_value:
-                        _LOGGER.warning(
-                            "Counter A was reset unexpectedly! Previous: %s, Current: %s, Charging: %s",
-                            self._last_counter_value,
-                            current_value, 
-                            charging_state
-                        )
+                    if current_value < self._last_counter_value:
+                        # Only log if not a manual reset and not right after charging stops
+                        if not self._reset_in_progress and (current_time - self._last_reset_time) > 5:
+                            _LOGGER.warning(
+                                "Counter A was reset unexpectedly! Previous: %s, Current: %s, Charging: %s",
+                                self._last_counter_value,
+                                current_value, 
+                                charging_state
+                            )
+                            # Record reset event
+                            self._reset_events.append({
+                                'time': current_time,
+                                'previous_value': self._last_counter_value,
+                                'new_value': current_value,
+                                'charging_state': charging_state
+                            })
+                            if len(self._reset_events) > 10:
+                                self._reset_events.pop(0)
 
                 self._last_counter_value = current_value
                 self.async_write_ha_state()
@@ -173,13 +204,17 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Reset counter A."""
-        _LOGGER.info("Manually resetting Counter A")
-        await self._async_send_command(0)
+        try:
+            _LOGGER.info("Manually resetting Counter A")
+            self._reset_in_progress = True
+            self._last_reset_time = time.time()
+            await self._async_send_command(0)
+        finally:
+            self._reset_in_progress = False
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Reset counter - off state is same as on for reset."""
-        _LOGGER.info("Manually resetting Counter A (off)")
-        await self._async_send_command(0)
+        await self.async_turn_on()
 
     @property
     def is_on(self) -> bool:
@@ -191,6 +226,14 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
             return False
         except (TypeError, ValueError):
             return False
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return additional state attributes."""
+        return {
+            "last_reset_events": self._reset_events[-5:],  # Return last 5 reset events
+            "total_unexpected_resets": len(self._reset_events)
+        }
 
 async def async_setup_entry(
     hass: HomeAssistant,
