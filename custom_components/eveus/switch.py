@@ -144,11 +144,10 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
         self._reset_in_progress = False
         self._last_reset_time = 0
         self._reset_events = []
-        # Initialize time-related attributes in constructor
-        current_time = time.time()
-        self._last_state_change = current_time
-        self._creation_time = current_time
-
+        self._creation_time = time.time()
+        self._last_state_change = self._creation_time
+        self._reboot_count = 0
+        
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
@@ -174,19 +173,20 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
                         self._last_state_change = current_time
 
                 # Log counter changes
-                if self._last_counter_value is not None and current_value != self._last_counter_value:
-                    _LOGGER.debug(
-                        "Counter A value changed from %s to %s (charging: %s, time since last change: %s)", 
-                        self._last_counter_value,
-                        current_value,
-                        charging_state,
-                        current_time - self._last_state_change
-                    )
+                if self._last_counter_value is not None:
                     
-                    # Detect unauthorized resets
+                    # Detect resets after restarts
                     if current_value < self._last_counter_value:
-                        # Only log if not a manual reset and not right after charging stops
-                        if not self._reset_in_progress and (current_time - self._last_reset_time) > 5:
+                        if (current_time - self._creation_time) < 60: 
+                            _LOGGER.info(
+                                "Counter A reset detected after restart. Previous: %s, Current: %s",
+                                self._last_counter_value,
+                                current_value
+                            )
+                            self._reboot_count += 1
+                        
+                        # Otherwise detect unauthorized resets
+                        elif not self._reset_in_progress and (current_time - self._last_reset_time) > 5:
                             _LOGGER.warning(
                                 "Counter A was reset unexpectedly! Previous: %s, Current: %s, Charging: %s, Time since charging state change: %s",
                                 self._last_counter_value,
@@ -202,8 +202,15 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
                                 'charging_state': charging_state,
                                 'time_since_charging_change': current_time - self._last_state_change
                             })
-                            if len(self._reset_events) > 10:
-                                self._reset_events.pop(0)
+                    
+                    elif current_value != self._last_counter_value:         
+                        _LOGGER.debug(
+                            "Counter A value changed from %s to %s (charging: %s, time since last change: %s)", 
+                            self._last_counter_value,
+                            current_value,
+                            charging_state,
+                            current_time - self._last_state_change
+                        )
 
                 self._last_counter_value = current_value
                 self.async_write_ha_state()
@@ -243,10 +250,11 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
         return {
             "last_reset_events": self._reset_events[-5:],  # Return last 5 reset events
             "total_unexpected_resets": len(self._reset_events),
+            "total_reboot_resets": self._reboot_count,
             "uptime": current_time - self._creation_time,
             "last_state_change": current_time - self._last_state_change
         }
-
+    
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
