@@ -140,71 +140,102 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
         super().__init__(updater)
         self._attr_state = None
         self._attr_unique_id = f"{self._updater.host}_reset_counter_a"
-        self._stored_value = None
+        self._persistent_value = None
         self._current_value = None
         self._is_on = False
         self._reset_in_progress = False
+        self._initialized = False
 
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added to hass."""
         await super().async_added_to_hass()
         
-        # Get latest value for the first time
+        # Restore state from last shutdown
+        last_state = await self.async_get_last_state()
+        if last_state and last_state.attributes:
+            try:
+                restored_value = last_state.attributes.get("persistent_value")
+                if restored_value is not None:
+                    self._persistent_value = float(restored_value)
+                    self._current_value = self._persistent_value
+                    self._initialized = True
+                    _LOGGER.debug(
+                        "Restored counter A value: %s", 
+                        self._persistent_value
+                    )
+            except (TypeError, ValueError) as err:
+                _LOGGER.error("Error restoring counter state: %s", err)
+
+        # Get current value after restoration
         if self._state_key in self._updater.data:
             try:
-                self._current_value = float(self._updater.data[self._state_key])
+                new_value = float(self._updater.data[self._state_key])
+                if not self._initialized:
+                    self._persistent_value = new_value
+                    self._current_value = new_value
+                    self._initialized = True
+                    _LOGGER.debug(
+                        "Initialized counter A with value: %s", 
+                        new_value
+                    )
             except (TypeError, ValueError):
                 pass
 
-        # Initialize stored value from current value
-        if self._stored_value is None and self._current_value is not None:
-            self._stored_value = self._current_value
-        
-        # Restore state from last shutdown
-        last_state = await self.async_get_last_state()
-        if last_state is not None and last_state.attributes is not None:
-            stored_val = last_state.attributes.get("stored_value")
-            if stored_val is not None:
-                self._stored_value = float(stored_val)
+        self._is_on = bool(self._current_value and self._current_value > 0)
+        self.async_write_ha_state()
 
-        # Register entity for updates
+        # Register for updates
         self._updater.async_add_listener(self._handle_coordinator_update)
 
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
         try:
-            new_val = self._updater.data.get(self._state_key)
-            if new_val is not None:
+            new_value = self._updater.data.get(self._state_key)
+            if new_value is not None:
                 try:
-                    new_val = float(new_val)
-                    self._current_value = new_val
-                    
-                    # Update stored value if needed
-                    if self._stored_value is None:
-                        self._stored_value = new_val
-                    elif not self._reset_in_progress and new_val > self._stored_value:
-                        self._stored_value = new_val
+                    new_value = float(new_value)
+                    self._current_value = new_value
 
-                    # Handle reset completion
-                    if self._reset_in_progress and new_val < self._stored_value:
-                        self._stored_value = new_val
+                    # If we haven't initialized yet, do it now
+                    if not self._initialized:
+                        self._persistent_value = new_value
+                        self._initialized = True
+                        _LOGGER.debug(
+                            "Late initialization of counter A with value: %s", 
+                            new_value
+                        )
+                    # If this is not a reset operation and value increased
+                    elif not self._reset_in_progress and new_value > self._persistent_value:
+                        self._persistent_value = new_value
+                        _LOGGER.debug(
+                            "Updated persistent counter A value to: %s", 
+                            new_value
+                        )
+                    # If this is a reset operation and value decreased
+                    elif self._reset_in_progress and new_value < self._persistent_value:
+                        self._persistent_value = new_value
                         self._reset_in_progress = False
+                        _LOGGER.debug(
+                            "Reset complete, new counter A value: %s", 
+                            new_value
+                        )
 
-                    # Update on/off state
-                    self._is_on = new_val > 0
+                    self._is_on = new_value > 0
                     self.async_write_ha_state()
 
-                except ValueError:
-                    pass
+                except ValueError as err:
+                    _LOGGER.error("Error converting counter value: %s", err)
 
-        except Exception:
-            pass
+        except Exception as err:
+            _LOGGER.error("Error handling counter update: %s", err)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Reset counter A."""
-        self._reset_in_progress = True
-        await self._async_send_command(0)
+        if not self._reset_in_progress:
+            self._reset_in_progress = True
+            _LOGGER.debug("Initiating counter A reset")
+            await self._async_send_command(0)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Reset counter - off state is same as on for reset."""
@@ -220,14 +251,15 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
         """Return if entity is available."""
         if not super().available:
             return False
-        return self._state_key in self._updater.data
+        return self._initialized and self._state_key in self._updater.data
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the state attributes."""
         return {
-            "stored_value": self._stored_value,
-            "current_value": self._current_value
+            "persistent_value": self._persistent_value,
+            "current_value": self._current_value,
+            "is_resetting": self._reset_in_progress
         }
     
 async def async_setup_entry(
