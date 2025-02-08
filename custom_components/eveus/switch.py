@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import asyncio
+import time
 from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
