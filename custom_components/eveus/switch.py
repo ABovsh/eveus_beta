@@ -145,91 +145,95 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
         self._last_reset_time = 0
         self._reset_events = []
         self._restored = False
-        self._reboot_count = 0  # Add missing attribute
-        # Initialize time-related attributes in constructor
+        self._reboot_count = 0
         current_time = time.time()
         self._last_state_change = current_time
         self._creation_time = current_time
+        self._initialized = False
 
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added to hass."""
         await super().async_added_to_hass()
         
-        # Restore previous state and counter value
         last_state = await self.async_get_last_state()
-        if last_state is not None:
-            self._last_counter_value = float(last_state.attributes.get("last_counter_value", 0))
-            self._reset_events = last_state.attributes.get("last_reset_events", [])
-            self._last_charging_state = last_state.attributes.get("charging_state", False)
-            self._reboot_count = last_state.attributes.get("total_reboot_resets", 0)  # Restore reboot count
-            self._restored = True
-            _LOGGER.debug(
-                "Restored counter state - Last value: %s, Charging: %s, Reboot resets: %s",
-                self._last_counter_value,
-                self._last_charging_state,
-                self._reboot_count
-            )
+        if last_state is not None and last_state.attributes:
+            try:
+                self._last_counter_value = float(last_state.attributes.get("last_counter_value", 0))
+                self._reset_events = last_state.attributes.get("last_reset_events", [])
+                self._reboot_count = last_state.attributes.get("total_reboot_resets", 0)
+                self._restored = True
+                _LOGGER.debug(
+                    "Restored counter state - Last value: %s, Reboot resets: %s",
+                    self._last_counter_value,
+                    self._reboot_count
+                )
+            except Exception as err:
+                _LOGGER.error("Error restoring state: %s", err)
+
+    def _get_charging_state(self) -> bool:
+        """Get charging state from evse state sensor."""
+        try:
+            evse_state = self._updater.data.get("status", "")
+            return evse_state.lower() == "charging"
+        except Exception:
+            return False
 
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
         try:
-            # Get current counter value
             counter_value = self._updater.data.get(self._state_key)
-            charging_state = self._updater.data.get("evseEnabled")
             current_time = time.time()
+            charging_state = self._get_charging_state()
 
             if counter_value is not None:
-                current_value = float(counter_value)
-                
-                # Skip initial state detection if we've restored state
-                if not self._restored and self._last_counter_value is None:
-                    self._last_counter_value = current_value
-                    _LOGGER.debug("Initial counter value set to: %s", current_value)
-                    self.async_write_ha_state()
+                try:
+                    current_value = float(counter_value)
+                except (TypeError, ValueError):
+                    _LOGGER.error("Invalid counter value: %s", counter_value)
                     return
 
-                # Track charging state changes
-                if charging_state is not None:
-                    charging_state = bool(int(charging_state))
-                    if charging_state != self._last_charging_state:
-                        _LOGGER.debug(
-                            "Charging state changed from %s to %s",
-                            self._last_charging_state,
-                            charging_state
-                        )
-                        self._last_charging_state = charging_state
-                        self._last_state_change = current_time
+                # Handle initial state
+                if not self._initialized:
+                    self._initialized = True
+                    if self._last_counter_value is None:
+                        self._last_counter_value = current_value
+                        _LOGGER.debug("Initial counter value set to: %s", current_value)
+                        self.async_write_ha_state()
+                        return
 
-                # Log counter changes
-                if self._last_counter_value is not None and current_value != self._last_counter_value:
-                    if current_value < self._last_counter_value:
-                        # Only log if not a manual reset and not right after charging stops
-                        if not self._reset_in_progress and (current_time - self._last_reset_time) > 5:
-                            if not self._restored:
-                                # This is likely a reboot reset
-                                self._reboot_count += 1
-                                _LOGGER.info(
-                                    "Counter A reset detected after reboot. Total reboot resets: %s",
-                                    self._reboot_count
-                                )
-                            else:
-                                _LOGGER.warning(
-                                    "Counter A was reset unexpectedly! Previous: %s, Current: %s, Charging: %s",
-                                    self._last_counter_value,
-                                    current_value, 
-                                    charging_state
-                                )
-                                # Record reset event
-                                self._reset_events.append({
-                                    'time': current_time,
-                                    'previous_value': self._last_counter_value,
-                                    'new_value': current_value,
-                                    'charging_state': charging_state,
-                                    'time_since_charging_change': current_time - self._last_state_change
-                                })
-                                if len(self._reset_events) > 10:
-                                    self._reset_events.pop(0)
+                # Update charging state
+                if charging_state != self._last_charging_state:
+                    _LOGGER.debug(
+                        "Charging state changed from %s to %s",
+                        self._last_charging_state,
+                        charging_state
+                    )
+                    self._last_charging_state = charging_state
+                    self._last_state_change = current_time
+
+                # Handle counter changes
+                if self._last_counter_value is not None and abs(current_value - self._last_counter_value) > 0.01:
+                    if current_value < self._last_counter_value and not self._reset_in_progress:
+                        # Detect reset type
+                        time_since_last_reset = current_time - self._last_reset_time
+                        if time_since_last_reset > 5:
+                            self._reset_events.append({
+                                'time': current_time,
+                                'previous_value': self._last_counter_value,
+                                'new_value': current_value,
+                                'charging_state': charging_state,
+                                'time_since_charging_change': current_time - self._last_state_change
+                            })
+                            if len(self._reset_events) > 10:
+                                self._reset_events.pop(0)
+                            
+                            _LOGGER.warning(
+                                "Counter reset detected! Previous: %.2f, Current: %.2f, Charging: %s",
+                                self._last_counter_value,
+                                current_value,
+                                charging_state
+                            )
 
                 self._last_counter_value = current_value
                 self.async_write_ha_state()
@@ -256,9 +260,7 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
         """Return true if counter has value."""
         try:
             value = self._updater.data.get(self._state_key)
-            if value is not None:
-                return float(value) > 0
-            return False
+            return value is not None and float(value) > 0
         except (TypeError, ValueError):
             return False
 
@@ -271,7 +273,7 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
             "charging_state": self._last_charging_state,
             "last_reset_events": self._reset_events[-5:],
             "total_unexpected_resets": len(self._reset_events),
-            "total_reboot_resets": self._reboot_count,  # Add reboot count to attributes
+            "total_reboot_resets": self._reboot_count,
             "uptime": current_time - self._creation_time,
             "last_state_change": current_time - self._last_state_change
         }
