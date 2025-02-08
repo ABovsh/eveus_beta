@@ -139,59 +139,65 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
         """Initialize the reset counter switch."""
         super().__init__(updater)
         self._attr_state = None
+        self._attr_unique_id = f"{self._updater.host}_reset_counter_a"
         self._stored_value = None
         self._current_value = None
         self._is_on = False
         self._reset_in_progress = False
-        self._attr_unique_id = f"{self._updater.host}_reset_counter_a"
 
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added to hass."""
         await super().async_added_to_hass()
         
-        # Restore state and stored value from last shutdown
-        last_state = await self.async_get_last_state()
-        if last_state and last_state.attributes:
-            self._stored_value = last_state.attributes.get("stored_value")
-            
-        # Get current value from device
+        # Get latest value for the first time
         if self._state_key in self._updater.data:
             try:
                 self._current_value = float(self._updater.data[self._state_key])
             except (TypeError, ValueError):
                 pass
 
-        # Initialize stored value if needed
+        # Initialize stored value from current value
         if self._stored_value is None and self._current_value is not None:
             self._stored_value = self._current_value
+        
+        # Restore state from last shutdown
+        last_state = await self.async_get_last_state()
+        if last_state is not None and last_state.attributes is not None:
+            stored_val = last_state.attributes.get("stored_value")
+            if stored_val is not None:
+                self._stored_value = float(stored_val)
 
-        # Register for updates
+        # Register entity for updates
         self._updater.async_add_listener(self._handle_coordinator_update)
 
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
         try:
-            new_value = self._updater.data.get(self._state_key)
-            if new_value is not None:
+            new_val = self._updater.data.get(self._state_key)
+            if new_val is not None:
                 try:
-                    new_value = float(new_value)
-                    self._current_value = new_value
-
-                    # Update stored value if needed
-                    if self._stored_value is None or (not self._reset_in_progress and new_value > self._stored_value):
-                        self._stored_value = new_value
-                        
-                    # Check for completed reset
-                    if self._reset_in_progress and new_value < self._stored_value:
-                        self._stored_value = new_value
-                        self._reset_in_progress = False
-                        
-                    self._is_on = new_value > 0
-                    self.async_write_ha_state()
+                    new_val = float(new_val)
+                    self._current_value = new_val
                     
+                    # Update stored value if needed
+                    if self._stored_value is None:
+                        self._stored_value = new_val
+                    elif not self._reset_in_progress and new_val > self._stored_value:
+                        self._stored_value = new_val
+
+                    # Handle reset completion
+                    if self._reset_in_progress and new_val < self._stored_value:
+                        self._stored_value = new_val
+                        self._reset_in_progress = False
+
+                    # Update on/off state
+                    self._is_on = new_val > 0
+                    self.async_write_ha_state()
+
                 except ValueError:
                     pass
+
         except Exception:
             pass
 
@@ -208,6 +214,13 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
     def is_on(self) -> bool:
         """Return true if counter has value."""
         return bool(self._is_on)
+
+    @property
+    def available(self) -> bool:
+        """Return if entity is available."""
+        if not super().available:
+            return False
+        return self._state_key in self._updater.data
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
