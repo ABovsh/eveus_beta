@@ -15,21 +15,41 @@ _LOGGER = logging.getLogger(__name__)
 T = TypeVar('T')
 
 def get_safe_value(
-    state: State | None,
+    value: Any,
     key: str | None = None,
     converter: Callable[[Any], T] = float,
     default: Optional[T] = None
 ) -> T | None:
-    """Safely get and convert value from state object."""
+    """Safely get and convert value.
+    
+    Args:
+        value: Value to convert. Can be a State object or direct value
+        key: Key to retrieve if value is a dict
+        converter: Function to convert the value
+        default: Default value if conversion fails
+        
+    Returns:
+        Converted value or default if conversion fails
+    """
     try:
-        if state is None:
+        if value is None:
             return default
-        value = state.state if key is None else getattr(state, key, None)
+
+        # Handle State objects
+        if isinstance(value, State):
+            value = value.state
+
+        # Handle dictionary values
+        if isinstance(value, dict) and key is not None:
+            value = value.get(key)
+
+        # Handle unavailable states
         if value in (None, 'unknown', 'unavailable'):
             return default
+
         return converter(value)
     except (TypeError, ValueError, AttributeError) as err:
-        _LOGGER.error("Error converting value: %s", err)
+        _LOGGER.debug("Error converting value %s: %s", value, err)
         return default
 
 def get_device_info(host: str, data: dict) -> dict[str, Any]:
