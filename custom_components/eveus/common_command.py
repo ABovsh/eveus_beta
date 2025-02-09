@@ -6,9 +6,9 @@ from typing import Any, Optional
 
 import aiohttp
 
-_LOGGER = logging.getLogger(__name__)
+from .const import COMMAND_TIMEOUT
 
-COMMAND_TIMEOUT = 25
+_LOGGER = logging.getLogger(__name__)
 
 class CommandManager:
     """Manage command execution and retries."""
