@@ -38,11 +38,9 @@ class EVSocKwhSensor(EveusSensorBase):
             correction = get_safe_value(
                 self.hass.states.get("input_number.ev_soc_correction")
             )
-            energy_charged = get_safe_value(
-                self._updater.data.get("IEM1", 0)
-            ) or 0
+            energy_charged = get_safe_value(self._updater.data, "IEM1", default=0)
 
-            if not validate_required_values(initial_soc, max_capacity, energy_charged, correction):
+            if not validate_required_values(initial_soc, max_capacity, correction):
                 _LOGGER.debug("Missing required values for SOC calculation")
                 return None
 
@@ -114,9 +112,7 @@ class TimeToTargetSocSensor(EveusSensorBase):
             correction = get_safe_value(
                 self.hass.states.get("input_number.ev_soc_correction")
             )
-            power_meas = get_safe_value(
-                self._updater.data.get("powerMeas", 0)
-            ) or 0
+            power_meas = get_safe_value(self._updater.data, "powerMeas", default=0)
 
             return calculate_remaining_time(
                 current_soc,
