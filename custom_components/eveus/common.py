@@ -19,16 +19,17 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import utcnow
 
 from .const import DOMAIN, SCAN_INTERVAL
+from .utils import get_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
 # Constants
 RETRY_DELAY = 15
-COMMAND_TIMEOUT = 25  # Increased from 5
+COMMAND_TIMEOUT = 25
 UPDATE_TIMEOUT = 20
 MAX_RETRIES = 3
 ERROR_COOLDOWN = 300  # 5 minutes
-SESSION_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=5)  # Increased timeouts
+SESSION_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=5)
 
 class EveusError(HomeAssistantError):
     """Base class for Eveus errors."""
@@ -38,6 +39,121 @@ class EveusConnectionError(EveusError):
 
 class EveusResponseError(EveusError):
     """Error indicating invalid response."""
+
+class CommandManager:
+    """Manage command execution and retries."""
+    
+    def __init__(self, updater: "EveusUpdater"):
+        """Initialize command manager."""
+        self._updater = updater
+        self._queue = asyncio.Queue()
+        self._task: Optional[asyncio.Task] = None
+        self._last_command_time = 0
+        self._lock = asyncio.Lock()
+
+    async def start(self) -> None:
+        """Start command processing."""
+        if not self._task:
+            self._task = asyncio.create_task(self._process_queue())
+
+    async def stop(self) -> None:
+        """Stop command processing."""
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+
+    async def _process_queue(self) -> None:
+        """Process commands in queue."""
+        while True:
+            try:
+                command, value, future = await self._queue.get()
+                try:
+                    if not future.done():
+                        result = await asyncio.wait_for(
+                            self._execute_command(command, value),
+                            timeout=COMMAND_TIMEOUT
+                        )
+                        future.set_result(result)
+                except asyncio.TimeoutError:
+                    if not future.done():
+                        future.set_exception(asyncio.TimeoutError("Command timed out"))
+                except Exception as err:
+                    if not future.done():
+                        future.set_exception(err)
+                finally:
+                    self._queue.task_done()
+            except asyncio.CancelledError:
+                break
+            except Exception as err:
+                _LOGGER.error("Error processing command queue: %s", err)
+                await asyncio.sleep(1)
+
+    async def _execute_command(self, command: str, value: Any) -> bool:
+        """Execute command with retries and rate limiting."""
+        async with self._lock:
+            retries = 3
+            delay = 1
+
+            for attempt in range(retries):
+                try:
+                    # Rate limiting
+                    time_since_last = time.time() - self._last_command_time
+                    if time_since_last < 1:
+                        await asyncio.sleep(1 - time_since_last)
+
+                    session = await self._updater._get_session()
+                    async with session.post(
+                        f"http://{self._updater.host}/pageEvent",
+                        auth=aiohttp.BasicAuth(
+                            self._updater.username, 
+                            self._updater.password
+                        ),
+                        headers={"Content-type": "application/x-www-form-urlencoded"},
+                        data=f"pageevent={command}&{command}={value}",
+                        timeout=COMMAND_TIMEOUT,
+                    ) as response:
+                        response.raise_for_status()
+                        self._last_command_time = time.time()
+                        return True
+
+                except aiohttp.ClientError as err:
+                    if attempt == retries - 1:
+                        _LOGGER.error(
+                            "Command %s failed after %d retries: %s",
+                            command, retries, str(err)
+                        )
+                        raise
+                    _LOGGER.warning(
+                        "Command %s failed (attempt %d/%d): %s",
+                        command, attempt + 1, retries, str(err)
+                    )
+                    await asyncio.sleep(delay)
+                    delay *= 2
+                except Exception as err:
+                    _LOGGER.error(
+                        "Unexpected error executing command %s: %s",
+                        command, str(err)
+                    )
+                    raise
+
+            return False
+
+    async def send_command(self, command: str, value: Any) -> bool:
+        """Send command through queue."""
+        try:
+            future = asyncio.get_running_loop().create_future()
+            await self._queue.put((command, value, future))
+            return await asyncio.wait_for(future, timeout=30)
+        except asyncio.TimeoutError:
+            _LOGGER.error("Command execution timed out")
+            return False
+        except Exception as err:
+            _LOGGER.error("Command execution failed: %s", err)
+            return False
 
 class EveusUpdater:
     """Class to handle Eveus data updates."""
@@ -55,16 +171,13 @@ class EveusUpdater:
         self._update_task: Optional[asyncio.Task] = None
         self._last_update = 0
         self._update_lock = asyncio.Lock()
-        self._command_lock = asyncio.Lock()
         self._retry_count = 0
         self._failed_requests = 0
         self._consecutive_errors = 0
         self._last_error_time = 0
         self._last_error_type = None
         self._shutdown_event = asyncio.Event()
-        self._last_command_time = 0
-        self._command_queue = asyncio.Queue()
-        self._command_task: Optional[asyncio.Task] = None
+        self._command_manager = CommandManager(self)
 
     @property
     def data(self) -> dict:
@@ -108,85 +221,9 @@ class EveusUpdater:
             self._entities.add(entity)
             _LOGGER.debug("Registered entity: %s", entity.name)
 
-    async def _process_command_queue(self) -> None:
-        """Process commands in the queue."""
-        while not self._shutdown_event.is_set():
-            try:
-                command, value, future = await self._command_queue.get()
-                try:
-                    if not future.done():
-                        result = await asyncio.wait_for(
-                            self._send_command_internal(command, value),
-                            timeout=25
-                        )
-                        future.set_result(result)
-                except asyncio.TimeoutError:
-                    if not future.done():
-                        future.set_exception(asyncio.TimeoutError("Command timed out"))
-                except Exception as err:
-                    if not future.done():
-                        future.set_exception(err)
-                finally:
-                    self._command_queue.task_done()
-            except asyncio.CancelledError:
-                break
-            except Exception as err:
-                _LOGGER.error("Error processing command queue: %s", err)
-                await asyncio.sleep(1)
-
-    async def _send_command_internal(self, command: str, value: Any) -> bool:
-        """Internal command sending with rate limiting and retry."""
-        async with self._command_lock:
-            retries = 3
-            delay = 1  # Initial delay in seconds
-
-            for attempt in range(retries):
-                try:
-                    # Rate limiting
-                    time_since_last = time.time() - self._last_command_time
-                    if time_since_last < 1:  # Minimum 1 second between commands
-                        await asyncio.sleep(1 - time_since_last)
-
-                    session = await self._get_session()
-                    async with session.post(
-                        f"http://{self.host}/pageEvent",
-                        auth=aiohttp.BasicAuth(self.username, self.password),
-                        headers={"Content-type": "application/x-www-form-urlencoded"},
-                        data=f"pageevent={command}&{command}={value}",
-                        timeout=COMMAND_TIMEOUT,
-                    ) as response:
-                        response.raise_for_status()
-                        self._last_command_time = time.time()
-                        return True
-                        
-                except aiohttp.ClientError as err:
-                    if attempt == retries - 1:  # Last attempt
-                        _LOGGER.error("Command %s failed after %d retries: %s", command, retries, str(err))
-                        raise
-                    _LOGGER.warning(
-                        "Command %s failed (attempt %d/%d): %s", 
-                        command, attempt + 1, retries, str(err)
-                    )
-                    await asyncio.sleep(delay)
-                    delay *= 2  # Exponential backoff
-                except Exception as err:
-                    _LOGGER.error("Unexpected error executing command %s: %s", command, str(err))
-                    raise
-
-            return False
-
     async def send_command(self, command: str, value: Any) -> bool:
         """Send command to device."""
-        try:
-            future = self._hass.loop.create_future()
-            await self._command_queue.put((command, value, future))
-            return await asyncio.wait_for(future, timeout=30)
-        except asyncio.TimeoutError:
-            _LOGGER.error("Command execution timed out")
-            return False
-        except Exception as err:
-            _LOGGER.error("Command execution failed: %s", err)
-            return False
+        return await self._command_manager.send_command(command, value)
 
     async def _update(self) -> None:
         """Update the data."""
@@ -272,7 +309,7 @@ class EveusUpdater:
         if self._update_task is None:
             self._shutdown_event.clear()
             self._update_task = asyncio.create_task(self.update_loop())
-            self._command_task = asyncio.create_task(self._process_command_queue())
+            await self._command_manager.start()
             _LOGGER.debug("Started update loop for %s", self.host)
 
     async def update_loop(self) -> None:
@@ -298,13 +335,7 @@ class EveusUpdater:
         """Shutdown the updater."""
         self._shutdown_event.set()
         
-        if self._command_task:
-            self._command_task.cancel()
-            try:
-                await self._command_task
-            except asyncio.CancelledError:
-                pass
-            self._command_task = None
+        await self._command_manager.stop()
 
         if self._update_task:
             self._update_task.cancel()
@@ -313,15 +344,6 @@ class EveusUpdater:
             except asyncio.CancelledError:
                 pass
             self._update_task = None
-
-        # Clear queue
-        while not self._command_queue.empty():
-            try:
-                _, _, future = self._command_queue.get_nowait()
-                if not future.done():
-                    future.set_exception(EveusError("Updater shutting down"))
-            except asyncio.QueueEmpty:
-                break
 
 class BaseEveusEntity(RestoreEntity, Entity):
     """Base implementation for Eveus entities."""
@@ -350,14 +372,7 @@ class BaseEveusEntity(RestoreEntity, Entity):
     @property
     def device_info(self) -> dict[str, Any]:
         """Return device information."""
-        return {
-            "identifiers": {(DOMAIN, self._updater.host)},
-            "name": "Eveus EV Charger",
-            "manufacturer": "Eveus",
-            "model": "Eveus EV Charger",
-            "sw_version": self._updater.data.get('verFWMain', 'Unknown'),
-            "configuration_url": f"http://{self._updater.host}",
-        }
+        return get_device_info(self._updater.host, self._updater.data)
 
     async def async_added_to_hass(self) -> None:
         """Handle entity which will be added."""
@@ -369,11 +384,6 @@ class BaseEveusEntity(RestoreEntity, Entity):
 
     async def _async_restore_state(self, state) -> None:
         """Restore previous state."""
-        pass
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Handle entity removal."""
-        # Note: Don't call updater.async_shutdown() here as other entities might still be using it
         pass
 
 class EveusSensorBase(BaseEveusEntity, SensorEntity):
