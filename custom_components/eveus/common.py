@@ -1,4 +1,4 @@
-"""Common code for Eveus integration."""
+"""Common code for Eveus integration with enhanced network resilience."""
 from __future__ import annotations
 
 import logging
@@ -7,6 +7,7 @@ import time
 import json
 from datetime import datetime
 from typing import Any, Optional
+from collections import deque, Counter
 from contextlib import asynccontextmanager
 
 import aiohttp
@@ -18,8 +19,8 @@ from homeassistant.components.sensor import SensorEntity
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import utcnow
 
-from .const import DOMAIN, SCAN_INTERVAL
-from .utils import get_device_info
+from .const import DOMAIN
+from .utils import get_device_info, get_safe_value
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -30,6 +31,11 @@ UPDATE_TIMEOUT = 20
 MAX_RETRIES = 3
 ERROR_COOLDOWN = 300  # 5 minutes
 SESSION_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=5)
+CHARGING_UPDATE_INTERVAL = 30  # 30 seconds when charging
+IDLE_UPDATE_INTERVAL = 60      # 60 seconds when not charging
+CACHE_VALIDITY = 300  # 5 minutes
+MAX_QUEUE_AGE = 300  # 5 minutes
+MAX_BACKOFF = 300   # 5 minutes
 
 class EveusError(HomeAssistantError):
     """Base class for Eveus errors."""
@@ -39,6 +45,163 @@ class EveusConnectionError(EveusError):
 
 class EveusResponseError(EveusError):
     """Error indicating invalid response."""
+
+class NetworkManager:
+    """Manage network resilience and command queueing."""
+
+    def __init__(self, updater: "EveusUpdater"):
+        """Initialize network manager."""
+        self._updater = updater
+        self._offline_commands = []
+        self._last_successful_state = None
+        self._reconnect_attempts = 0
+        self._quality_metrics = {
+            'latency': deque(maxlen=100),
+            'success_rate': deque(maxlen=100),
+            'error_types': Counter(),
+            'last_errors': deque(maxlen=10)
+        }
+        self._request_timestamps = deque(maxlen=100)
+
+    @property
+    def connection_quality(self) -> dict:
+        """Get connection quality metrics."""
+        if not self._quality_metrics['latency']:
+            return {
+                'latency_avg': 0,
+                'success_rate': 100,
+                'recent_errors': 0,
+                'requests_per_minute': 0
+            }
+
+        now = time.time()
+        recent_requests = sum(1 for t in self._request_timestamps 
+                            if now - t < 60)
+
+        return {
+            'latency_avg': sum(self._quality_metrics['latency']) / len(self._quality_metrics['latency']),
+            'success_rate': (sum(self._quality_metrics['success_rate']) / len(self._quality_metrics['success_rate'])) * 100,
+            'recent_errors': len(self._quality_metrics['last_errors']),
+            'requests_per_minute': recent_requests
+        }
+
+    def cache_state(self, state_data: dict) -> None:
+        """Cache last known good state."""
+        self._last_successful_state = {
+            'timestamp': time.time(),
+            'data': state_data.copy(),
+            'charging_state': state_data.get('state'),
+            'critical_values': {
+                'current': state_data.get('currentSet'),
+                'enabled': state_data.get('evseEnabled')
+            }
+        }
+
+    def get_cached_state(self) -> dict | None:
+        """Get cached state if valid."""
+        if not self._last_successful_state:
+            return None
+            
+        age = time.time() - self._last_successful_state['timestamp']
+        if age > CACHE_VALIDITY:
+            return None
+            
+        return self._last_successful_state['data']
+
+    async def queue_offline_command(self, command: str, value: Any) -> None:
+        """Queue command for later execution when offline."""
+        self._offline_commands.append({
+            'command': command,
+            'value': value,
+            'timestamp': time.time(),
+            'priority': self._get_command_priority(command)
+        })
+        _LOGGER.debug("Queued offline command: %s = %s", command, value)
+
+    def _get_command_priority(self, command: str) -> int:
+        """Get command priority for replay ordering."""
+        priorities = {
+            'evseEnabled': 1,  # Highest priority
+            'currentSet': 2,
+            'oneCharge': 3,
+            'rstEM1': 4
+        }
+        return priorities.get(command, 10)
+
+    async def _replay_commands(self) -> None:
+        """Replay queued commands when back online."""
+        if not self._offline_commands:
+            return
+
+        current_time = time.time()
+        valid_commands = [
+            cmd for cmd in self._offline_commands 
+            if current_time - cmd['timestamp'] < MAX_QUEUE_AGE
+        ]
+        
+        if not valid_commands:
+            self._offline_commands.clear()
+            return
+
+        _LOGGER.info("Replaying %d queued commands", len(valid_commands))
+        valid_commands.sort(key=lambda x: x['priority'])
+        
+        for cmd in valid_commands:
+            try:
+                success = await self._updater.send_command(
+                    cmd['command'], 
+                    cmd['value']
+                )
+                if success:
+                    self._offline_commands.remove(cmd)
+            except Exception as err:
+                _LOGGER.warning(
+                    "Failed to replay command %s: %s",
+                    cmd['command'],
+                    str(err)
+                )
+
+        # Clear old commands
+        self._offline_commands = [
+            cmd for cmd in self._offline_commands
+            if current_time - cmd['timestamp'] < MAX_QUEUE_AGE
+        ]
+
+    async def handle_connection_loss(self) -> None:
+        """Handle connection loss with exponential backoff."""
+        delay = min(30 * (2 ** self._reconnect_attempts), MAX_BACKOFF)
+        self._reconnect_attempts += 1
+        
+        try:
+            # Try to reconnect
+            success = await self._updater._update(force_retry=True)
+            if success:
+                self._reconnect_attempts = 0
+                if self._offline_commands:
+                    await self._replay_commands()
+            else:
+                await asyncio.sleep(delay)
+        except Exception as err:
+            _LOGGER.error("Reconnection attempt failed: %s", str(err))
+            await asyncio.sleep(delay)
+
+    def update_quality_metrics(
+        self, 
+        response_time: float, 
+        success: bool, 
+        error_type: str | None = None
+    ) -> None:
+        """Update connection quality metrics."""
+        self._quality_metrics['latency'].append(response_time)
+        self._quality_metrics['success_rate'].append(1 if success else 0)
+        self._request_timestamps.append(time.time())
+        
+        if not success and error_type:
+            self._quality_metrics['error_types'][error_type] += 1
+            self._quality_metrics['last_errors'].append({
+                'type': error_type,
+                'timestamp': time.time()
+            })
 
 class CommandManager:
     """Manage command execution and retries."""
@@ -106,6 +269,8 @@ class CommandManager:
                         await asyncio.sleep(1 - time_since_last)
 
                     session = await self._updater._get_session()
+                    start_time = time.time()
+                    
                     async with session.post(
                         f"http://{self._updater.host}/pageEvent",
                         auth=aiohttp.BasicAuth(
@@ -118,10 +283,21 @@ class CommandManager:
                     ) as response:
                         response.raise_for_status()
                         self._last_command_time = time.time()
+                        
+                        # Update metrics
+                        self._updater._network_manager.update_quality_metrics(
+                            response_time=time.time() - start_time,
+                            success=True
+                        )
                         return True
 
                 except aiohttp.ClientError as err:
                     if attempt == retries - 1:
+                        self._updater._network_manager.update_quality_metrics(
+                            response_time=time.time() - start_time,
+                            success=False,
+                            error_type="client_error"
+                        )
                         _LOGGER.error(
                             "Command %s failed after %d retries: %s",
                             command, retries, str(err)
@@ -134,6 +310,11 @@ class CommandManager:
                     await asyncio.sleep(delay)
                     delay *= 2
                 except Exception as err:
+                    self._updater._network_manager.update_quality_metrics(
+                        response_time=time.time() - start_time,
+                        success=False,
+                        error_type="unexpected_error"
+                    )
                     _LOGGER.error(
                         "Unexpected error executing command %s: %s",
                         command, str(err)
@@ -178,6 +359,7 @@ class EveusUpdater:
         self._last_error_type = None
         self._shutdown_event = asyncio.Event()
         self._command_manager = CommandManager(self)
+        self._network_manager = NetworkManager(self)
 
     @property
     def data(self) -> dict:
@@ -209,6 +391,11 @@ class EveusUpdater:
         """Return number of consecutive errors."""
         return self._consecutive_errors
 
+    @property
+    def connection_quality(self) -> dict:
+        """Return connection quality metrics."""
+        return self._network_manager.connection_quality
+
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create client session."""
         if not self._session or self._session.closed:
@@ -223,11 +410,16 @@ class EveusUpdater:
 
     async def send_command(self, command: str, value: Any) -> bool:
         """Send command to device."""
-        return await self._command_manager.send_command(command, value)
+        try:
+            return await self._command_manager.send_command(command, value)
+        except ConnectionError:
+            await self._network_manager.queue_offline_command(command, value)
+            return False
 
-    async def _update(self) -> None:
+    async def _update(self, force_retry: bool = False) -> bool:
         """Update the data."""
         try:
+            start_time = time.time()
             session = await self._get_session()
             async with session.post(
                 f"http://{self.host}/main",
@@ -250,6 +442,15 @@ class EveusUpdater:
                         self._failed_requests = 0
                         self._consecutive_errors = 0
 
+                        # Cache successful state
+                        self._network_manager.cache_state(data)
+                        
+                        # Update connection metrics
+                        self._network_manager.update_quality_metrics(
+                            response_time=time.time() - start_time,
+                            success=True
+                        )
+
                         # Update all registered entities
                         for entity in self._entities:
                             if hasattr(entity, 'hass') and entity.hass:
@@ -261,17 +462,44 @@ class EveusUpdater:
                                         getattr(entity, 'name', 'unknown'),
                                         str(err)
                                     )
+                    return True
                     
                 except ValueError as err:
+                    self._network_manager.update_quality_metrics(
+                        response_time=time.time() - start_time,
+                        success=False,
+                        error_type="data_error"
+                    )
                     _LOGGER.error("Invalid JSON received: %s", err)
                     self._handle_error("Data error", err)
                     raise
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+            self._network_manager.update_quality_metrics(
+                response_time=time.time() - start_time,
+                success=False,
+                error_type="connection_error"
+            )
             self._handle_error("Connection error", err)
             
+            # Try to use cached state
+            cached_state = self._network_manager.get_cached_state()
+            if cached_state:
+                self._data = cached_state
+                return True
+                
+            if force_retry:
+                await self._network_manager.handle_connection_loss()
+            return False
+            
         except Exception as err:
+            self._network_manager.update_quality_metrics(
+                response_time=time.time() - start_time,
+                success=False,
+                error_type="unexpected_error"
+            )
             self._handle_error("Unexpected error", err)
+            return False
 
     def _handle_error(self, error_type: str, error: Exception) -> None:
         """Handle update errors."""
@@ -315,21 +543,20 @@ class EveusUpdater:
     async def update_loop(self) -> None:
         """Handle update loop with dynamic intervals."""
         _LOGGER.debug("Starting update loop for %s", self.host)
-    
+        
         while not self._shutdown_event.is_set():
             try:
                 async with self._update_lock:
-                    await self._update()
+                    success = await self._update()
                     
                 if self._retry_count > 0:
                     await asyncio.sleep(RETRY_DELAY)
                 else:
-                    # Check if charging (state 4 is "Charging")
-                    is_charging = self._data.get("state") == 4
-                    # 30 seconds if charging, 60 seconds if not
-                    sleep_time = 30 if is_charging else 60
-                    await asyncio.sleep(sleep_time)
-                        
+                    # Use shorter interval if charging
+                    is_charging = get_safe_value(self._data, "state", int) == 4
+                    interval = CHARGING_UPDATE_INTERVAL if is_charging else IDLE_UPDATE_INTERVAL
+                    await asyncio.sleep(interval)
+                    
             except asyncio.CancelledError:
                 break
             except Exception as err:
@@ -403,26 +630,3 @@ class EveusSensorBase(BaseEveusEntity, SensorEntity):
     def native_value(self) -> Any | None:
         """Return sensor value."""
         return self._attr_native_value
-
-async def send_eveus_command(
-    session: aiohttp.ClientSession,
-    host: str,
-    username: str,
-    password: str,
-    command: str,
-    value: Any
-) -> bool:
-    """Send command to Eveus device."""
-    try:
-        async with session.post(
-            f"http://{host}/pageEvent",
-            auth=aiohttp.BasicAuth(username, password),
-            headers={"Content-type": "application/x-www-form-urlencoded"},
-            data=f"pageevent={command}&{command}={value}",
-            timeout=aiohttp.ClientTimeout(total=30)
-        ) as response:
-            response.raise_for_status()
-            return True
-    except Exception as err:
-        _LOGGER.error("Command %s failed: %s", command, str(err))
-        return False
