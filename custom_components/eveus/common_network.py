@@ -10,7 +10,13 @@ import aiohttp
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import aiohttp_client
 
-from .const import CHARGING_UPDATE_INTERVAL, IDLE_UPDATE_INTERVAL
+from .const import (
+    CHARGING_UPDATE_INTERVAL,
+    IDLE_UPDATE_INTERVAL,
+    RETRY_DELAY,
+    UPDATE_TIMEOUT,
+    ERROR_COOLDOWN
+)
 from .utils import get_safe_value
 from .common_command import CommandManager
 
@@ -67,6 +73,29 @@ class NetworkManager:
                 'timestamp': time.time()
             })
 
+    def cache_state(self, state_data: dict) -> None:
+        """Cache last known good state."""
+        self._last_successful_state = {
+            'timestamp': time.time(),
+            'data': state_data.copy(),
+            'charging_state': state_data.get('state'),
+            'critical_values': {
+                'current': state_data.get('currentSet'),
+                'enabled': state_data.get('evseEnabled')
+            }
+        }
+
+    def get_cached_state(self) -> dict | None:
+        """Get cached state if valid."""
+        if not self._last_successful_state:
+            return None
+            
+        age = time.time() - self._last_successful_state['timestamp']
+        if age > ERROR_COOLDOWN:
+            return None
+            
+        return self._last_successful_state['data']
+
 class EveusUpdater:
     """Main updater class with enhanced network handling."""
 
@@ -111,6 +140,65 @@ class EveusUpdater:
         """Send command to device."""
         return await self._command_manager.send_command(command, value)
 
+    async def _update(self) -> None:
+        """Update device data."""
+        try:
+            start_time = time.time()
+            session = await self._get_session()
+            
+            async with session.post(
+                f"http://{self.host}/main",
+                auth=aiohttp.BasicAuth(self.username, self.password),
+                timeout=UPDATE_TIMEOUT,
+            ) as response:
+                response.raise_for_status()
+                text = await response.text()
+                
+                data = json.loads(text)
+                if not isinstance(data, dict):
+                    raise ValueError(f"Unexpected data type: {type(data)}")
+                
+                if data != self._data:
+                    self._data = data
+                    self._available = True
+                    self._network.cache_state(data)
+                    self._network.update_metrics(
+                        response_time=time.time() - start_time,
+                        success=True
+                    )
+
+                    # Update all registered entities
+                    for entity in self._entities:
+                        if hasattr(entity, 'hass') and entity.hass:
+                            try:
+                                entity.async_write_ha_state()
+                            except Exception as err:
+                                _LOGGER.error(
+                                    "Error updating entity %s: %s",
+                                    getattr(entity, 'name', 'unknown'),
+                                    str(err)
+                                )
+                
+        except Exception as err:
+            self._network.update_metrics(
+                response_time=time.time() - start_time,
+                success=False,
+                error_type=type(err).__name__
+            )
+            # Try to use cached state
+            cached_state = self._network.get_cached_state()
+            if cached_state:
+                self._data = cached_state
+            _LOGGER.error("Update failed: %s", str(err))
+
+    async def async_start_updates(self) -> None:
+        """Start the update loop."""
+        if self._update_task is None:
+            self._shutdown_event.clear()
+            self._update_task = asyncio.create_task(self.update_loop())
+            await self._command_manager.start()
+            _LOGGER.debug("Started update loop for %s", self.host)
+
     async def update_loop(self) -> None:
         """Handle update loop with dynamic intervals."""
         while not self._shutdown_event.is_set():
@@ -124,7 +212,7 @@ class EveusUpdater:
                 break
             except Exception as err:
                 _LOGGER.error("Error in update loop: %s", str(err))
-                await asyncio.sleep(30)  # Retry delay
+                await asyncio.sleep(RETRY_DELAY)
 
     async def async_shutdown(self) -> None:
         """Shutdown the updater."""
