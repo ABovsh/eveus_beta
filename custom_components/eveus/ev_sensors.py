@@ -30,21 +30,17 @@ class EVSocKwhSensor(EveusSensorBase):
         """Calculate and return state of charge in kWh."""
         try:
             initial_soc = get_safe_value(
-                self.hass.states.get("input_number.ev_initial_soc", {}), 
-                "state", 
-                float
+                self.hass.states.get("input_number.ev_initial_soc")
             )
             max_capacity = get_safe_value(
-                self.hass.states.get("input_number.ev_battery_capacity", {}), 
-                "state", 
-                float
+                self.hass.states.get("input_number.ev_battery_capacity")
             )
             correction = get_safe_value(
-                self.hass.states.get("input_number.ev_soc_correction", {}), 
-                "state", 
-                float
+                self.hass.states.get("input_number.ev_soc_correction")
             )
-            energy_charged = get_safe_value(self._updater.data, "IEM1", float, 0)
+            energy_charged = get_safe_value(
+                self._updater.data.get("IEM1", 0)
+            ) or 0
 
             if not validate_required_values(initial_soc, max_capacity, energy_charged, correction):
                 _LOGGER.debug("Missing required values for SOC calculation")
@@ -80,14 +76,10 @@ class EVSocPercentSensor(EveusSensorBase):
         """Return the state of charge percentage."""
         try:
             soc_kwh = get_safe_value(
-                self.hass.states.get("sensor.eveus_ev_charger_soc_energy", {}),
-                "state",
-                float
+                self.hass.states.get("sensor.eveus_ev_charger_soc_energy")
             )
             max_capacity = get_safe_value(
-                self.hass.states.get("input_number.ev_battery_capacity", {}),
-                "state",
-                float
+                self.hass.states.get("input_number.ev_battery_capacity")
             )
             
             if not validate_required_values(soc_kwh, max_capacity) or max_capacity <= 0:
@@ -111,26 +103,20 @@ class TimeToTargetSocSensor(EveusSensorBase):
         """Calculate and return formatted time to target."""
         try:
             current_soc = get_safe_value(
-                self.hass.states.get("sensor.eveus_ev_charger_soc_percent", {}),
-                "state",
-                float
+                self.hass.states.get("sensor.eveus_ev_charger_soc_percent")
             )
             target_soc = get_safe_value(
-                self.hass.states.get("input_number.ev_target_soc", {}),
-                "state",
-                float
+                self.hass.states.get("input_number.ev_target_soc")
             )
             battery_capacity = get_safe_value(
-                self.hass.states.get("input_number.ev_battery_capacity", {}),
-                "state",
-                float
+                self.hass.states.get("input_number.ev_battery_capacity")
             )
             correction = get_safe_value(
-                self.hass.states.get("input_number.ev_soc_correction", {}),
-                "state",
-                float
+                self.hass.states.get("input_number.ev_soc_correction")
             )
-            power_meas = get_safe_value(self._updater.data, "powerMeas", float, 0)
+            power_meas = get_safe_value(
+                self._updater.data.get("powerMeas", 0)
+            ) or 0
 
             return calculate_remaining_time(
                 current_soc,
