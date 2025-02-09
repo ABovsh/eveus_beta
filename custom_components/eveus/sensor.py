@@ -42,6 +42,38 @@ from .counter_sensors import (
 
 _LOGGER = logging.getLogger(__name__)
 
+SENSOR_TYPES = {
+    # Basic measurement sensors
+    "voltage": EveusVoltageSensor,
+    "current": EveusCurrentSensor,
+    "power": EveusPowerSensor,
+    "current_set": EveusCurrentSetSensor,
+    "session_time": EveusSessionTimeSensor,
+    "session_energy": EveusSessionEnergySensor,
+    "total_energy": EveusTotalEnergySensor,
+    
+    # Counter sensors
+    "counter_a_energy": EveusCounterAEnergySensor,
+    "counter_a_cost": EveusCounterACostSensor,
+    "counter_b_energy": EveusCounterBEnergySensor,
+    "counter_b_cost": EveusCounterBCostSensor,
+    
+    # Diagnostic sensors
+    "connection_errors": EveusConnectionErrorsSensor,
+    "state": EveusStateSensor,
+    "substate": EveusSubstateSensor,
+    "ground": EveusGroundSensor,
+    "box_temperature": EveusBoxTemperatureSensor,
+    "plug_temperature": EveusPlugTemperatureSensor,
+    "battery_voltage": EveusBatteryVoltageSensor,
+    "system_time": EveusSystemTimeSensor,
+    
+    # EV-specific sensors
+    "soc_kwh": EVSocKwhSensor,
+    "soc_percent": EVSocPercentSensor,
+    "time_to_target": TimeToTargetSocSensor,
+}
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -52,35 +84,8 @@ async def async_setup_entry(
     updater = data["updater"]
 
     sensors = [
-        # Basic measurement sensors
-        EveusVoltageSensor(updater),
-        EveusCurrentSensor(updater),
-        EveusPowerSensor(updater),
-        EveusCurrentSetSensor(updater),
-        EveusSessionTimeSensor(updater),
-        EveusSessionEnergySensor(updater),
-        EveusTotalEnergySensor(updater),
-              
-        # Counter sensors
-        EveusCounterAEnergySensor(updater),
-        EveusCounterACostSensor(updater),
-        EveusCounterBEnergySensor(updater),
-        EveusCounterBCostSensor(updater),
-        
-        # Diagnostic sensors
-        EveusConnectionErrorsSensor(updater),
-        EveusStateSensor(updater),
-        EveusSubstateSensor(updater),
-        EveusGroundSensor(updater),
-        EveusBoxTemperatureSensor(updater),
-        EveusPlugTemperatureSensor(updater),
-        EveusBatteryVoltageSensor(updater),
-        EveusSystemTimeSensor(updater),
-        
-        # EV-specific sensors
-        EVSocKwhSensor(updater),
-        EVSocPercentSensor(updater),
-        TimeToTargetSocSensor(updater),
+        sensor_class(updater) 
+        for sensor_class in SENSOR_TYPES.values()
     ]
 
     async_add_entities(sensors)
