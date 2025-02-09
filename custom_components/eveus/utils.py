@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Callable, TypeVar, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, State
 
 from .const import DOMAIN
 
@@ -15,41 +15,25 @@ _LOGGER = logging.getLogger(__name__)
 T = TypeVar('T')
 
 def get_safe_value(
-    data: dict,
-    key: str,
+    state: State | None,
+    key: str | None = None,
     converter: Callable[[Any], T] = float,
     default: Optional[T] = None
 ) -> T | None:
-    """Safely get and convert value from dictionary.
-    
-    Args:
-        data: Dictionary containing the data
-        key: Key to retrieve
-        converter: Function to convert the value
-        default: Default value if conversion fails
-        
-    Returns:
-        Converted value or None if conversion fails
-    """
+    """Safely get and convert value from state object."""
     try:
-        value = data.get(key)
-        if value is None:
+        if state is None:
+            return default
+        value = state.state if key is None else getattr(state, key, None)
+        if value in (None, 'unknown', 'unavailable'):
             return default
         return converter(value)
-    except (TypeError, ValueError) as err:
-        _LOGGER.error("Error converting %s: %s", key, err)
+    except (TypeError, ValueError, AttributeError) as err:
+        _LOGGER.error("Error converting value: %s", err)
         return default
 
 def get_device_info(host: str, data: dict) -> dict[str, Any]:
-    """Get standardized device information.
-    
-    Args:
-        host: Device hostname or IP
-        data: Device data dictionary
-        
-    Returns:
-        Device information dictionary
-    """
+    """Get standardized device information."""
     return {
         "identifiers": {(DOMAIN, host)},
         "name": "Eveus EV Charger",
@@ -60,26 +44,11 @@ def get_device_info(host: str, data: dict) -> dict[str, Any]:
     }
 
 def validate_required_values(*values: Any) -> bool:
-    """Validate all required values are present and not None.
-    
-    Args:
-        values: Values to validate
-        
-    Returns:
-        True if all values are not None
-    """
-    return not any(v is None for v in values)
+    """Validate all required values are present and not None."""
+    return not any(v in (None, 'unknown', 'unavailable') for v in values)
 
 def is_dst(timezone_str: str, dt: datetime) -> bool:
-    """Check if the given datetime is in DST for the timezone.
-    
-    Args:
-        timezone_str: Timezone string
-        dt: Datetime to check
-        
-    Returns:
-        True if datetime is in DST
-    """
+    """Check if the given datetime is in DST for the timezone."""
     try:
         tz = pytz.timezone(timezone_str)
         return dt.astimezone(tz).dst() != timedelta(0)
@@ -88,14 +57,7 @@ def is_dst(timezone_str: str, dt: datetime) -> bool:
         return False
 
 def format_duration(seconds: int) -> str:
-    """Format duration in seconds to human readable string.
-    
-    Args:
-        seconds: Number of seconds
-        
-    Returns:
-        Formatted duration string
-    """
+    """Format duration in seconds to human readable string."""
     try:
         days = seconds // 86400
         hours = (seconds % 86400) // 3600
@@ -117,18 +79,7 @@ def calculate_remaining_time(
     battery_capacity: float,
     correction: float
 ) -> str:
-    """Calculate remaining time to target SOC.
-    
-    Args:
-        current_soc: Current state of charge percentage
-        target_soc: Target state of charge percentage
-        power_meas: Current power measurement in watts
-        battery_capacity: Battery capacity in kWh
-        correction: Efficiency correction percentage
-        
-    Returns:
-        Formatted time remaining string
-    """
+    """Calculate remaining time to target SOC."""
     try:
         if not validate_required_values(
             current_soc,
