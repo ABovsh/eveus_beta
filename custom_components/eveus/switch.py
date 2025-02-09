@@ -28,13 +28,16 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
         """Initialize the switch."""
         super().__init__(updater)
         self._command_lock = asyncio.Lock()
+        self._pending_state = None
         self._initial_update = False
 
     @property
     def is_on(self) -> bool:
         """Return true if the switch is on."""
-        value = get_safe_value(self._updater.data, self._state_key, int, 0)
-        return bool(value)
+        # Use pending state if available, otherwise check device state
+        if self._pending_state is not None:
+            return self._pending_state
+        return bool(get_safe_value(self._updater.data, self._state_key, int, 0))
 
     @property
     def available(self) -> bool:
@@ -44,16 +47,29 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
     async def _async_send_command(self, command_value: int) -> None:
         """Send command to device."""
         async with self._command_lock:
+            # Set pending state before sending command
+            self._pending_state = bool(command_value)
+            self.async_write_ha_state()
+            
+            # Send command
             await self._updater.send_command(self._command, command_value)
 
     async def _async_restore_state(self, state: State) -> None:
         """Restore previous state."""
-        pass
+        try:
+            if state.state == "on":
+                await self._async_send_command(1)
+            else:
+                await self._async_send_command(0)
+        except Exception as err:
+            _LOGGER.error("Error restoring state for %s: %s", self.name, err)
 
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
         self._initial_update = True
+        # Clear pending state and use actual device state
+        self._pending_state = None
         self.async_write_ha_state()
 
 class EveusStopChargingSwitch(BaseSwitchEntity):
@@ -112,13 +128,6 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
         await self._updater.async_start_updates()
         self._safe_mode = False
 
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        """Update state from live data."""
-        super()._handle_coordinator_update()
-        if self._initial_update and self._pending_reset:
-            self._pending_reset = False
-
     @property
     def is_on(self) -> bool:
         """Return True if counter needs reset."""
@@ -133,6 +142,7 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
         if self._safe_mode:
             return
         self._pending_reset = True
+        self._pending_state = True
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
@@ -142,11 +152,13 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
 
         if await self._updater.send_command(self._command, 0):
             self._pending_reset = False
+            self._pending_state = False
             self.async_write_ha_state()
 
     async def _async_restore_state(self, state: State) -> None:
         """Restore state without immediate action."""
         self._pending_reset = state.state == "on"
+        self._pending_state = self._pending_reset
         self.async_write_ha_state()
 
 async def async_setup_entry(
