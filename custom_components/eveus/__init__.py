@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-from functools import partial
 import asyncio
 from typing import Any
 
@@ -106,15 +105,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except Exception as err:
             raise ConfigEntryNotReady(f"Failed to initialize updater: {err}")
 
-        # Set up platforms using background tasks
-        setup_tasks = [
-            hass.async_create_task(
-                hass.config_entries.async_forward_entry_setup(entry, platform)
-            )
-            for platform in PLATFORMS
-        ]
-        
-        await asyncio.gather(*setup_tasks)
+        # Set up platforms
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
         
         # Register update listener
         entry.async_on_unload(entry.add_update_listener(update_listener))
