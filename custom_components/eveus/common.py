@@ -313,8 +313,9 @@ class EveusUpdater:
             _LOGGER.debug("Started update loop for %s", self.host)
 
     async def update_loop(self) -> None:
-        """Handle update loop."""
+        """Handle update loop with dynamic intervals."""
         _LOGGER.debug("Starting update loop for %s", self.host)
+    
         while not self._shutdown_event.is_set():
             try:
                 async with self._update_lock:
@@ -323,8 +324,12 @@ class EveusUpdater:
                 if self._retry_count > 0:
                     await asyncio.sleep(RETRY_DELAY)
                 else:
-                    await asyncio.sleep(SCAN_INTERVAL.total_seconds())
-                    
+                    # Check if charging (state 4 is "Charging")
+                    is_charging = self._data.get("state") == 4
+                    # 30 seconds if charging, 60 seconds if not
+                    sleep_time = 30 if is_charging else 60
+                    await asyncio.sleep(sleep_time)
+                        
             except asyncio.CancelledError:
                 break
             except Exception as err:
