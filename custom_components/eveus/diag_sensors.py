@@ -26,50 +26,47 @@ class EveusDiagnosticSensor(BaseEveusEntity, SensorEntity):
     """Base diagnostic sensor."""
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:information"
-    DATA_KEY: str | None = None
 
-    @property
-    def native_value(self) -> Any | None:
-        """Return sensor value."""
-        if self.DATA_KEY:
-            return get_safe_value(self._updater.data, self.DATA_KEY)
-        return None
+class EveusConnectionQualitySensor(EveusDiagnosticSensor):
+    """Connection quality metrics sensor."""
 
-class EveusConnectionErrorsSensor(EveusDiagnosticSensor):
-    """Failed requests counter sensor."""
-
-    ENTITY_NAME = "Connection Errors"
+    ENTITY_NAME = "Connection Quality"
     _attr_icon = "mdi:connection"
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING 
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     @property
-    def native_value(self) -> int:
-        """Return number of failed requests."""
-        return self._updater.failed_requests
+    def native_value(self) -> float:
+        """Return connection quality percentage."""
+        return self._updater._network.connection_quality['success_rate']
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional sensor state attributes."""
+        metrics = self._updater._network.connection_quality
         return {
-            "last_error_time": time.strftime(
-                '%Y-%m-%d %H:%M:%S', 
-                time.localtime(self._updater.last_error_time)
-            ) if self._updater.last_error_time else None,
-            "last_error_type": self._updater.last_error_type,
-            "consecutive_errors": self._updater.consecutive_errors,
+            "latency_avg": f"{metrics['latency_avg']:.2f}s",
+            "recent_errors": metrics['recent_errors'],
+            "requests_per_minute": metrics['requests_per_minute'],
+            "error_types": dict(self._updater._network._quality_metrics['error_types']),
+            "last_errors": [
+                {
+                    "type": err["type"],
+                    "time": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(err["timestamp"]))
+                }
+                for err in self._updater._network._quality_metrics['last_errors']
+            ]
         }
 
 class EveusStateSensor(EveusDiagnosticSensor):
     """Charging state sensor."""
     
     ENTITY_NAME = "State"
-    DATA_KEY = "state"
     _attr_icon = "mdi:state-machine"
 
     @property
     def native_value(self) -> str:
         """Return charging state."""
-        state_value = get_safe_value(self._updater.data, self.DATA_KEY, int)
+        state_value = get_safe_value(self._updater.data, "state", int)
         if state_value is not None:
             return CHARGING_STATES.get(state_value, "Unknown")
         return None
@@ -97,13 +94,12 @@ class EveusGroundSensor(EveusDiagnosticSensor):
     """Ground connection sensor."""
     
     ENTITY_NAME = "Ground"
-    DATA_KEY = "ground"
     _attr_icon = "mdi:electric-switch"
 
     @property
     def native_value(self) -> str:
         """Return ground status."""
-        value = get_safe_value(self._updater.data, self.DATA_KEY, int)
+        value = get_safe_value(self._updater.data, "ground", int)
         if value is not None:
             return "Connected" if value == 1 else "Not Connected"
         return None
@@ -123,12 +119,22 @@ class EveusBoxTemperatureSensor(EveusTemperatureSensorBase):
     DATA_KEY = "temperature1"
     _attr_icon = "mdi:thermometer"
 
+    @property
+    def native_value(self) -> float | None:
+        """Return box temperature."""
+        return get_safe_value(self._updater.data, self.DATA_KEY)
+
 class EveusPlugTemperatureSensor(EveusTemperatureSensorBase):
     """Plug temperature sensor."""
     
     ENTITY_NAME = "Plug Temperature"
     DATA_KEY = "temperature2"
     _attr_icon = "mdi:thermometer-high"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return plug temperature."""
+        return get_safe_value(self._updater.data, self.DATA_KEY)
 
 class EveusBatteryVoltageSensor(EveusDiagnosticSensor):
     """Battery voltage sensor."""
@@ -140,6 +146,11 @@ class EveusBatteryVoltageSensor(EveusDiagnosticSensor):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:battery"
     _attr_suggested_display_precision = 2
+
+    @property
+    def native_value(self) -> float | None:
+        """Return battery voltage."""
+        return get_safe_value(self._updater.data, self.DATA_KEY)
 
 class EveusSystemTimeSensor(EveusDiagnosticSensor):
     """System time sensor."""
