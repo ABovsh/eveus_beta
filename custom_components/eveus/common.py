@@ -630,3 +630,26 @@ class EveusSensorBase(BaseEveusEntity, SensorEntity):
     def native_value(self) -> Any | None:
         """Return sensor value."""
         return self._attr_native_value
+
+async def send_eveus_command(
+    session: aiohttp.ClientSession,
+    host: str,
+    username: str,
+    password: str,
+    command: str,
+    value: Any
+) -> bool:
+    """Legacy command function maintained for compatibility."""
+    try:
+        async with session.post(
+            f"http://{host}/pageEvent",
+            auth=aiohttp.BasicAuth(username, password),
+            headers={"Content-type": "application/x-www-form-urlencoded"},
+            data=f"pageevent={command}&{command}={value}",
+            timeout=aiohttp.ClientTimeout(total=30)
+        ) as response:
+            response.raise_for_status()
+            return True
+    except Exception as err:
+        _LOGGER.error("Command %s failed: %s", command, str(err))
+        return False
