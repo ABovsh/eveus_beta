@@ -29,100 +29,68 @@ class EveusDiagnosticSensor(BaseEveusEntity, SensorEntity):
     _attr_icon = "mdi:information"
 
 class EveusConnectionQualitySensor(EveusDiagnosticSensor):
-    """Connection quality metrics sensor with enhanced monitoring."""
+    """Connection quality metrics sensor."""
 
     ENTITY_NAME = "Connection Quality"
     _attr_icon = "mdi:connection"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 0
-    MAX_ERROR_HISTORY = 50  # Limit error history storage
 
     def __init__(self, updater) -> None:
-        """Initialize with metric caching."""
+        """Initialize with cached values."""
         super().__init__(updater)
-        self._cached_metrics = None
+        self._cached_value = None
+        self._cached_attributes = {}
         self._last_update = 0
-        self._update_interval = 30  # Update metrics every 30 seconds
+        self._update_interval = 30  # 30 seconds cache
+
+    def _should_update(self) -> bool:
+        """Check if we should update cached values."""
+        return (time.time() - self._last_update) >= self._update_interval
+
+    def _update_cached_values(self) -> None:
+        """Update cached values."""
+        try:
+            metrics = self._updater._network.connection_quality
+            self._cached_value = round(max(0, min(100, metrics['success_rate'])))
+            
+            # Basic attributes that don't require heavy processing
+            self._cached_attributes = {
+                "latency_avg": f"{max(0, metrics['latency_avg']):.2f}s",
+                "recent_errors": metrics['recent_errors'],
+                "requests_per_minute": max(0, metrics['requests_per_minute'])
+            }
+            
+            # Only store last 10 errors to reduce memory and processing
+            last_errors = list(self._updater._network._quality_metrics['last_errors'])[-10:]
+            self._cached_attributes["last_errors"] = [
+                {
+                    "type": err["type"],
+                    "time": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(err["timestamp"]))
+                }
+                for err in last_errors
+            ]
+            
+            self._last_update = time.time()
+            
+        except Exception as err:
+            _LOGGER.error("Error updating connection metrics: %s", err)
+            if self._cached_value is None:
+                self._cached_value = 0
 
     @property
     def native_value(self) -> float:
-        """Return bounded and validated connection quality percentage."""
-        try:
-            success_rate = self._updater._network.connection_quality['success_rate']
-            # Ensure value is within valid range
-            return round(max(0, min(100, success_rate)))
-        except Exception as err:
-            _LOGGER.error("Error calculating connection quality: %s", err)
-            return 0
-
-    def _get_error_summary(self) -> dict:
-        """Get summarized error information."""
-        error_types = self._updater._network._quality_metrics['error_types']
-        total_errors = sum(error_types.values())
-        
-        return {
-            "total_errors": total_errors,
-            "error_distribution": {
-                error_type: {
-                    "count": count,
-                    "percentage": round((count / total_errors * 100), 1) if total_errors else 0
-                }
-                for error_type, count in error_types.most_common(5)  # Show top 5 errors
-            } if total_errors else {}
-        }
+        """Return connection quality percentage."""
+        if self._should_update():
+            self._update_cached_values()
+        return self._cached_value
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return enhanced metrics with caching and validation."""
-        current_time = time.time()
-        
-        # Use cached metrics if within update interval
-        if self._cached_metrics and (current_time - self._last_update) < self._update_interval:
-            return self._cached_metrics
-
-        try:
-            metrics = self._updater._network.connection_quality
-            
-            # Validate and bound metrics
-            latency = max(0, metrics['latency_avg'])
-            requests = max(0, metrics['requests_per_minute'])
-            
-            # Get error summary
-            error_summary = self._get_error_summary()
-            
-            # Format last errors with precise timestamps
-            last_errors = [
-                {
-                    "type": err["type"],
-                    "time": datetime.fromtimestamp(err["timestamp"]).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3],
-                    "age": f"{round(current_time - err['timestamp'], 1)}s ago"
-                }
-                for err in list(self._updater._network._quality_metrics['last_errors'])[-self.MAX_ERROR_HISTORY:]
-            ]
-
-            # Create new metrics dictionary
-            self._cached_metrics = {
-                "latency_avg": f"{latency:.2f}s",
-                "recent_errors": metrics['recent_errors'],
-                "requests_per_minute": requests,
-                "error_summary": error_summary,
-                "last_errors": last_errors,
-                "update_age": "0s"
-            }
-            self._last_update = current_time
-            
-            return self._cached_metrics
-
-        except Exception as err:
-            _LOGGER.error("Error processing connection metrics: %s", err)
-            # Return last known good metrics if available
-            if self._cached_metrics:
-                self._cached_metrics["update_age"] = f"{round(current_time - self._last_update, 1)}s"
-                return self._cached_metrics
-            return {
-                "error": "Failed to retrieve metrics",
-                "last_update_attempt": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            }
+        """Return cached attributes."""
+        if self._should_update():
+            self._update_cached_values()
+        return self._cached_attributes
 
 class EveusStateSensor(EveusDiagnosticSensor):
     """Charging state sensor."""
