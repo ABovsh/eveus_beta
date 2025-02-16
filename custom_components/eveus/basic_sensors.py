@@ -28,8 +28,7 @@ class EveusVoltageSensor(EveusSensorBase):
     _attr_device_class = SensorDeviceClass.VOLTAGE
     _attr_native_unit_of_measurement = UnitOfElectricPotential.VOLT
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:voltage-ac"
-    _attr_suggested_display_precision = 1
+    _attr_suggested_display_precision = 0
 
     @property
     def native_value(self) -> float | None:
@@ -38,7 +37,7 @@ class EveusVoltageSensor(EveusSensorBase):
             value = get_safe_value(self._updater.data, "voltMeas1")
             if value is None:
                 return None
-            return round(value, 1)
+            return round(value, 0)
         except Exception as err:
             _LOGGER.error("Error getting voltage: %s", err)
             return None
