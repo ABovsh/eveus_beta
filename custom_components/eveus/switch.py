@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import EntityCategory
 
-from .const import DOMAIN
+from .const import DOMAIN, RATE_COMMANDS
 from .common import BaseEveusEntity
 from .utils import get_safe_value
 
@@ -161,6 +161,38 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
         self._pending_state = self._pending_reset
         self.async_write_ha_state()
 
+class EveusRate2EnableSwitch(BaseSwitchEntity):
+    """Switch to enable/disable Rate 2."""
+
+    ENTITY_NAME = "Rate 2 Enable"
+    _attr_icon = "mdi:toggle-switch"
+    _command = RATE_COMMANDS["RATE2_ENABLE"]
+    _state_key = "tarifAEnable"
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Enable Rate 2."""
+        await self._async_send_command(1)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Disable Rate 2."""
+        await self._async_send_command(0)
+
+class EveusRate3EnableSwitch(BaseSwitchEntity):
+    """Switch to enable/disable Rate 3."""
+
+    ENTITY_NAME = "Rate 3 Enable"
+    _attr_icon = "mdi:toggle-switch"
+    _command = RATE_COMMANDS["RATE3_ENABLE"]
+    _state_key = "tarifBEnable"
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Enable Rate 3."""
+        await self._async_send_command(1)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Disable Rate 3."""
+        await self._async_send_command(0)
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -174,6 +206,8 @@ async def async_setup_entry(
         EveusStopChargingSwitch(updater),
         EveusOneChargeSwitch(updater),
         EveusResetCounterASwitch(updater),
+        EveusRate2EnableSwitch(updater),
+        EveusRate3EnableSwitch(updater),
     ]
 
     if "entities" not in data:
