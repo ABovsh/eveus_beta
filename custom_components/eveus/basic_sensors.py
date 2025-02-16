@@ -114,27 +114,28 @@ class EveusSessionTimeSensor(EveusSensorBase):
 
     ENTITY_NAME = "Session Time"
     _attr_icon = "mdi:timer"
-    _attr_device_class = SensorDeviceClass.DURATION
-    _attr_native_unit_of_measurement = UnitOfTime.SECONDS
 
     @property
-    def native_value(self) -> int | None:
-        """Return session time in seconds."""
+    def native_value(self) -> str | None:
+        """Return formatted session time."""
         try:
-            return get_safe_value(self._updater.data, "sessionTime", int)
+            seconds = get_safe_value(self._updater.data, "sessionTime", int)
+            if seconds is None:
+                return None
+            return format_duration(seconds)
         except Exception as err:
             _LOGGER.error("Error getting session time: %s", err)
             return None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return formatted duration."""
+        """Return additional attributes."""
         try:
             seconds = get_safe_value(self._updater.data, "sessionTime", int)
             if seconds is not None:
-                return {"formatted_duration": format_duration(seconds)}
+                return {"duration_seconds": seconds}
         except Exception as err:
-            _LOGGER.error("Error formatting duration: %s", err)
+            _LOGGER.error("Error getting session time attributes: %s", err)
         return {}
 
 class EveusSessionEnergySensor(EveusSensorBase):
