@@ -1,4 +1,3 @@
-# File: rate_sensors.py
 """Support for Eveus rate sensors."""
 from __future__ import annotations
 
@@ -6,13 +5,14 @@ import logging
 from typing import Any
 
 from homeassistant.components.sensor import (
-    SensorDeviceClass,
     SensorEntity,
     SensorStateClass,
 )
 from homeassistant.const import UnitOfEnergy
+from homeassistant.helpers.entity import EntityCategory
 
 from .common import EveusSensorBase
+from .const import RATE_STATES
 from .utils import get_safe_value
 
 _LOGGER = logging.getLogger(__name__)
@@ -20,6 +20,7 @@ _LOGGER = logging.getLogger(__name__)
 class EveusRateSensorBase(EveusSensorBase):
     """Base class for rate sensors."""
     
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_native_unit_of_measurement = "UAH/kWh"
     _attr_icon = "mdi:currency-uah"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -42,7 +43,7 @@ class EveusPrimaryRateCostSensor(EveusRateSensorBase):
             value = get_safe_value(self._updater.data, "tarif", float)
             if value is None:
                 return None
-            return value / 100
+            return round(value / 100, 2)
         except Exception as err:
             _LOGGER.error("Error getting primary rate cost: %s", err)
             return None
@@ -69,10 +70,21 @@ class EveusActiveRateCostSensor(EveusRateSensorBase):
             else:
                 return None
 
-            return value / 100 if value is not None else None
+            return round(value / 100, 2) if value is not None else None
         except Exception as err:
             _LOGGER.error("Error getting active rate cost: %s", err)
             return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return rate name."""
+        try:
+            active_rate = get_safe_value(self._updater.data, "activeTarif", int)
+            if active_rate is not None:
+                return {"rate_name": RATE_STATES.get(active_rate, "Unknown")}
+        except Exception:
+            pass
+        return {}
 
 class EveusRate2CostSensor(EveusRateSensorBase):
     """Rate 2 cost sensor."""
@@ -86,7 +98,7 @@ class EveusRate2CostSensor(EveusRateSensorBase):
             value = get_safe_value(self._updater.data, "tarifAValue", float)
             if value is None:
                 return None
-            return value / 100
+            return round(value / 100, 2)
         except Exception as err:
             _LOGGER.error("Error getting rate 2 cost: %s", err)
             return None
@@ -103,7 +115,7 @@ class EveusRate3CostSensor(EveusRateSensorBase):
             value = get_safe_value(self._updater.data, "tarifBValue", float)
             if value is None:
                 return None
-            return value / 100
+            return round(value / 100, 2)
         except Exception as err:
             _LOGGER.error("Error getting rate 3 cost: %s", err)
             return None
@@ -113,6 +125,7 @@ class EveusRate2StatusSensor(EveusSensorBase):
 
     ENTITY_NAME = "Rate 2 Status"
     _attr_icon = "mdi:clock-check"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     @property
     def native_value(self) -> str | None:
@@ -131,6 +144,7 @@ class EveusRate3StatusSensor(EveusSensorBase):
 
     ENTITY_NAME = "Rate 3 Status"
     _attr_icon = "mdi:clock-check"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     @property
     def native_value(self) -> str | None:
