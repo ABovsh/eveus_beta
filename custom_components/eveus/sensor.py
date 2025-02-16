@@ -39,6 +39,14 @@ from .counter_sensors import (
     EveusCounterBEnergySensor,
     EveusCounterBCostSensor,
 )
+from .rate_sensors import (
+    EveusPrimaryRateCostSensor,
+    EveusActiveRateCostSensor,
+    EveusRate2CostSensor,
+    EveusRate3CostSensor,
+    EveusRate2StatusSensor,
+    EveusRate3StatusSensor,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
