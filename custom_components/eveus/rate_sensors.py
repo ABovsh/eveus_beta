@@ -18,7 +18,7 @@ _LOGGER = logging.getLogger(__name__)
 class EveusRateSensorBase(EveusSensorBase):
     """Base class for rate sensors."""
     
-    _attr_native_unit_of_measurement = "UAH/kWh"
+    _attr_native_unit_of_measurement = "₴/kWh"
     _attr_icon = "mdi:currency-uah"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 2
@@ -27,6 +27,21 @@ class EveusRateSensorBase(EveusSensorBase):
         """Initialize the sensor."""
         super().__init__(updater)
         self._attr_has_entity_name = True
+
+class EveusRateTimeRangeBase(EveusSensorBase):
+    """Base class for rate time range sensors."""
+    
+    _attr_icon = "mdi:clock-outline"
+
+    def _format_time(self, minutes: int) -> str:
+        """Convert minutes since midnight to HH:mm format."""
+        try:
+            hours = minutes // 60
+            mins = minutes % 60
+            return f"{hours:02d}:{mins:02d}"
+        except Exception as err:
+            _LOGGER.error("Error formatting time: %s", err)
+            return "00:00"
 
 class EveusPrimaryRateCostSensor(EveusRateSensorBase):
     """Primary rate cost sensor."""
@@ -151,4 +166,81 @@ class EveusRate3StatusSensor(EveusSensorBase):
             return "Enabled" if enabled == 1 else "Disabled"
         except Exception as err:
             _LOGGER.error("Error getting rate 3 status: %s", err)
+            return None
+
+class EveusPrimaryRateTimeRangeSensor(EveusRateTimeRangeBase):
+    """Primary rate time range sensor."""
+
+    ENTITY_NAME = "Primary Rate Timerange"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return primary rate time range."""
+        try:
+            rate2_enabled = get_safe_value(self._updater.data, "tarifAEnable", int)
+            rate3_enabled = get_safe_value(self._updater.data, "tarifBEnable", int)
+
+            if rate2_enabled:
+                rate2_start = get_safe_value(self._updater.data, "tarifAStart", int)
+                rate2_stop = get_safe_value(self._updater.data, "tarifAStop", int)
+                
+                # If rate 2 is enabled, primary rate runs from rate2_stop to rate2_start
+                return f"{self._format_time(rate2_stop)} - {self._format_time(rate2_start)}"
+            
+            if rate3_enabled:
+                rate3_start = get_safe_value(self._updater.data, "tarifBStart", int)
+                rate3_stop = get_safe_value(self._updater.data, "tarifBStop", int)
+                
+                # If only rate 3 is enabled, primary rate runs from rate3_stop to rate3_start
+                return f"{self._format_time(rate3_stop)} - {self._format_time(rate3_start)}"
+            
+            # If no other rates enabled, primary rate runs 24/7
+            return "00:00 - 23:59"
+            
+        except Exception as err:
+            _LOGGER.error("Error getting primary rate timerange: %s", err)
+            return None
+
+class EveusRate2TimeRangeSensor(EveusRateTimeRangeBase):
+    """Rate 2 time range sensor."""
+
+    ENTITY_NAME = "Rate 2 Timerange"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return rate 2 time range."""
+        try:
+            rate2_enabled = get_safe_value(self._updater.data, "tarifAEnable", int)
+            if not rate2_enabled:
+                return "Disabled"
+
+            start = get_safe_value(self._updater.data, "tarifAStart", int)
+            stop = get_safe_value(self._updater.data, "tarifAStop", int)
+            
+            return f"{self._format_time(start)} - {self._format_time(stop)}"
+            
+        except Exception as err:
+            _LOGGER.error("Error getting rate 2 timerange: %s", err)
+            return None
+
+class EveusRate3TimeRangeSensor(EveusRateTimeRangeBase):
+    """Rate 3 time range sensor."""
+
+    ENTITY_NAME = "Rate 3 Timerange"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return rate 3 time range."""
+        try:
+            rate3_enabled = get_safe_value(self._updater.data, "tarifBEnable", int)
+            if not rate3_enabled:
+                return "Disabled"
+
+            start = get_safe_value(self._updater.data, "tarifBStart", int)
+            stop = get_safe_value(self._updater.data, "tarifBStop", int)
+            
+            return f"{self._format_time(start)} - {self._format_time(stop)}"
+            
+        except Exception as err:
+            _LOGGER.error("Error getting rate 3 timerange: %s", err)
             return None
