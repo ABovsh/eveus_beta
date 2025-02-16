@@ -8,8 +8,6 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorStateClass,
 )
-from homeassistant.const import UnitOfEnergy
-from homeassistant.helpers.entity import EntityCategory
 
 from .common import EveusSensorBase
 from .const import RATE_STATES
@@ -20,7 +18,6 @@ _LOGGER = logging.getLogger(__name__)
 class EveusRateSensorBase(EveusSensorBase):
     """Base class for rate sensors."""
     
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_native_unit_of_measurement = "UAH/kWh"
     _attr_icon = "mdi:currency-uah"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -125,7 +122,6 @@ class EveusRate2StatusSensor(EveusSensorBase):
 
     ENTITY_NAME = "Rate 2 Status"
     _attr_icon = "mdi:clock-check"
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     @property
     def native_value(self) -> str | None:
@@ -144,7 +140,6 @@ class EveusRate3StatusSensor(EveusSensorBase):
 
     ENTITY_NAME = "Rate 3 Status"
     _attr_icon = "mdi:clock-check"
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     @property
     def native_value(self) -> str | None:
