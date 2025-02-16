@@ -81,6 +81,14 @@ async def async_setup_entry(
         EVSocKwhSensor(updater),
         EVSocPercentSensor(updater),
         TimeToTargetSocSensor(updater),
+        
+        # Rate sensors
+        EveusPrimaryRateCostSensor(updater),
+        EveusActiveRateCostSensor(updater),
+        EveusRate2CostSensor(updater),
+        EveusRate3CostSensor(updater),
+        EveusRate2StatusSensor(updater),
+        EveusRate3StatusSensor(updater),
     ]
 
     async_add_entities(sensors)
