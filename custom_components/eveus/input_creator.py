@@ -18,7 +18,6 @@ from homeassistant.components.input_number import (
     SERVICE_SET_VALUE,
     ATTR_VALUE,
 )
-from homeassistant.components.persistent_notification import async_create as async_create_notification
 from homeassistant.helpers.storage import Store
 from homeassistant.util import slugify
 
@@ -84,17 +83,25 @@ async def check_and_create_inputs(hass: HomeAssistant) -> List[str]:
         _LOGGER.debug("All required input entities exist")
         return []
     
-    # Create a notification to inform the user
-    notification_message = (
-        f"Eveus integration is creating {len(missing_entities)} required input entities: "
-        f"{', '.join(['ev_' + entity_id for entity_id in missing_entities])}"
-    )
-    await async_create_notification(
-        hass,
-        notification_message,
-        title="Eveus Integration Setup",
-        notification_id="eveus_input_creation",
-    )
+    # Create a notification using service call instead of async_create_notification
+    if missing_entities:
+        notification_message = (
+            f"Eveus integration is creating {len(missing_entities)} required input entities: "
+            f"{', '.join(missing_entities)}"
+        )
+        try:
+            await hass.services.async_call(
+                "persistent_notification",
+                "create",
+                {
+                    "message": notification_message,
+                    "title": "Eveus Integration Setup",
+                    "notification_id": "eveus_input_creation"
+                },
+                blocking=False
+            )
+        except Exception as err:
+            _LOGGER.error("Failed to create notification: %s", err)
     
     # Try all available methods in order of preference
     created_entities = []
@@ -126,15 +133,23 @@ async def check_and_create_inputs(hass: HomeAssistant) -> List[str]:
     # Show success notification if entities were created
     if created_entities:
         success_message = (
-            f"Eveus integration created {len(created_entities)} required input entities. "
+            f"Eveus integration created {len(created_entities)} required input entities: "
+            f"{', '.join(created_entities)}. "
             f"Please set appropriate values for your EV in Settings > Devices & Services > Helpers."
         )
-        await async_create_notification(
-            hass,
-            success_message,
-            title="Eveus Integration Setup Complete",
-            notification_id="eveus_input_creation_success",
-        )
+        try:
+            await hass.services.async_call(
+                "persistent_notification",
+                "create",
+                {
+                    "message": success_message,
+                    "title": "Eveus Integration Setup Complete",
+                    "notification_id": "eveus_input_creation_success"
+                },
+                blocking=False
+            )
+        except Exception as err:
+            _LOGGER.error("Failed to create success notification: %s", err)
     
     return created_entities
 
@@ -296,15 +311,23 @@ async def create_via_yaml(hass: HomeAssistant, missing_entities: List[str]) -> L
             
             # Notify user to restart Home Assistant
             restart_message = (
-                f"Eveus integration has added {len(created)} input entities to your configuration.yaml. "
+                f"Eveus integration has added {len(created)} input entities to your configuration.yaml: "
+                f"{', '.join(created)}. "
                 f"Please restart Home Assistant to apply these changes."
             )
-            await async_create_notification(
-                hass,
-                restart_message,
-                title="Home Assistant Restart Required",
-                notification_id="eveus_restart_required",
-            )
+            try:
+                await hass.services.async_call(
+                    "persistent_notification",
+                    "create",
+                    {
+                        "message": restart_message,
+                        "title": "Home Assistant Restart Required",
+                        "notification_id": "eveus_restart_required"
+                    },
+                    blocking=False
+                )
+            except Exception as err:
+                _LOGGER.error("Failed to create restart notification: %s", err)
     
     except Exception as err:
         _LOGGER.error("Failed to create entities via configuration.yaml: %s", err)
@@ -324,7 +347,7 @@ async def provide_manual_instructions(hass: HomeAssistant, missing_entities: Lis
     
     manual_message = (
         "Eveus integration could not automatically create the following required input entities:\n"
-        f"{', '.join([f'input_number.{input_id}' for input_id in missing_entities])}\n\n"
+        f"{', '.join([input_id for input_id in missing_entities])}\n\n"
         "Please add the following configuration to your configuration.yaml manually:\n\n"
         f"```yaml\n{config_yaml}```\n\n"
         "After adding this configuration, restart Home Assistant.\n\n"
@@ -332,11 +355,18 @@ async def provide_manual_instructions(hass: HomeAssistant, missing_entities: Lis
         "Settings > Devices & Services > Helpers."
     )
     
-    await async_create_notification(
-        hass,
-        manual_message,
-        title="Manual Configuration Required for Eveus",
-        notification_id="eveus_manual_config",
-    )
+    try:
+        await hass.services.async_call(
+            "persistent_notification",
+            "create",
+            {
+                "message": manual_message,
+                "title": "Manual Configuration Required for Eveus",
+                "notification_id": "eveus_manual_config"
+            },
+            blocking=False
+        )
+    except Exception as err:
+        _LOGGER.error("Failed to create manual instructions notification: %s", err)
     
     _LOGGER.warning("Could not automatically create input entities, provided manual instructions")
