@@ -22,6 +22,8 @@ from .common_command import CommandManager
 
 _LOGGER = logging.getLogger(__name__)
 
+# Updated part of common_network.py to track connection quality history
+
 class NetworkManager:
     """Network resilience management."""
     def __init__(self, host: str) -> None:
@@ -32,8 +34,10 @@ class NetworkManager:
         self._quality_metrics = {
             'latency': deque(maxlen=20),
             'success_rate': deque(maxlen=20),
+            'success_rate_history': deque(maxlen=100),  # Added success rate history
             'error_types': Counter(),
-            'last_errors': deque(maxlen=10)
+            'last_errors': deque(maxlen=10),
+            'last_successful_connection': time.time(),  # Added timestamp tracking
         }
         self._request_timestamps = deque(maxlen=30)
 
@@ -45,18 +49,29 @@ class NetworkManager:
                 'latency_avg': 0,
                 'success_rate': 100,
                 'recent_errors': 0,
-                'requests_per_minute': 0
+                'requests_per_minute': 0,
+                'success_rate_history': list(self._quality_metrics['success_rate_history']),
+                'last_successful_connection': self._quality_metrics.get('last_successful_connection', time.time())
             }
 
         now = time.time()
         recent_requests = sum(1 for t in self._request_timestamps 
                             if now - t < 60)
+        
+        # Calculate success rate
+        success_rate = (sum(self._quality_metrics['success_rate']) / 
+                     max(len(self._quality_metrics['success_rate']), 1)) * 100
+                     
+        # Store in history
+        self._quality_metrics['success_rate_history'].append(success_rate)
 
         return {
             'latency_avg': sum(self._quality_metrics['latency']) / max(len(self._quality_metrics['latency']), 1),
-            'success_rate': (sum(self._quality_metrics['success_rate']) / max(len(self._quality_metrics['success_rate']), 1)) * 100,
+            'success_rate': success_rate,
             'recent_errors': len(self._quality_metrics['last_errors']),
-            'requests_per_minute': recent_requests
+            'requests_per_minute': recent_requests,
+            'success_rate_history': list(self._quality_metrics['success_rate_history']),
+            'last_successful_connection': self._quality_metrics.get('last_successful_connection', time.time())
         }
 
     def update_metrics(self, response_time: float, success: bool, error_type: str = None) -> None:
@@ -65,6 +80,9 @@ class NetworkManager:
         self._quality_metrics['success_rate'].append(1 if success else 0)
         self._request_timestamps.append(time.time())
         
+        if success:
+            self._quality_metrics['last_successful_connection'] = time.time()
+            
         if not success and error_type:
             self._quality_metrics['error_types'][error_type] += 1
             self._quality_metrics['last_errors'].append({
