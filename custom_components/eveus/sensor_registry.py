@@ -309,14 +309,14 @@ def get_rate3_status(updater, hass) -> str:
         return None
     return "Enabled" if enabled == 1 else "Disabled"
 
-def get_connection_quality(updater, hass) -> str:
-    """Get connection quality metrics with percentage symbol."""
+def get_connection_quality(updater, hass) -> float:
+    """Get connection quality metrics as a numeric value."""
     try:
         metrics = updater._network.connection_quality
-        return f"{round(max(0, min(100, metrics['success_rate'])))}%"
+        return round(max(0, min(100, metrics['success_rate'])))
     except Exception as err:
         _LOGGER.error("Error getting connection quality: %s", err)
-        return "0%"
+        return 0
 
 def get_connection_attrs(updater, hass) -> dict:
     """Get enhanced connection quality attributes."""
@@ -324,15 +324,19 @@ def get_connection_attrs(updater, hass) -> dict:
         metrics = updater._network.connection_quality
         now = time.time()
         
+        # Calculate the percentage value for display in attributes
+        success_rate = round(max(0, min(100, metrics['success_rate'])))
+        
         # Basic attributes
         attrs = {
             "latency_avg": f"{max(0, metrics['latency_avg']):.2f}s",
             "recent_errors": metrics['recent_errors'],
             "requests_per_minute": max(0, metrics['requests_per_minute']),
-            "status": "Excellent" if metrics['success_rate'] > 95 else 
-                    "Good" if metrics['success_rate'] > 80 else
-                    "Fair" if metrics['success_rate'] > 60 else
-                    "Poor" if metrics['success_rate'] > 30 else "Critical"
+            "percentage": f"{success_rate}%",  # Add percentage as an attribute instead
+            "status": "Excellent" if success_rate > 95 else 
+                    "Good" if success_rate > 80 else
+                    "Fair" if success_rate > 60 else
+                    "Poor" if success_rate > 30 else "Critical"
         }
         
         # Add connection history
@@ -523,9 +527,12 @@ SENSOR_DEFINITIONS = [
         value_fn=get_connection_quality,
         icon="mdi:connection",
         state_class=SensorStateClass.MEASUREMENT,
+        unit="%",  # Add the percentage unit here instead of in the value
+        precision=0,
         category=EntityCategory.DIAGNOSTIC,
         attributes_fn=get_connection_attrs,
-    ),    
+    ),
+    
     # Rate sensors
     SensorDefinition(
         entity_name="Primary Rate Cost",
