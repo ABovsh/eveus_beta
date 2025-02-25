@@ -309,48 +309,40 @@ def get_rate3_status(updater, hass) -> str:
         return None
     return "Enabled" if enabled == 1 else "Disabled"
 
-def get_connection_quality(updater, hass) -> float:
-    """Get connection quality metrics as a numeric value."""
+def get_connection_quality(updater, hass) -> str:
+    """Get connection quality metrics with percentage symbol."""
     try:
         metrics = updater._network.connection_quality
-        return round(max(0, min(100, metrics['success_rate'])))
+        return f"{round(max(0, min(100, metrics['success_rate'])))}%"
     except Exception as err:
         _LOGGER.error("Error getting connection quality: %s", err)
-        return 0
+        return "0%"
 
 def get_connection_attrs(updater, hass) -> dict:
-    """Get enhanced connection quality attributes."""
+    """Get enhanced connection quality attributes without history."""
     try:
         metrics = updater._network.connection_quality
         now = time.time()
-        
-        # Calculate the percentage value for display in attributes
-        success_rate = round(max(0, min(100, metrics['success_rate'])))
         
         # Basic attributes
         attrs = {
             "latency_avg": f"{max(0, metrics['latency_avg']):.2f}s",
             "recent_errors": metrics['recent_errors'],
             "requests_per_minute": max(0, metrics['requests_per_minute']),
-            "percentage": f"{success_rate}%",  # Add percentage as an attribute instead
-            "status": "Excellent" if success_rate > 95 else 
-                    "Good" if success_rate > 80 else
-                    "Fair" if success_rate > 60 else
-                    "Poor" if success_rate > 30 else "Critical"
+            "status": "Excellent" if metrics['success_rate'] > 95 else 
+                    "Good" if metrics['success_rate'] > 80 else
+                    "Fair" if metrics['success_rate'] > 60 else
+                    "Poor" if metrics['success_rate'] > 30 else "Critical"
         }
         
-        # Add connection history
-        if 'success_rate_history' in metrics:
-            history_values = list(metrics['success_rate_history'])[-10:] if 'success_rate_history' in metrics else []
-            attrs["connection_history"] = [f"{val:.1f}%" for val in history_values]
-        
-        # Only store last 10 errors to reduce memory and processing
+        # Only store last errors with expanded details
         last_errors = list(updater._network._quality_metrics['last_errors'])[-10:]
         attrs["last_errors"] = [
             {
                 "type": err["type"],
                 "time": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(err["timestamp"])),
-                "age": f"{(now - err['timestamp']):.0f}s ago"
+                "age": f"{(now - err['timestamp']):.0f}s ago",
+                "details": err.get("details", "No details available")
             }
             for err in last_errors
         ]
@@ -527,8 +519,6 @@ SENSOR_DEFINITIONS = [
         value_fn=get_connection_quality,
         icon="mdi:connection",
         state_class=SensorStateClass.MEASUREMENT,
-        unit="%",  # Add the percentage unit here instead of in the value
-        precision=0,
         category=EntityCategory.DIAGNOSTIC,
         attributes_fn=get_connection_attrs,
     ),
