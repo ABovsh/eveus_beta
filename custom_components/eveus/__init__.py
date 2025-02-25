@@ -16,7 +16,6 @@ from homeassistant.helpers.typing import ConfigType
 
 from .const import DOMAIN, MODEL_MAX_CURRENT, CONF_MODEL
 from .common import EveusUpdater, EveusConnectionError
-from .input_creator import check_missing_inputs
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -108,18 +107,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass.data[DOMAIN][entry.entry_id]["updater"] = updater
         except Exception as err:
             raise ConfigEntryNotReady(f"Failed to initialize updater: {err}")
-            
-        # Check for missing input entities and show notification if needed
-        try:
-            missing_entities = await check_missing_inputs(hass)
-            if missing_entities:
-                _LOGGER.warning(
-                    "Missing required input entities: %s. Notification has been created with instructions.",
-                    ", ".join(missing_entities)
-                )
-        except Exception as err:
-            _LOGGER.warning("Error checking for missing input entities: %s", err)
-        
+
         # Set up platforms
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
         
