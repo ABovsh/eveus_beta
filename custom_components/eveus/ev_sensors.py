@@ -31,51 +31,50 @@ class EVSocKwhSensor(EveusSensorBase):
         """Calculate and return state of charge in kWh."""
         _LOGGER.debug("SOC Energy sensor calculation started")
         try:
-            # Log all required input entities and their values
-            _LOGGER.debug("Checking input entities existence")
-            entities_to_check = {
-                "input_number.ev_initial_soc": self.hass.states.get("input_number.ev_initial_soc"),
-                "input_number.ev_battery_capacity": self.hass.states.get("input_number.ev_battery_capacity"),
-                "input_number.ev_soc_correction": self.hass.states.get("input_number.ev_soc_correction")
-            }
+            # Check essential entities first
+            state_obj = self.hass.states.get("input_number.ev_initial_soc")
+            if state_obj is None:
+                _LOGGER.warning("Entity input_number.ev_initial_soc does not exist yet, setup may still be in progress")
+                return None
             
-            for entity_id, state_obj in entities_to_check.items():
-                if state_obj is None:
-                    _LOGGER.error("Entity %s does not exist", entity_id)
-                else:
-                    _LOGGER.debug("Entity %s exists, state: %s", entity_id, state_obj.state)
+            capacity_obj = self.hass.states.get("input_number.ev_battery_capacity")
+            if capacity_obj is None:
+                _LOGGER.warning("Entity input_number.ev_battery_capacity does not exist yet, setup may still be in progress")
+                return None
             
-            # Get input values with detailed logging
-            initial_soc = get_safe_value(
-                self.hass.states.get("input_number.ev_initial_soc"),
-                converter=float
-            )
-            _LOGGER.debug("initial_soc value: %s", initial_soc)
+            correction_obj = self.hass.states.get("input_number.ev_soc_correction")
+            if correction_obj is None:
+                _LOGGER.warning("Entity input_number.ev_soc_correction does not exist yet, setup may still be in progress")
+                return None
             
-            max_capacity = get_safe_value(
-                self.hass.states.get("input_number.ev_battery_capacity"),
-                converter=float
-            )
-            _LOGGER.debug("max_capacity value: %s", max_capacity)
-            
-            correction = get_safe_value(
-                self.hass.states.get("input_number.ev_soc_correction"),
-                converter=float
-            )
-            _LOGGER.debug("correction value: %s", correction)
-            
+            # Get input values with detailed logging - use explicit defaults for robustness
+            try:
+                initial_soc = float(state_obj.state)
+                _LOGGER.debug("initial_soc value: %s", initial_soc)
+            except (ValueError, TypeError):
+                _LOGGER.warning("Invalid state for initial_soc: %s", state_obj.state)
+                return None
+                
+            try:
+                max_capacity = float(capacity_obj.state)
+                _LOGGER.debug("max_capacity value: %s", max_capacity)
+            except (ValueError, TypeError):
+                _LOGGER.warning("Invalid state for max_capacity: %s", capacity_obj.state)
+                return None
+                
+            try:
+                correction = float(correction_obj.state)
+                _LOGGER.debug("correction value: %s", correction)
+            except (ValueError, TypeError):
+                _LOGGER.warning("Invalid state for correction: %s", correction_obj.state)
+                correction = 7.5  # Use a default value
+                
             energy_charged = get_safe_value(self._updater.data, "IEM1", float, default=0)
             _LOGGER.debug("energy_charged (IEM1) value: %s", energy_charged)
-            _LOGGER.debug("IEM1 attribute exists in updater data: %s", "IEM1" in self._updater.data)
-
-            if not validate_required_values(initial_soc, max_capacity, correction):
-                _LOGGER.error("Missing required values for SOC calculation: initial_soc=%s, max_capacity=%s, correction=%s", 
-                             initial_soc, max_capacity, correction)
-                return None
 
             if initial_soc < 0 or initial_soc > 100 or max_capacity <= 0:
                 _LOGGER.error("Invalid values for SOC calculation: initial_soc=%s, max_capacity=%s",
-                             initial_soc, max_capacity)
+                              initial_soc, max_capacity)
                 return None
 
             # Calculation details
@@ -116,70 +115,88 @@ class EVSocPercentSensor(EveusSensorBase):
         """Return the state of charge percentage."""
         _LOGGER.debug("SOC Percent sensor calculation started")
         try:
-            # Log all required input entities
-            _LOGGER.debug("Checking SOC Energy sensor")
+            # First, check if initial_soc is available directly
+            initial_soc_entity = self.hass.states.get("input_number.ev_initial_soc")
+            if initial_soc_entity is None:
+                _LOGGER.debug("Entity input_number.ev_initial_soc not available yet - returning default SOC")
+                return 0  # Default to 0% rather than None to avoid "unknown" display
+                
+            # Check if we can use the SOC energy sensor
             energy_entity_id = "sensor.eveus_ev_charger_soc_energy"
             energy_state = self.hass.states.get(energy_entity_id)
             
-            if energy_state is None:
-                _LOGGER.error("SOC Energy sensor does not exist: %s", energy_entity_id)
+            capacity_entity = self.hass.states.get("input_number.ev_battery_capacity")
+            if capacity_entity is None:
+                _LOGGER.debug("Entity input_number.ev_battery_capacity not available yet")
+                
+                # Use initial SOC directly if available
+                try:
+                    return float(initial_soc_entity.state)
+                except (ValueError, TypeError):
+                    _LOGGER.debug("Invalid initial_soc value: %s", initial_soc_entity.state)
+                    return 0
+            
+            # Try to get battery capacity
+            try:
+                max_capacity = float(capacity_entity.state)
+            except (ValueError, TypeError):
+                _LOGGER.debug("Invalid battery capacity: %s", capacity_entity.state)
+                return 0
+            
+            # Try to get SOC energy from sensor or calculate directly
+            if energy_state and energy_state.state not in ('unknown', 'unavailable'):
+                try:
+                    soc_kwh = float(energy_state.state)
+                    _LOGGER.debug("Using SOC Energy value: %s", soc_kwh)
+                except (ValueError, TypeError):
+                    _LOGGER.debug("Invalid SOC Energy value: %s", energy_state.state)
+                    soc_kwh = None
             else:
-                _LOGGER.debug("SOC Energy exists, state: %s", energy_state.state)
+                soc_kwh = None
+                _LOGGER.debug("SOC Energy sensor not available or invalid")
             
-            # Get energy value from SOC kWh sensor
-            soc_kwh = get_safe_value(energy_state, converter=float)
-            _LOGGER.debug("SOC Energy value: %s", soc_kwh)
+            # If SOC energy is available, calculate percentage
+            if soc_kwh is not None and max_capacity > 0:
+                percentage = round((soc_kwh / max_capacity * 100), 0)
+                result = max(0, min(percentage, 100))
+                _LOGGER.debug("SOC Percent from energy: %s%%", result)
+                return result
+                
+            # Fallback to direct calculation if needed
+            _LOGGER.debug("Falling back to direct SOC calculation")
+            try:
+                initial_soc = float(initial_soc_entity.state)
+            except (ValueError, TypeError):
+                _LOGGER.debug("Invalid initial SOC: %s", initial_soc_entity.state)
+                initial_soc = 0
+                
+            correction_entity = self.hass.states.get("input_number.ev_soc_correction")
+            if correction_entity is None:
+                _LOGGER.debug("SOC correction entity missing, using default")
+                correction = 7.5  # Default value
+            else:
+                try:
+                    correction = float(correction_entity.state)
+                except (ValueError, TypeError):
+                    correction = 7.5
             
-            max_capacity = get_safe_value(
-                self.hass.states.get("input_number.ev_battery_capacity"),
-                converter=float
-            )
-            _LOGGER.debug("max_capacity value: %s", max_capacity)
+            energy_charged = get_safe_value(self._updater.data, "IEM1", float, default=0)
             
-            # Fallback to direct calculation if SOC energy sensor is unavailable
-            if soc_kwh is None:
-                _LOGGER.debug("SOC Energy unavailable, falling back to direct calculation")
-                
-                # Directly calculate from IEM1 and initial SOC
-                initial_soc = get_safe_value(
-                    self.hass.states.get("input_number.ev_initial_soc"),
-                    converter=float
-                )
-                _LOGGER.debug("initial_soc value: %s", initial_soc)
-                
-                correction = get_safe_value(
-                    self.hass.states.get("input_number.ev_soc_correction"),
-                    converter=float
-                )
-                _LOGGER.debug("correction value: %s", correction)
-                
-                energy_charged = get_safe_value(self._updater.data, "IEM1", float, default=0)
-                _LOGGER.debug("energy_charged (IEM1) value: %s", energy_charged)
-                
-                if not validate_required_values(initial_soc, max_capacity, correction):
-                    _LOGGER.error("Missing required values for direct SOC percent calculation")
-                    return initial_soc  # Return initial SOC as fallback
-                    
+            if max_capacity > 0:
                 efficiency = (1 - correction / 100)
-                charged_kwh = energy_charged * efficiency
-                initial_kwh = (initial_soc / 100) * max_capacity
-                soc_kwh = initial_kwh + charged_kwh
-                
-                _LOGGER.debug("Direct SOC calculation: %s kWh", soc_kwh)
-            
-            if not validate_required_values(soc_kwh, max_capacity) or max_capacity <= 0:
-                _LOGGER.error("Missing or invalid values for SOC percentage calculation")
-                return None
-
-            percentage = round((soc_kwh / max_capacity * 100), 0)
-            result = max(0, min(percentage, 100))
-            _LOGGER.info("SOC Percent calculation result: %s%%", result)
-            return result
+                charged_percent = (energy_charged * efficiency / max_capacity) * 100
+                current_soc = initial_soc + charged_percent
+                result = max(0, min(round(current_soc, 0), 100))
+                _LOGGER.debug("Direct SOC calculation: %s%%", result)
+                return result
+            else:
+                _LOGGER.debug("Invalid battery capacity, returning initial SOC")
+                return initial_soc
             
         except Exception as err:
             _LOGGER.error("Error calculating SOC percentage: %s", err)
             _LOGGER.debug("Traceback: %s", traceback.format_exc())
-            return None
+            return 0  # Return 0 instead of None to avoid "unknown" state
 
 
 class TimeToTargetSocSensor(EveusSensorBase):
@@ -193,99 +210,104 @@ class TimeToTargetSocSensor(EveusSensorBase):
         """Calculate and return formatted time to target."""
         _LOGGER.debug("Time to Target SOC sensor calculation started")
         try:
-            # Log all input entities
-            _LOGGER.debug("Checking input entities")
-            entities_to_check = {
-                "sensor.eveus_ev_charger_soc_percent": self.hass.states.get("sensor.eveus_ev_charger_soc_percent"),
-                "input_number.ev_target_soc": self.hass.states.get("input_number.ev_target_soc"),
-                "input_number.ev_battery_capacity": self.hass.states.get("input_number.ev_battery_capacity"),
-                "input_number.ev_soc_correction": self.hass.states.get("input_number.ev_soc_correction"),
-            }
-            
-            for entity_id, state_obj in entities_to_check.items():
-                if state_obj is None:
-                    _LOGGER.error("Entity %s does not exist", entity_id)
-                else:
-                    _LOGGER.debug("Entity %s exists, state: %s", entity_id, state_obj.state)
-            
-            _LOGGER.debug("Checking powerMeas in updater data: %s", "powerMeas" in self._updater.data)
-            
-            # Get input values
+            # Get current SOC - fallback to initial SOC if needed
             percent_entity_id = "sensor.eveus_ev_charger_soc_percent"
-            current_soc = get_safe_value(
-                self.hass.states.get(percent_entity_id),
-                converter=float
-            )
-            _LOGGER.debug("current_soc value from %s: %s", percent_entity_id, current_soc)
+            percent_state = self.hass.states.get(percent_entity_id)
             
-            target_soc = get_safe_value(
-                self.hass.states.get("input_number.ev_target_soc"),
-                converter=float
-            )
-            _LOGGER.debug("target_soc value: %s", target_soc)
+            if percent_state and percent_state.state not in ('unknown', 'unavailable'):
+                try:
+                    current_soc = float(percent_state.state)
+                    _LOGGER.debug("Current SOC from sensor: %s%%", current_soc)
+                except (ValueError, TypeError):
+                    current_soc = None
+            else:
+                current_soc = None
             
-            battery_capacity = get_safe_value(
-                self.hass.states.get("input_number.ev_battery_capacity"),
-                converter=float
-            )
-            _LOGGER.debug("battery_capacity value: %s", battery_capacity)
-            
-            correction = get_safe_value(
-                self.hass.states.get("input_number.ev_soc_correction"),
-                converter=float
-            )
-            _LOGGER.debug("correction value: %s", correction)
-            
-            power_meas = get_safe_value(self._updater.data, "powerMeas", float, default=0)
-            _LOGGER.debug("power_meas value: %s", power_meas)
-            
-            # If SOC percent is not available, try to calculate it directly
+            # If SOC sensor not available, try initial SOC
             if current_soc is None:
-                _LOGGER.debug("SOC Percent unavailable, trying alternatives")
-                
-                # Try to get SOC energy
-                soc_kwh = get_safe_value(
-                    self.hass.states.get("sensor.eveus_ev_charger_soc_energy"),
-                    converter=float
-                )
-                _LOGGER.debug("SOC Energy value: %s", soc_kwh)
-                
-                if soc_kwh is not None and battery_capacity is not None and battery_capacity > 0:
-                    current_soc = (soc_kwh / battery_capacity) * 100
-                    _LOGGER.debug("Calculated current_soc from energy: %s%%", current_soc)
+                initial_state = self.hass.states.get("input_number.ev_initial_soc")
+                if initial_state:
+                    try:
+                        current_soc = float(initial_state.state)
+                        _LOGGER.debug("Using initial SOC: %s%%", current_soc)
+                    except (ValueError, TypeError):
+                        current_soc = 0
                 else:
-                    # Fallback to initial SOC plus charged energy
-                    initial_soc = get_safe_value(
-                        self.hass.states.get("input_number.ev_initial_soc"),
-                        converter=float
-                    )
-                    _LOGGER.debug("initial_soc value: %s", initial_soc)
-                    
-                    energy_charged = get_safe_value(self._updater.data, "IEM1", float, default=0)
-                    _LOGGER.debug("energy_charged (IEM1) value: %s", energy_charged)
-                    
-                    if initial_soc is not None and battery_capacity is not None and battery_capacity > 0:
-                        efficiency = (1 - correction / 100) if correction is not None else 0.925
-                        charged_percent = (energy_charged * efficiency / battery_capacity) * 100
-                        current_soc = initial_soc + charged_percent
-                        _LOGGER.debug("Fallback current_soc calculation: %s%%", current_soc)
-
-            if not validate_required_values(current_soc, target_soc, battery_capacity):
-                _LOGGER.error("Missing required values for time to target calculation")
-                return "unavailable"
-
-            result = calculate_remaining_time(
-                current_soc,
-                target_soc,
-                power_meas,
-                battery_capacity,
-                correction if correction is not None else 7.5
-            )
+                    current_soc = 0
+                    _LOGGER.debug("Using default SOC: 0%")
             
-            _LOGGER.info("Time to target calculation result: %s", result)
+            # Get target SOC
+            target_state = self.hass.states.get("input_number.ev_target_soc")
+            if not target_state:
+                _LOGGER.debug("Target SOC entity missing")
+                return "Unavailable"
+            
+            try:
+                target_soc = float(target_state.state)
+                _LOGGER.debug("Target SOC: %s%%", target_soc)
+            except (ValueError, TypeError):
+                _LOGGER.debug("Invalid target SOC: %s", target_state.state)
+                return "Invalid target"
+            
+            # Get battery capacity
+            capacity_state = self.hass.states.get("input_number.ev_battery_capacity")
+            if not capacity_state:
+                _LOGGER.debug("Battery capacity entity missing")
+                return "Unavailable"
+                
+            try:
+                battery_capacity = float(capacity_state.state)
+                _LOGGER.debug("Battery capacity: %s kWh", battery_capacity)
+            except (ValueError, TypeError):
+                _LOGGER.debug("Invalid battery capacity: %s", capacity_state.state)
+                return "Invalid capacity"
+                
+            # Get correction factor
+            correction_state = self.hass.states.get("input_number.ev_soc_correction")
+            if correction_state:
+                try:
+                    correction = float(correction_state.state)
+                    _LOGGER.debug("Correction: %s%%", correction)
+                except (ValueError, TypeError):
+                    correction = 7.5
+                    _LOGGER.debug("Using default correction: 7.5%%")
+            else:
+                correction = 7.5
+                _LOGGER.debug("Using default correction: 7.5%%")
+            
+            # Get power
+            power_meas = get_safe_value(self._updater.data, "powerMeas", float, default=0)
+            _LOGGER.debug("Power: %s W", power_meas)
+            
+            if power_meas <= 0:
+                return "Not charging"
+                
+            # Calculate time remaining
+            remaining_kwh = ((target_soc - current_soc) * battery_capacity / 100)
+            if remaining_kwh <= 0:
+                return "Target reached"
+                
+            efficiency = (1 - correction / 100)
+            power_kw = power_meas * efficiency / 1000
+            
+            total_minutes = round((remaining_kwh / power_kw * 60), 0)
+            
+            if total_minutes < 1:
+                return "< 1m"
+                
+            # Format duration
+            hours = int(total_minutes // 60)
+            mins = int(total_minutes % 60)
+            
+            if hours > 0:
+                result = f"{hours}h {mins:02d}m"
+            else:
+                result = f"{mins}m"
+                
+            _LOGGER.debug("Time to target calculation result: %s", result)
             return result
 
         except Exception as err:
             _LOGGER.error("Error calculating time to target: %s", err)
             _LOGGER.debug("Traceback: %s", traceback.format_exc())
-            return "unavailable"
+            return "Unavailable"
