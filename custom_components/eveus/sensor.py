@@ -36,6 +36,7 @@ async def async_setup_entry(
         EVSocKwhSensor(updater),
         EVSocPercentSensor(updater),
         TimeToTargetSocSensor(updater),
+        InputStatusSensor(updater),
     ]
     
     # Add all sensors
