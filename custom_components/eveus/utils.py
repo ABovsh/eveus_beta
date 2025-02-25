@@ -39,7 +39,8 @@ def get_safe_value(
             return default
 
         return converter(value)
-    except (TypeError, ValueError, AttributeError):
+    except (TypeError, ValueError, AttributeError) as err:
+        _LOGGER.debug("Error converting value %s: %s", value, err)
         return default
 
 
@@ -110,29 +111,48 @@ def calculate_remaining_time(
 ) -> str:
     """Calculate remaining time to target SOC."""
     try:
-        if not validate_required_values(
-            current_soc,
-            target_soc,
-            power_meas,
-            battery_capacity,
-            correction
-        ):
+        # Double check inputs
+        if current_soc is None or target_soc is None or power_meas is None or battery_capacity is None:
+            _LOGGER.debug("Missing inputs for remaining time calculation")
+            return "unavailable"
+            
+        # Convert to float to ensure correct math
+        current_soc = float(current_soc)
+        target_soc = float(target_soc)
+        power_meas = float(power_meas)
+        battery_capacity = float(battery_capacity)
+        correction = float(correction) if correction is not None else 7.5
+
+        # Validate ranges
+        if current_soc < 0 or current_soc > 100:
+            _LOGGER.debug("Current SOC out of range: %s", current_soc)
+            return "unavailable"
+            
+        if target_soc < 0 or target_soc > 100:
+            _LOGGER.debug("Target SOC out of range: %s", target_soc)
+            return "unavailable"
+            
+        if battery_capacity <= 0:
+            _LOGGER.debug("Invalid battery capacity: %s", battery_capacity)
             return "unavailable"
 
         if power_meas <= 0:
             return "Not charging"
 
+        # Calculate energy needed
         remaining_kwh = (target_soc - current_soc) * battery_capacity / 100
         
         if remaining_kwh <= 0:
             return "Target reached"
 
+        # Account for efficiency loss
         efficiency = (1 - correction / 100)
         power_kw = power_meas * efficiency / 1000
         
         if power_kw <= 0:
             return "Not charging"
 
+        # Calculate time in minutes then convert to seconds
         total_minutes = round((remaining_kwh / power_kw * 60), 0)
         
         if total_minutes < 1:
@@ -141,5 +161,5 @@ def calculate_remaining_time(
         return format_duration(int(total_minutes * 60))
 
     except Exception as err:
-        _LOGGER.debug("Error calculating remaining time: %s", err)
+        _LOGGER.error("Error calculating remaining time: %s", err, exc_info=True)
         return "unavailable"
