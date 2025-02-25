@@ -30,10 +30,8 @@ from .const import (
 )
 from .utils import (
     get_safe_value,
-    validate_required_values,
-    calculate_remaining_time,
-    format_duration,
     is_dst,
+    format_duration,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -311,88 +309,6 @@ def get_rate3_status(updater, hass) -> str:
         return None
     return "Enabled" if enabled == 1 else "Disabled"
 
-def get_ev_soc_kwh(updater, hass) -> float:
-    """Calculate state of charge in kWh."""
-    try:
-        initial_soc = get_safe_value(
-            hass.states.get("input_number.ev_initial_soc")
-        )
-        max_capacity = get_safe_value(
-            hass.states.get("input_number.ev_battery_capacity")
-        )
-        correction = get_safe_value(
-            hass.states.get("input_number.ev_soc_correction")
-        )
-        energy_charged = get_safe_value(updater.data, "IEM1", default=0)
-
-        if not validate_required_values(initial_soc, max_capacity, correction):
-            _LOGGER.debug("Missing required values for SOC calculation")
-            return None
-
-        if initial_soc < 0 or initial_soc > 100 or max_capacity <= 0:
-            _LOGGER.debug("Invalid values for SOC calculation")
-            return None
-
-        initial_kwh = (initial_soc / 100) * max_capacity
-        efficiency = (1 - correction / 100)
-        charged_kwh = energy_charged * efficiency
-        total_kwh = initial_kwh + charged_kwh
-        
-        return round(max(0, min(total_kwh, max_capacity)), 2)
-
-    except Exception as err:
-        _LOGGER.error("Error calculating SOC in kWh: %s", err)
-        return None
-
-def get_ev_soc_percent(updater, hass) -> float:
-    """Get state of charge percentage."""
-    try:
-        soc_kwh = get_safe_value(
-            hass.states.get("sensor.eveus_ev_charger_soc_energy")
-        )
-        max_capacity = get_safe_value(
-            hass.states.get("input_number.ev_battery_capacity")
-        )
-        
-        if not validate_required_values(soc_kwh, max_capacity) or max_capacity <= 0:
-            _LOGGER.debug("Missing or invalid values for SOC percentage calculation")
-            return None
-
-        percentage = round((soc_kwh / max_capacity * 100), 0)
-        return max(0, min(percentage, 100))
-    except Exception as err:
-        _LOGGER.error("Error calculating SOC percentage: %s", err)
-        return None
-
-def get_time_to_target(updater, hass) -> str:
-    """Calculate time to target SOC."""
-    try:
-        current_soc = get_safe_value(
-            hass.states.get("sensor.eveus_ev_charger_soc_percent")
-        )
-        target_soc = get_safe_value(
-            hass.states.get("input_number.ev_target_soc")
-        )
-        battery_capacity = get_safe_value(
-            hass.states.get("input_number.ev_battery_capacity")
-        )
-        correction = get_safe_value(
-            hass.states.get("input_number.ev_soc_correction")
-        )
-        power_meas = get_safe_value(updater.data, "powerMeas", default=0)
-
-        return calculate_remaining_time(
-            current_soc,
-            target_soc,
-            power_meas,
-            battery_capacity,
-            correction
-        )
-
-    except Exception as err:
-        _LOGGER.debug("Error calculating time to target: %s", err)
-        return "unavailable"
-
 def get_connection_quality(updater, hass) -> float:
     """Get connection quality metrics."""
     try:
@@ -635,31 +551,6 @@ SENSOR_DEFINITIONS = [
         entity_name="Rate 3 Status",
         value_fn=get_rate3_status,
         icon="mdi:clock-check",
-    ),
-    
-    # EV sensors
-    SensorDefinition(
-        entity_name="SOC Energy",
-        value_fn=get_ev_soc_kwh,
-        icon="mdi:battery-charging",
-        device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL,
-        unit=UnitOfEnergy.KILO_WATT_HOUR,
-        precision=0,
-    ),
-    SensorDefinition(
-        entity_name="SOC Percent",
-        value_fn=get_ev_soc_percent,
-        icon="mdi:battery-charging",
-        device_class=SensorDeviceClass.BATTERY,
-        state_class=SensorStateClass.MEASUREMENT,
-        unit="%",
-        precision=0,
-    ),
-    SensorDefinition(
-        entity_name="Time to Target SOC",
-        value_fn=get_time_to_target,
-        icon="mdi:timer",
     ),
 ]
 
