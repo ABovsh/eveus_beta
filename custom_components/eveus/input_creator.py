@@ -2,11 +2,12 @@
 import logging
 import asyncio
 import os
-import yaml
 from typing import Dict, Any, List, Optional, Set
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.storage import Store
+from homeassistant.util import slugify
 from homeassistant.const import (
     CONF_NAME, 
     CONF_ICON,
@@ -18,8 +19,6 @@ from homeassistant.components.input_number import (
     SERVICE_SET_VALUE,
     ATTR_VALUE,
 )
-from homeassistant.helpers.storage import Store
-from homeassistant.util import slugify
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,7 +82,7 @@ async def check_and_create_inputs(hass: HomeAssistant) -> List[str]:
         _LOGGER.debug("All required input entities exist")
         return []
     
-    # Create a notification using service call instead of async_create_notification
+    # Create a notification using service call
     if missing_entities:
         notification_message = (
             f"Eveus integration is creating {len(missing_entities)} required input entities: "
@@ -106,22 +105,15 @@ async def check_and_create_inputs(hass: HomeAssistant) -> List[str]:
     # Try all available methods in order of preference
     created_entities = []
     
-    # Method 1: Try using the input_helper service
-    created = await create_via_service(hass, missing_entities)
+    # Method 1: Try using the storage method (most reliable)
+    created = await create_via_storage(hass, missing_entities)
     if created:
         created_entities.extend([f"input_number.{e}" for e in created])
         missing_entities = [e for e in missing_entities if e not in created]
-    
-    # Method 2: Try using the storage helper
+
+    # Method 2: Try using the input_helper service
     if missing_entities:
-        created = await create_via_storage(hass, missing_entities)
-        if created:
-            created_entities.extend([f"input_number.{e}" for e in created])
-            missing_entities = [e for e in missing_entities if e not in created]
-    
-    # Method 3: Try updating configuration.yaml
-    if missing_entities:
-        created = await create_via_yaml(hass, missing_entities)
+        created = await create_via_service(hass, missing_entities)
         if created:
             created_entities.extend([f"input_number.{e}" for e in created])
             missing_entities = [e for e in missing_entities if e not in created]
@@ -214,48 +206,42 @@ async def create_via_storage(hass: HomeAssistant, missing_entities: List[str]) -
     
     try:
         # Use Home Assistant's storage system
-        store = Store(hass, 1, "helpers")
+        store = Store(hass, 1, "core.config_entries")
         data = await store.async_load() or {}
         
-        if "items" not in data:
-            data["items"] = []
-            
-        item_ids = {item.get("id") for item in data["items"]}
+        # Get all existing helpers
+        helpers_store = Store(hass, 1, "core.helpers")
+        helpers_data = await helpers_store.async_load() or {}
         
+        if "helpers" not in helpers_data:
+            helpers_data["helpers"] = {}
+            
         # Add missing entities to storage
         for input_id in missing_entities:
             config = REQUIRED_INPUTS[input_id]
-            unique_id = f"eveus_{slugify(input_id)}"
+            unique_id = f"input_number.{input_id}"
             
-            if unique_id in item_ids:
-                _LOGGER.debug("Helper %s already exists in storage", unique_id)
-                continue
-                
             # Create the helper entry
             helper_entry = {
-                "id": unique_id,
-                "type": "input_number",
                 "name": config["name"],
                 "icon": config.get("icon"),
-                "data": {
-                    "min": config["min"],
-                    "max": config["max"],
-                    "step": config["step"],
-                    "initial": config["initial"],
-                    "mode": config.get("mode", "slider"),
-                }
+                "initial": config["initial"],
+                "min": config["min"],
+                "max": config["max"],
+                "step": config["step"],
+                "mode": config.get("mode", "slider"),
             }
             
             if "unit_of_measurement" in config:
-                helper_entry["data"]["unit_of_measurement"] = config["unit_of_measurement"]
+                helper_entry["unit_of_measurement"] = config["unit_of_measurement"]
             
-            # Add to the helpers list
-            data["items"].append(helper_entry)
+            # Add to the helpers
+            helpers_data["helpers"][unique_id] = helper_entry
             created.append(input_id)
         
         # Save the updated storage
         if created:
-            await store.async_save(data)
+            await helpers_store.async_save(helpers_data)
             _LOGGER.info("Created %d helpers via storage", len(created))
             
             # Force Home Assistant to reload helpers
@@ -274,66 +260,6 @@ async def create_via_storage(hass: HomeAssistant, missing_entities: List[str]) -
     
     return created
 
-async def create_via_yaml(hass: HomeAssistant, missing_entities: List[str]) -> List[str]:
-    """Create input entities by modifying configuration.yaml."""
-    _LOGGER.debug("Attempting to create entities via configuration.yaml")
-    created = []
-    
-    try:
-        config_path = hass.config.path("configuration.yaml")
-        
-        if not os.path.exists(config_path):
-            _LOGGER.error("Configuration file not found: %s", config_path)
-            return []
-        
-        # Read the current configuration
-        with open(config_path, 'r') as file:
-            config = yaml.safe_load(file) or {}
-        
-        # Prepare input_number configuration
-        if "input_number" not in config:
-            config["input_number"] = {}
-        
-        # Add missing entities
-        for input_id in missing_entities:
-            if input_id not in config["input_number"]:
-                entity_config = REQUIRED_INPUTS[input_id].copy()
-                config["input_number"][input_id] = entity_config
-                created.append(input_id)
-        
-        # Only write if changes were made
-        if created:
-            # Write back the configuration
-            with open(config_path, 'w') as file:
-                yaml.dump(config, file, default_flow_style=False)
-            
-            _LOGGER.info("Created %d entities in configuration.yaml", len(created))
-            
-            # Notify user to restart Home Assistant
-            restart_message = (
-                f"Eveus integration has added {len(created)} input entities to your configuration.yaml: "
-                f"{', '.join(created)}. "
-                f"Please restart Home Assistant to apply these changes."
-            )
-            try:
-                await hass.services.async_call(
-                    "persistent_notification",
-                    "create",
-                    {
-                        "message": restart_message,
-                        "title": "Home Assistant Restart Required",
-                        "notification_id": "eveus_restart_required"
-                    },
-                    blocking=False
-                )
-            except Exception as err:
-                _LOGGER.error("Failed to create restart notification: %s", err)
-    
-    except Exception as err:
-        _LOGGER.error("Failed to create entities via configuration.yaml: %s", err)
-    
-    return created
-
 async def provide_manual_instructions(hass: HomeAssistant, missing_entities: List[str]) -> None:
     """Provide manual instructions for creating required entities."""
     _LOGGER.debug("Providing manual instructions for entity creation")
@@ -347,7 +273,7 @@ async def provide_manual_instructions(hass: HomeAssistant, missing_entities: Lis
     
     manual_message = (
         "Eveus integration could not automatically create the following required input entities:\n"
-        f"{', '.join([input_id for input_id in missing_entities])}\n\n"
+        f"{', '.join(missing_entities)}\n\n"
         "Please add the following configuration to your configuration.yaml manually:\n\n"
         f"```yaml\n{config_yaml}```\n\n"
         "After adding this configuration, restart Home Assistant.\n\n"
