@@ -20,10 +20,11 @@ class CommandManager:
         self._task: Optional[asyncio.Task] = None
         self._last_command_time = 0
         self._lock = asyncio.Lock()
+        self._timeout = COMMAND_TIMEOUT
 
     async def start(self) -> None:
         """Start command processing."""
-        if self._task is None:
+        if not self._task:
             self._task = asyncio.create_task(self._process_queue())
 
     async def stop(self) -> None:
@@ -45,15 +46,24 @@ class CommandManager:
                 # Execute command with timeout protection
                 try:
                     if not future.done():
-                        result = await asyncio.wait_for(
-                            self._execute_command(command, value),
-                            timeout=COMMAND_TIMEOUT
-                        )
-                        future.set_result(result)
-                except asyncio.TimeoutError:
-                    if not future.done():
-                        future.set_exception(asyncio.TimeoutError("Command timed out"))
+                        # Use a more reliable timeout approach
+                        try:
+                            result = await asyncio.wait_for(
+                                self._execute_command(command, value),
+                                timeout=self._timeout
+                            )
+                            if not future.done():
+                                future.set_result(result)
+                        except asyncio.TimeoutError:
+                            _LOGGER.warning("Command %s timed out after %s seconds", command, self._timeout)
+                            if not future.done():
+                                future.set_result(False)  # Set result to False instead of exception
+                        except Exception as err:
+                            _LOGGER.error("Command execution error: %s", err)
+                            if not future.done():
+                                future.set_exception(err)
                 except Exception as err:
+                    _LOGGER.error("Error in command processing: %s", err)
                     if not future.done():
                         future.set_exception(err)
                 finally:
@@ -65,7 +75,7 @@ class CommandManager:
                 await asyncio.sleep(1)
 
     async def _execute_command(self, command: str, value: Any) -> bool:
-        """Execute command with rate limiting."""
+        """Execute command with rate limiting and better error handling."""
         async with self._lock:
             # Rate limit commands
             time_since_last = time.time() - self._last_command_time
@@ -75,6 +85,9 @@ class CommandManager:
             try:
                 session = await self._updater._get_session()
                 
+                # Use a shorter timeout for the actual HTTP request
+                timeout = aiohttp.ClientTimeout(total=min(15, self._timeout - 2))
+                
                 async with session.post(
                     f"http://{self._updater.host}/pageEvent",
                     auth=aiohttp.BasicAuth(
@@ -83,27 +96,39 @@ class CommandManager:
                     ),
                     headers={"Content-type": "application/x-www-form-urlencoded"},
                     data=f"pageevent={command}&{command}={value}",
-                    timeout=COMMAND_TIMEOUT,
+                    timeout=timeout,
                 ) as response:
                     response.raise_for_status()
                     self._last_command_time = time.time()
                     return True
 
+            except aiohttp.ClientResponseError as err:
+                _LOGGER.error("Command %s HTTP error %d: %s", command, err.status, err)
+                return False
+            except aiohttp.ClientConnectorError as err:
+                _LOGGER.error("Connection error for command %s: %s", command, err)
+                return False
+            except asyncio.TimeoutError:
+                _LOGGER.error("Command %s timed out", command)
+                return False
             except Exception as err:
-                _LOGGER.error("Command execution failed: %s", err)
+                _LOGGER.error("Command %s failed with unexpected error: %s", command, err)
                 return False
 
     async def send_command(self, command: str, value: Any) -> bool:
-        """Send command through queue with future."""
+        """Send command through queue with timeout protection."""
         try:
             future = asyncio.get_running_loop().create_future()
             await self._queue.put((command, value, future))
-            return await asyncio.wait_for(future, timeout=30)
+            
+            # Use a significantly increased timeout for waiting on the future
+            # This helps prevent timeouts in the main thread
+            return await asyncio.wait_for(future, timeout=60)
         except asyncio.TimeoutError:
-            _LOGGER.error("Command execution timed out")
+            _LOGGER.error("Command %s queue processing timed out", command)
             return False
         except Exception as err:
-            _LOGGER.error("Command execution failed: %s", err)
+            _LOGGER.error("Command %s failed in queue: %s", command, err)
             return False
 
 
@@ -118,12 +143,13 @@ async def send_eveus_command(
 ) -> bool:
     """Legacy command function maintained for compatibility."""
     try:
+        timeout = aiohttp.ClientTimeout(total=COMMAND_TIMEOUT)
         async with session.post(
             f"http://{host}/pageEvent",
             auth=aiohttp.BasicAuth(username, password),
             headers={"Content-type": "application/x-www-form-urlencoded"},
             data=f"pageevent={command}&{command}={value}",
-            timeout=COMMAND_TIMEOUT
+            timeout=timeout
         ) as response:
             response.raise_for_status()
             return True
