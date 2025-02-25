@@ -11,17 +11,84 @@ from homeassistant.helpers.entity import EntityCategory
 
 from .const import DOMAIN
 from .sensor_registry import get_sensor_definitions
-from .ev_sensors import (
-    EVSocKwhSensor,
-    EVSocPercentSensor,
-    TimeToTargetSocSensor,
-)
 from .common import EveusSensorBase
-from .utils import get_safe_value
 
 _LOGGER = logging.getLogger(__name__)
 
-# Define InputEntitiesStatusSensor directly in this file
+# Define the required input entities
+REQUIRED_INPUTS = [
+    "input_number.ev_initial_soc",
+    "input_number.ev_battery_capacity",
+    "input_number.ev_soc_correction",
+    "input_number.ev_target_soc"
+]
+
+class EVSocKwhSensor(EveusSensorBase):
+    """Sensor for state of charge in kWh."""
+    
+    ENTITY_NAME = "SOC Energy"
+    _attr_icon = "mdi:battery-charging"
+    
+    @property
+    def native_value(self) -> float | None:
+        """Return state of charge in kWh."""
+        # Check for required entities
+        for entity_id in ["input_number.ev_initial_soc", "input_number.ev_battery_capacity", "input_number.ev_soc_correction"]:
+            if self.hass.states.get(entity_id) is None:
+                return f"Missing {entity_id}"
+        
+        # Get values from input entities
+        initial_soc = self.hass.states.get("input_number.ev_initial_soc")
+        max_capacity = self.hass.states.get("input_number.ev_battery_capacity")
+        
+        # Calculate SOC in kWh
+        try:
+            soc_kwh = (float(initial_soc.state) / 100) * float(max_capacity.state)
+            return round(soc_kwh, 1)
+        except (ValueError, TypeError, AttributeError):
+            return "Invalid inputs"
+
+class EVSocPercentSensor(EveusSensorBase):
+    """Sensor for state of charge percentage."""
+    
+    ENTITY_NAME = "SOC Percent"
+    _attr_icon = "mdi:battery-charging"
+    
+    @property
+    def native_value(self) -> float | None:
+        """Return the state of charge percentage."""
+        # Check for required entities
+        if self.hass.states.get("input_number.ev_initial_soc") is None:
+            return "Missing input_number.ev_initial_soc"
+        
+        # Return initial SOC directly
+        initial_soc = self.hass.states.get("input_number.ev_initial_soc")
+        try:
+            return float(initial_soc.state)
+        except (ValueError, TypeError, AttributeError):
+            return "Invalid initial SOC"
+
+class TimeToTargetSocSensor(EveusSensorBase):
+    """Time to target SOC sensor."""
+    
+    ENTITY_NAME = "Time to Target SOC"
+    _attr_icon = "mdi:timer"
+    
+    @property
+    def native_value(self) -> str:
+        """Calculate and return formatted time to target."""
+        # Check if we're charging
+        power = self._updater.data.get("powerMeas", 0)
+        if power <= 0:
+            return "Not charging"
+            
+        # Check for required entities
+        for entity_id in REQUIRED_INPUTS:
+            if self.hass.states.get(entity_id) is None:
+                return f"Missing {entity_id}"
+        
+        return "Calculating..."
+
 class InputEntitiesStatusSensor(EveusSensorBase):
     """Sensor that monitors the status of required input entities."""
 
@@ -36,27 +103,19 @@ class InputEntitiesStatusSensor(EveusSensorBase):
         self._missing_entities = []
         self._invalid_entities = []
         self._attr_extra_state_attributes = {}
-        
-        # List of required input entities
-        self._required_inputs = [
-            "input_number.ev_initial_soc",
-            "input_number.ev_battery_capacity",
-            "input_number.ev_soc_correction",
-            "input_number.ev_target_soc"
-        ]
 
-    async def async_added_to_hass(self) -> None:
-        """Handle entity which will be added."""
-        await super().async_added_to_hass()
-        self.async_schedule_update_ha_state(True)
+    @property
+    def native_value(self) -> str:
+        """Return the state of the sensor."""
         self._check_inputs()
+        return self._state
 
     def _check_inputs(self) -> None:
         """Check all required input entities."""
         self._missing_entities = []
         self._invalid_entities = []
 
-        for entity_id in self._required_inputs:
+        for entity_id in REQUIRED_INPUTS:
             state = self.hass.states.get(entity_id)
             if state is None:
                 self._missing_entities.append(entity_id)
@@ -82,33 +141,22 @@ class InputEntitiesStatusSensor(EveusSensorBase):
         self._attr_extra_state_attributes = {
             "missing_entities": self._missing_entities,
             "invalid_entities": self._invalid_entities,
-            "required_entities": self._required_inputs,
-            "status_details": self._get_status_details()
+            "required_entities": REQUIRED_INPUTS,
+            "helper_creation_instructions": self._get_helper_instructions()
         }
 
-    def _get_status_details(self) -> dict[str, Any]:
-        """Get detailed status for each required entity."""
-        details = {}
-        for entity_id in self._required_inputs:
-            state = self.hass.states.get(entity_id)
-            if state is None:
-                details[entity_id] = "Missing"
-            else:
-                try:
-                    value = float(state.state)
-                    if value < 0:
-                        details[entity_id] = f"Invalid: {state.state}"
-                    else:
-                        details[entity_id] = f"OK: {state.state}"
-                except (ValueError, TypeError):
-                    details[entity_id] = f"Invalid: {state.state}"
-        return details
-
-    @property
-    def native_value(self) -> str:
-        """Return the state of the sensor."""
-        self._check_inputs()  # Check on every state request
-        return self._state
+    def _get_helper_instructions(self) -> str:
+        """Get instructions for creating missing helpers."""
+        if not self._missing_entities:
+            return "All required input helpers exist"
+            
+        return (
+            "Create these input helpers in Settings > Devices & Services > Helpers:\n"
+            "- input_number.ev_battery_capacity: Your EV's battery capacity in kWh\n"
+            "- input_number.ev_initial_soc: The initial state of charge percentage\n"
+            "- input_number.ev_soc_correction: Efficiency loss during charging\n"
+            "- input_number.ev_target_soc: Target state of charge for charging completion"
+        )
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -128,7 +176,7 @@ async def async_setup_entry(
         EVSocKwhSensor(updater),
         EVSocPercentSensor(updater),
         TimeToTargetSocSensor(updater),
-        InputEntitiesStatusSensor(updater),  # Using renamed class
+        InputEntitiesStatusSensor(updater),
     ]
     
     # Add all sensors
