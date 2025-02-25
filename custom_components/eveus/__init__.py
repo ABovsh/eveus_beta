@@ -87,13 +87,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Validate connection
         await async_validate_connection(hass, host, username, password)
         
-        # Check and create required input entities if needed
-        _LOGGER.info("Checking for required input entities")
-        created_entities = await check_and_create_inputs(hass)
-        if created_entities:
-            _LOGGER.info("Created %d missing input entities: %s", 
-                         len(created_entities), ", ".join(created_entities))
-        
         # Initialize data structure
         hass.data.setdefault(DOMAIN, {})
         hass.data[DOMAIN][entry.entry_id] = {
@@ -115,7 +108,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass.data[DOMAIN][entry.entry_id]["updater"] = updater
         except Exception as err:
             raise ConfigEntryNotReady(f"Failed to initialize updater: {err}")
-
+            
+        # Check and create required input entities if needed (with error handling)
+        try:
+            _LOGGER.info("Checking for required input entities")
+            created_entities = await check_and_create_inputs(hass)
+            
+            if created_entities:
+                _LOGGER.info("Created %d missing input entities: %s", 
+                            len(created_entities), ", ".join(created_entities))
+                
+                # Add a delay to allow entities to be fully registered before loading the platforms
+                # This helps avoid "entity not found" errors during initial setup
+                _LOGGER.info("Waiting for entities to become available...")
+                await asyncio.sleep(5)  # Increased delay to ensure entities are available
+        except Exception as err:
+            _LOGGER.warning("Error checking or creating input entities: %s", err)
+            # Continue setup even if entity creation fails
+        
         # Set up platforms
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
         
