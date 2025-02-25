@@ -14,7 +14,7 @@ This custom integration provides comprehensive monitoring and control of Eveus E
 - Temperature monitoring (box and plug)
 - Ground connection safety monitoring
 - Battery voltage monitoring
-- Energy counters with cost tracking (in UAH)
+- Energy counters with cost tracking (in ₴)
 
 ### 🚗 Advanced EV Features
 - Accurate State of Charge monitoring (kWh and percentage)
@@ -129,63 +129,140 @@ Alternatively, you can add these helpers via YAML by adding the above configurat
    - Password
    - Charger Model (16A or 32A)
 
-### Available Entities
+## Troubleshooting
 
-<details>
-<summary><b>Click to see all available sensors and controls</b></summary>
+### Advanced Debugging
 
-#### Basic Sensors:
-| Entity | Name | Description | Unit |
-|--------|------|-------------|------|
-| sensor.eveus_ev_charger_voltage | Voltage | Current voltage | V |
-| sensor.eveus_ev_charger_current | Current | Charging current | A |
-| sensor.eveus_ev_charger_power | Power | Charging power | W |
-| sensor.eveus_ev_charger_session_energy | Session Energy | Energy used in session | kWh |
-| sensor.eveus_ev_charger_total_energy | Total Energy | Total energy delivered | kWh |
-| sensor.eveus_ev_charger_counter_a_energy | Counter A Energy | Energy counter A | kWh |
-| sensor.eveus_ev_charger_counter_b_energy | Counter B Energy | Energy counter B | kWh |
-| sensor.eveus_ev_charger_counter_a_cost | Counter A Cost | Cost counter A | ₴ |
-| sensor.eveus_ev_charger_counter_b_cost | Counter B Cost | Cost counter B | ₴ |
+If you're experiencing issues with the SOC calculations or other sensors, follow these debugging steps:
 
-#### SOC Sensors:
-| Entity | Name | Description | Unit |
-|--------|------|-------------|------|
-| sensor.eveus_ev_charger_soc_energy | SOC Energy | Current battery charge | kWh |
-| sensor.eveus_ev_charger_soc_percent | SOC Percent | Current battery charge | % |
-| sensor.eveus_ev_charger_time_to_target | Time to Target | Time until target SOC | - |
+#### 1. Enable Enhanced Logging
 
-#### Diagnostic Sensors:
-| Entity | Name | Description |
-|--------|------|-------------|
-| sensor.eveus_ev_charger_state | State | Charger state |
-| sensor.eveus_ev_charger_substate | Substate | Detailed status |
-| sensor.eveus_ev_charger_ground | Ground | Ground connection status |
-| sensor.eveus_ev_charger_connection_quality | Connection Quality | Network connection quality |
+Add the following to your `configuration.yaml` file:
 
-#### Temperature Sensors:
-| Entity | Name | Description | Unit |
-|--------|------|-------------|------|
-| sensor.eveus_ev_charger_box_temperature | Box Temperature | Internal temperature | °C |
-| sensor.eveus_ev_charger_plug_temperature | Plug Temperature | Plug temperature | °C |
+```yaml
+logger:
+  default: info
+  logs:
+    custom_components.eveus.ev_sensors: debug
+    custom_components.eveus.utils: debug
+    custom_components.eveus.sensor: debug
+    custom_components.eveus: warning
+```
 
-#### Rate Sensors:
-| Entity | Name | Description | Unit |
-|--------|------|-------------|------|
-| sensor.eveus_ev_charger_primary_rate_cost | Primary Rate Cost | Primary rate cost | UAH/kWh |
-| sensor.eveus_ev_charger_active_rate_cost | Active Rate Cost | Currently active rate | UAH/kWh |
-| sensor.eveus_ev_charger_rate_2_cost | Rate 2 Cost | Secondary rate cost | UAH/kWh |
-| sensor.eveus_ev_charger_rate_3_cost | Rate 3 Cost | Tertiary rate cost | UAH/kWh |
-| sensor.eveus_ev_charger_rate_2_status | Rate 2 Status | Rate 2 enabled status | - |
-| sensor.eveus_ev_charger_rate_3_status | Rate 3 Status | Rate 3 enabled status | - |
+Restart Home Assistant and check the logs for detailed information about sensor calculations.
 
-#### Controls:
-| Entity | Name | Description |
-|--------|------|-------------|
-| number.eveus_ev_charger_charging_current | Charging Current | Control charging current (8-16A/32A) |
-| switch.eveus_ev_charger_stop_charging | Stop Charging | Control charging state |
-| switch.eveus_ev_charger_one_charge | One Charge | Enable one charge mode |
-| switch.eveus_ev_charger_reset_counter_a | Reset Counter A | Reset energy counter A |
-</details>
+#### 2. Use the Diagnostic Template
+
+Copy and paste this template into Developer Tools > Template to get a comprehensive diagnostic report:
+
+```yaml
+{# Debug template for Eveus SOC Sensors #}
+{% set debug_data = {
+    'inputs': {
+        'initial_soc': states('input_number.ev_initial_soc'),
+        'battery_capacity': states('input_number.ev_battery_capacity'),
+        'soc_correction': states('input_number.ev_soc_correction'),
+        'target_soc': states('input_number.ev_target_soc')
+    },
+    'sensors': {
+        'iem1': states('sensor.eveus_ev_charger_counter_a_energy'),
+        'soc_energy': states('sensor.eveus_ev_charger_soc_energy'),
+        'soc_percent': states('sensor.eveus_ev_charger_soc_percent'),
+        'time_to_target': states('sensor.eveus_ev_charger_time_to_target_soc'),
+        'power': states('sensor.eveus_ev_charger_power')
+    }
+} %}
+
+{# Calculation Preparation #}
+{% set initial_soc       = debug_data.inputs.initial_soc|float(0) %}
+{% set battery_capacity  = debug_data.inputs.battery_capacity|float(0) %}
+{% set soc_correction    = debug_data.inputs.soc_correction|float(0) %}
+{% set energy_charged    = debug_data.sensors.iem1|float(0) %}
+
+{# Validity Check #}
+{% set input_valid = (
+    initial_soc != 0 and
+    battery_capacity != 0 and
+    energy_charged != 'unknown' and
+    energy_charged != 'unavailable'
+) %}
+
+{# Calculations #}
+{% if input_valid %}
+  {% set initial_kwh = (initial_soc / 100) * battery_capacity %}
+  {% set efficiency  = (1 - soc_correction / 100) %}
+  {% set charged_kwh = energy_charged * efficiency %}
+  {% set total_kwh   = initial_kwh + charged_kwh %}
+
+  {% set soc_energy  = total_kwh|round(2) %}
+  {% set soc_percent = ((total_kwh / battery_capacity) * 100)|round(0) %}
+{% else %}
+  {% set soc_energy  = 'Cannot calculate - missing inputs' %}
+  {% set soc_percent = 'Cannot calculate - missing inputs' %}
+{% endif %}
+
+### Eveus SOC Sensor Debug Report ###
+
+## Required Input Entities ##
+{% for name, value in debug_data.inputs.items() %}
+- input_number.ev_{{ name }}: {{ value }}
+{% endfor %}
+
+## Sensor Values ##
+{% for name, value in debug_data.sensors.items() %}
+- {{ name }}: {{ value }}
+{% endfor %}
+
+## Entity Existence Check ##
+{% set check_entities = [
+  'input_number.ev_initial_soc',
+  'input_number.ev_battery_capacity',
+  'input_number.ev_soc_correction',
+  'input_number.ev_target_soc',
+  'sensor.eveus_ev_charger_counter_a_energy',
+  'sensor.eveus_ev_charger_power'
+] %}
+{% for entity_id in check_entities %}
+- {{ entity_id }}: {{ states(entity_id) != 'unknown' and states(entity_id) != 'unavailable' }}
+{% endfor %}
+
+## Expected Values ##
+- Expected SOC Energy: {{ soc_energy }}
+- Expected SOC Percent: {{ soc_percent }}
+
+## Calculation Details ##
+{% if input_valid %}
+Initial SOC: {{ initial_soc }}%
+Battery Capacity: {{ battery_capacity }} kWh
+Efficiency Correction: {{ soc_correction }}%
+Energy Charged: {{ energy_charged }} kWh
+Initial Energy: {{ initial_kwh }} kWh
+Efficiency Factor: {{ efficiency }}
+Charged Energy (with efficiency): {{ charged_kwh }} kWh
+Total Energy: {{ total_kwh }} kWh
+{% else %}
+Cannot perform calculations due to missing inputs.
+{% endif %}
+```
+
+#### 3. Common Issues and Solutions
+
+| Issue | Possible Solution |
+|-------|-------------------|
+| SOC sensors show "unknown" | Verify all required helper entities are created with exact names |
+| "Missing input entity" error | Check that all input_number entities exist and have valid values |
+| Automation errors | Update entity names in automations to match integration's naming pattern (eveus_ev_charger_*) |
+| Connection failures | Verify network connectivity, check IP address, username, and password |
+| Incorrect SOC calculations | Set initial SOC to match your EV's current charge level |
+
+#### 4. Reset Procedure
+
+If you encounter persistent issues:
+1. Remove the integration
+2. Restart Home Assistant
+3. Delete any remaining eveus entities (if any)
+4. Add the integration again
+5. Recreate any missing input_number entities
 
 ## Creating Automations and Controls
 
@@ -257,72 +334,6 @@ automation:
           entity_id: switch.eveus_ev_charger_stop_charging
 ```
 </details>
-
-### Dashboard Card Examples
-
-<details>
-<summary><b>EV Charging Status Card</b></summary>
-
-```yaml
-type: vertical-stack
-cards:
-  - type: entities
-    title: EV Charging Status
-    entities:
-      - entity: sensor.eveus_ev_charger_state
-      - entity: sensor.eveus_ev_charger_power
-      - entity: sensor.eveus_ev_charger_current
-      - entity: number.eveus_ev_charger_charging_current
-        name: Current Limit
-      - entity: sensor.eveus_ev_charger_soc_percent
-        name: State of Charge
-      - entity: sensor.eveus_ev_charger_time_to_target
-        name: Time to Target
-      - entity: sensor.eveus_ev_charger_session_energy
-        name: Session Energy
-  
-  - type: gauge
-    entity: sensor.eveus_ev_charger_soc_percent
-    name: EV Battery
-    min: 0
-    max: 100
-    severity:
-      green: 80
-      yellow: 50
-      red: 20
-```
-</details>
-
-## Troubleshooting
-
-### Common Issues and Solutions
-
-1. **Connection Problems**
-   - Verify your EV charger is on the same network as Home Assistant
-   - Check that you can reach the charger's IP address from the Home Assistant host
-   - Ensure the username and password are correct
-
-2. **SOC Calculation Issues**
-   - Make sure all required helper entities are created with the exact names shown
-   - Verify your EV's battery capacity is correctly set
-   - Reset initial SOC before each new charging session
-
-3. **Reset Procedure**
-   If the integration behaves unexpectedly:
-   - Restart the Home Assistant service
-   - If issues persist, remove and re-add the integration
-   - Check the Home Assistant logs for any errors related to the Eveus integration
-
-### Logs and Debugging
-
-For detailed logging, add the following to your `configuration.yaml`:
-
-```yaml
-logger:
-  default: warning
-  logs:
-    custom_components.eveus: debug
-```
 
 ## Support and Contributions
 
