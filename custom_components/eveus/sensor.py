@@ -10,6 +10,11 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .sensor_registry import get_sensor_definitions
+from .ev_sensors import (
+    EVSocKwhSensor,
+    EVSocPercentSensor,
+    TimeToTargetSocSensor,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -26,5 +31,12 @@ async def async_setup_entry(
     sensor_definitions = get_sensor_definitions()
     sensors = [definition.create_sensor(updater) for definition in sensor_definitions]
     
+    # Add EV-specific calculated sensors
+    ev_sensors = [
+        EVSocKwhSensor(updater),
+        EVSocPercentSensor(updater),
+        TimeToTargetSocSensor(updater),
+    ]
+    
     # Add all sensors
-    async_add_entities(sensors)
+    async_add_entities(sensors + ev_sensors)
