@@ -309,34 +309,54 @@ def get_rate3_status(updater, hass) -> str:
         return None
     return "Enabled" if enabled == 1 else "Disabled"
 
-def get_connection_quality(updater, hass) -> float:
-    """Get connection quality metrics."""
+def get_connection_quality(updater, hass) -> str:
+    """Get connection quality metrics with percentage symbol."""
     try:
         metrics = updater._network.connection_quality
-        return round(max(0, min(100, metrics['success_rate'])))
+        return f"{round(max(0, min(100, metrics['success_rate'])))}%"
     except Exception as err:
         _LOGGER.error("Error getting connection quality: %s", err)
-        return 0
+        return "0%"
 
 def get_connection_attrs(updater, hass) -> dict:
-    """Get connection quality attributes."""
+    """Get enhanced connection quality attributes."""
     try:
         metrics = updater._network.connection_quality
+        now = time.time()
+        
+        # Basic attributes
         attrs = {
             "latency_avg": f"{max(0, metrics['latency_avg']):.2f}s",
             "recent_errors": metrics['recent_errors'],
-            "requests_per_minute": max(0, metrics['requests_per_minute'])
+            "requests_per_minute": max(0, metrics['requests_per_minute']),
+            "status": "Excellent" if metrics['success_rate'] > 95 else 
+                    "Good" if metrics['success_rate'] > 80 else
+                    "Fair" if metrics['success_rate'] > 60 else
+                    "Poor" if metrics['success_rate'] > 30 else "Critical"
         }
+        
+        # Add connection history
+        if 'success_rate_history' in metrics:
+            history_values = list(metrics['success_rate_history'])[-10:] if 'success_rate_history' in metrics else []
+            attrs["connection_history"] = [f"{val:.1f}%" for val in history_values]
         
         # Only store last 10 errors to reduce memory and processing
         last_errors = list(updater._network._quality_metrics['last_errors'])[-10:]
         attrs["last_errors"] = [
             {
                 "type": err["type"],
-                "time": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(err["timestamp"]))
+                "time": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(err["timestamp"])),
+                "age": f"{(now - err['timestamp']):.0f}s ago"
             }
             for err in last_errors
         ]
+        
+        # Add uptime info
+        if 'last_successful_connection' in updater._network._quality_metrics:
+            last_success = updater._network._quality_metrics['last_successful_connection']
+            attrs["last_successful_connection"] = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(last_success))
+            attrs["uptime_duration"] = format_duration(int(now - last_success))
+            
         return attrs
         
     except Exception as err:
@@ -503,18 +523,16 @@ SENSOR_DEFINITIONS = [
         value_fn=get_connection_quality,
         icon="mdi:connection",
         state_class=SensorStateClass.MEASUREMENT,
-        precision=0,
         category=EntityCategory.DIAGNOSTIC,
         attributes_fn=get_connection_attrs,
-    ),
-    
+    ),    
     # Rate sensors
     SensorDefinition(
         entity_name="Primary Rate Cost",
         value_fn=get_primary_rate_cost,
         icon="mdi:currency-uah",
         state_class=SensorStateClass.MEASUREMENT,
-        unit="UAH/kWh",
+        unit="₴/kWh",
         precision=2,
     ),
     SensorDefinition(
@@ -522,7 +540,7 @@ SENSOR_DEFINITIONS = [
         value_fn=get_active_rate_cost,
         icon="mdi:currency-uah",
         state_class=SensorStateClass.MEASUREMENT,
-        unit="UAH/kWh",
+        unit="₴/kWh",
         precision=2,
         attributes_fn=get_active_rate_attrs,
     ),
@@ -531,7 +549,7 @@ SENSOR_DEFINITIONS = [
         value_fn=get_rate2_cost,
         icon="mdi:currency-uah",
         state_class=SensorStateClass.MEASUREMENT,
-        unit="UAH/kWh",
+        unit="₴/kWh",
         precision=2,
     ),
     SensorDefinition(
@@ -539,7 +557,7 @@ SENSOR_DEFINITIONS = [
         value_fn=get_rate3_cost,
         icon="mdi:currency-uah",
         state_class=SensorStateClass.MEASUREMENT,
-        unit="UAH/kWh",
+        unit="₴/kWh",
         precision=2,
     ),
     SensorDefinition(
