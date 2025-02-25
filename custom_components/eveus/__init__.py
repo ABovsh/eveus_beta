@@ -16,6 +16,7 @@ from homeassistant.helpers.typing import ConfigType
 
 from .const import DOMAIN, MODEL_MAX_CURRENT, CONF_MODEL
 from .common import EveusUpdater, EveusConnectionError
+from .input_creator import check_and_create_inputs
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -85,6 +86,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Validate connection
         await async_validate_connection(hass, host, username, password)
+        
+        # Check and create required input entities if needed
+        _LOGGER.info("Checking for required input entities")
+        created_entities = await check_and_create_inputs(hass)
+        if created_entities:
+            _LOGGER.info("Created %d missing input entities: %s", 
+                         len(created_entities), ", ".join(created_entities))
         
         # Initialize data structure
         hass.data.setdefault(DOMAIN, {})
