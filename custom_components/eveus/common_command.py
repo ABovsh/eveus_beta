@@ -13,7 +13,7 @@ _LOGGER = logging.getLogger(__name__)
 class CommandManager:
     """Manage command execution and retries."""
     
-    def __init__(self, updater):
+    def __init__(self, updater) -> None:
         """Initialize command manager."""
         self._updater = updater
         self._queue = asyncio.Queue()
@@ -23,7 +23,7 @@ class CommandManager:
 
     async def start(self) -> None:
         """Start command processing."""
-        if not self._task:
+        if self._task is None:
             self._task = asyncio.create_task(self._process_queue())
 
     async def stop(self) -> None:
@@ -41,6 +41,8 @@ class CommandManager:
         while True:
             try:
                 command, value, future = await self._queue.get()
+                
+                # Execute command with timeout protection
                 try:
                     if not future.done():
                         result = await asyncio.wait_for(
@@ -63,15 +65,15 @@ class CommandManager:
                 await asyncio.sleep(1)
 
     async def _execute_command(self, command: str, value: Any) -> bool:
-        """Execute command with retries."""
+        """Execute command with rate limiting."""
         async with self._lock:
+            # Rate limit commands
+            time_since_last = time.time() - self._last_command_time
+            if time_since_last < 1:
+                await asyncio.sleep(1 - time_since_last)
+            
             try:
-                time_since_last = time.time() - self._last_command_time
-                if time_since_last < 1:
-                    await asyncio.sleep(1 - time_since_last)
-
                 session = await self._updater._get_session()
-                start_time = time.time()
                 
                 async with session.post(
                     f"http://{self._updater.host}/pageEvent",
@@ -92,7 +94,7 @@ class CommandManager:
                 return False
 
     async def send_command(self, command: str, value: Any) -> bool:
-        """Send command through queue."""
+        """Send command through queue with future."""
         try:
             future = asyncio.get_running_loop().create_future()
             await self._queue.put((command, value, future))
@@ -104,6 +106,8 @@ class CommandManager:
             _LOGGER.error("Command execution failed: %s", err)
             return False
 
+
+# Simple version for direct use without queue
 async def send_eveus_command(
     session: aiohttp.ClientSession,
     host: str,
@@ -119,7 +123,7 @@ async def send_eveus_command(
             auth=aiohttp.BasicAuth(username, password),
             headers={"Content-type": "application/x-www-form-urlencoded"},
             data=f"pageevent={command}&{command}={value}",
-            timeout=aiohttp.ClientTimeout(total=30)
+            timeout=COMMAND_TIMEOUT
         ) as response:
             response.raise_for_status()
             return True
