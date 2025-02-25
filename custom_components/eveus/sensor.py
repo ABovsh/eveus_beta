@@ -17,14 +17,15 @@ from .ev_sensors import (
     TimeToTargetSocSensor,
 )
 from .common import EveusSensorBase
+from .utils import get_safe_value
 
 _LOGGER = logging.getLogger(__name__)
 
-# Define InputStatusSensor directly in this file instead of importing it
-class InputStatusSensor(EveusSensorBase):
+# Define InputEntitiesStatusSensor directly in this file
+class InputEntitiesStatusSensor(EveusSensorBase):
     """Sensor that monitors the status of required input entities."""
 
-    ENTITY_NAME = "Input Status"
+    ENTITY_NAME = "Input Entities Status"
     _attr_icon = "mdi:clipboard-check"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -127,7 +128,7 @@ async def async_setup_entry(
         EVSocKwhSensor(updater),
         EVSocPercentSensor(updater),
         TimeToTargetSocSensor(updater),
-        InputStatusSensor(updater),
+        InputEntitiesStatusSensor(updater),  # Using renamed class
     ]
     
     # Add all sensors
