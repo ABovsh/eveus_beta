@@ -16,6 +16,7 @@ from homeassistant.helpers.typing import ConfigType
 
 from .const import DOMAIN, MODEL_MAX_CURRENT, CONF_MODEL
 from .common import EveusUpdater, EveusConnectionError
+from .input_creator import check_missing_inputs
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -108,40 +109,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except Exception as err:
             raise ConfigEntryNotReady(f"Failed to initialize updater: {err}")
             
-        # Check for required input entities and show notification if missing
-        required_inputs = [
-            "input_number.ev_initial_soc",
-            "input_number.ev_battery_capacity", 
-            "input_number.ev_soc_correction", 
-            "input_number.ev_target_soc"
-        ]
-        
-        missing_inputs = []
-        for entity_id in required_inputs:
-            if hass.states.get(entity_id) is None:
-                missing_inputs.append(entity_id)
-        
-        if missing_inputs:
-            message = (
-                f"Eveus integration requires {len(missing_inputs)} input helper entities "
-                f"that are missing: {', '.join(missing_inputs)}.\n\n"
-                "Please create these input helpers manually through Settings > Devices & Services > Helpers."
-            )
-            
-            try:
-                await hass.services.async_call(
-                    "persistent_notification",
-                    "create",
-                    {
-                        "message": message,
-                        "title": "Eveus Integration Setup Required",
-                        "notification_id": "eveus_missing_inputs"
-                    },
-                    blocking=False
+        # Check for missing input entities and show notification if needed
+        try:
+            missing_entities = await check_missing_inputs(hass)
+            if missing_entities:
+                _LOGGER.warning(
+                    "Missing required input entities: %s. Notification has been created with instructions.",
+                    ", ".join(missing_entities)
                 )
-                _LOGGER.warning("Missing required input entities: %s", ", ".join(missing_inputs))
-            except Exception as err:
-                _LOGGER.error("Failed to create notification: %s", err)
+        except Exception as err:
+            _LOGGER.warning("Error checking for missing input entities: %s", err)
         
         # Set up platforms
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
