@@ -16,7 +16,6 @@ from homeassistant.helpers.typing import ConfigType
 
 from .const import DOMAIN, MODEL_MAX_CURRENT, CONF_MODEL
 from .common import EveusUpdater, EveusConnectionError
-from .input_creator import check_and_create_inputs
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -109,22 +108,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except Exception as err:
             raise ConfigEntryNotReady(f"Failed to initialize updater: {err}")
             
-        # Check and create required input entities if needed (with error handling)
-        try:
-            _LOGGER.info("Checking for required input entities")
-            created_entities = await check_and_create_inputs(hass)
+        # Check for required input entities and show notification if missing
+        required_inputs = [
+            "input_number.ev_initial_soc",
+            "input_number.ev_battery_capacity", 
+            "input_number.ev_soc_correction", 
+            "input_number.ev_target_soc"
+        ]
+        
+        missing_inputs = []
+        for entity_id in required_inputs:
+            if hass.states.get(entity_id) is None:
+                missing_inputs.append(entity_id)
+        
+        if missing_inputs:
+            message = (
+                f"Eveus integration requires {len(missing_inputs)} input helper entities "
+                f"that are missing: {', '.join(missing_inputs)}.\n\n"
+                "Please create these input helpers manually through Settings > Devices & Services > Helpers."
+            )
             
-            if created_entities:
-                _LOGGER.info("Created %d missing input entities: %s", 
-                            len(created_entities), ", ".join(created_entities))
-                
-                # Add a delay to allow entities to be fully registered before loading the platforms
-                # This helps avoid "entity not found" errors during initial setup
-                _LOGGER.info("Waiting for entities to become available...")
-                await asyncio.sleep(5)  # Increased delay to ensure entities are available
-        except Exception as err:
-            _LOGGER.warning("Error checking or creating input entities: %s", err)
-            # Continue setup even if entity creation fails
+            try:
+                await hass.services.async_call(
+                    "persistent_notification",
+                    "create",
+                    {
+                        "message": message,
+                        "title": "Eveus Integration Setup Required",
+                        "notification_id": "eveus_missing_inputs"
+                    },
+                    blocking=False
+                )
+                _LOGGER.warning("Missing required input entities: %s", ", ".join(missing_inputs))
+            except Exception as err:
+                _LOGGER.error("Failed to create notification: %s", err)
         
         # Set up platforms
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
