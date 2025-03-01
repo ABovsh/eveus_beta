@@ -1,87 +1,102 @@
 alias: 302_EV_Charging_CurrentChanged
 description: |
   # EV Charging Monitor - Current Changes
-  1. Primary: Monitors charging current adjustments
-  2. Safety: Validates charging parameters
-  3. Monitoring: Tracks real-time charging estimates
-  4. Notifications: Provides updated charging metrics
+  Version: 1.6.0
+  Last Updated: 2025-02-25
 
-  Version: 1.3.2
-  Last Updated: 2025-01-16
+  ## Functions:
+  1. Monitors charging current adjustments
+  2. Validates charging parameters
+  3. Tracks real-time charging estimates
+  4. Provides updated charging metrics
 
-  Dependencies:
-    - sensor.eveus_ev_charger_state
-    - number.eveus_ev_charger_charging_current
-    - sensor.eveus_ev_charger_soc_percent
-    - sensor.eveus_ev_charger_power
-    - input_number.ev_target_soc
-    - input_number.ev_battery_capacity
-    - input_number.ev_soc_correction
+  ## Dependencies:
+  - sensor.eveus_ev_charger_state
+  - sensor.eveus_ev_charger_soc_percent
+  - sensor.eveus_ev_charger_power 
+  - number.eveus_ev_charger_charging_current
+  - input_number.ev_target_soc
+  - input_number.ev_battery_capacity
+  - input_number.ev_soc_correction
 triggers:
   - entity_id: number.eveus_ev_charger_charging_current
     id: current_trigger
     trigger: state
 conditions:
-  - condition: and
-    conditions:
-      - condition: state
-        entity_id: sensor.eveus_ev_charger_state
-        state: Charging
-      - condition: template
-        value_template: >
-          {% set current =
-          states('number.eveus_ev_charger_charging_current')|float(0) %} {% set
-          prev_current = trigger.from_state.state|float(0) if trigger.from_state
-          else 0 %} {% set is_changed = current != prev_current %} {% set
-          is_valid_range = current >= 6 and current <= 32 %} {{ is_changed and
-          is_valid_range and prev_current > 0 }}
-      - condition: template
-        value_template: >
-          {% set vars = namespace() %} {% set vars.is_valid = true %} {% set
-          required_entities = [
-            'sensor.eveus_ev_charger_soc_percent',
-            'sensor.eveus_ev_charger_power',
-            'input_number.ev_target_soc',
-            'input_number.ev_battery_capacity'
-          ] %} {% for entity_id in required_entities %}
-            {% if states(entity_id) in ['unknown', 'unavailable', 'none'] %}
-              {% set vars.is_valid = false %}
-            {% endif %}
-          {% endfor %} {{ vars.is_valid }}
+  - condition: state
+    entity_id: sensor.eveus_ev_charger_state
+    state: Charging
+  - condition: template
+    value_template: >
+      {% set current =
+      states('number.eveus_ev_charger_charging_current')|float(0) %} {% set prev
+      = trigger.from_state.state|float(0) if trigger.from_state else 0 %} {{
+      current != prev and 6 <= current <= 32 and prev > 0 }}
+  - condition: template
+    value_template: |
+      {% set entities = [
+        'sensor.eveus_ev_charger_soc_percent',
+        'sensor.eveus_ev_charger_power',
+        'input_number.ev_target_soc',
+        'input_number.ev_battery_capacity'
+      ] %} {% set available = true %} {% for entity in entities %}
+        {% if states(entity) in ['unknown', 'unavailable', 'none'] %}
+          {% set available = false %}
+          {% break %}
+        {% endif %}
+      {% endfor %} {{ available }}
 actions:
   - data:
-      title: EV 🔌 Current Changed to {{ current_amps|round(0)|int }}A
-      message: >
-        ⏰ ETA: {{ time_remaining }}
-
-        🔋 SoC: {{ current_soc|round(0) }}% → {{ target_soc|round(0) }}% (+{{
-        soc_increase|round(0) }}%)
-
-        ⚡ Energy: {{ actual_kwh }} → {{ target_energy }}kWh (+{{ (target_energy
-        - actual_kwh)|round(1) }})
-    action: notify.<NOTIFICATION SERVICE NAME>
+      title: "*EV* 🔌 *Current Changed* | {{ current_amps|round(0)|int }}A"
+      message: |
+        ⏰ ETA: {{ time_data.eta }} (in {{ time_data.duration }})
+        🔋 SoC: {{ soc_data.current|round(0) }}% → {{ soc_data.target|round(0)
+        }}% (+{{ soc_data.increase|round(0) }}%)
+        ⚡ Energy: {{ soc_data.current_kwh }}kWh → {{ soc_data.target_kwh }}kWh
+        (+{{ soc_data.added_kwh }}kWh)
+    action: notify.<NOTIFICATION_SERVICE_NAME>
 variables:
   current_amps: "{{ states('number.eveus_ev_charger_charging_current')|float(0) }}"
-  current_soc: "{{ states('sensor.eveus_ev_charger_soc_percent')|float(0) }}"
-  target_soc: "{{ states('input_number.ev_target_soc')|float(0) }}"
-  battery_capacity: "{{ states('input_number.ev_battery_capacity')|float(0) }}"
-  power_meas: "{{ states('sensor.eveus_ev_charger_power')|float(0) }}"
-  correction: "{{ states('input_number.ev_soc_correction')|float(0) }}"
-  remaining_kwh: |
-    {{ (target_soc - current_soc) * battery_capacity / 100 }}
-  power_kw: >
-    {% set voltage = 230 %} {% set efficiency = 0.9 %} {% set adjusted_current =
-    states('number.eveus_ev_charger_charging_current')|float(0) %} {{ (voltage *
-    adjusted_current * efficiency / 1000) * (1 - correction / 100) }}
-  total_minutes: |
-    {{ (remaining_kwh / power_kw * 60)|round(0) if power_kw > 0 else 0 }}
-  time_remaining: >
-    {% set hours = (total_minutes / 60)|int %} {% set mins = (total_minutes %
-    60)|int %} {% set completion_time = now() + timedelta(hours=hours,
-    minutes=mins) %} {{ completion_time.strftime('%H:%M %d.%m.%Y') }} (in {{
-    hours }}h {{ mins }}m)
-  actual_kwh: "{{ (battery_capacity * current_soc / 100)|round(1) }}"
-  target_energy: "{{ (battery_capacity * target_soc / 100)|round(1) }}"
-  soc_increase: "{{ target_soc - current_soc }}"
+  soc_data:
+    current: "{{ states('sensor.eveus_ev_charger_soc_percent')|float(0) }}"
+    target: "{{ states('input_number.ev_target_soc')|float(0) }}"
+    increase: >
+      {{ states('input_number.ev_target_soc')|float(0) -
+      states('sensor.eveus_ev_charger_soc_percent')|float(0) }}
+    capacity: "{{ states('input_number.ev_battery_capacity')|float(0) }}"
+    current_kwh: >
+      {{ (states('input_number.ev_battery_capacity')|float(0) *
+      states('sensor.eveus_ev_charger_soc_percent')|float(0) / 100)|round(1) }}
+    target_kwh: >
+      {{ (states('input_number.ev_battery_capacity')|float(0) *
+      states('input_number.ev_target_soc')|float(0) / 100)|round(1) }}
+    added_kwh: >
+      {{ ((states('input_number.ev_battery_capacity')|float(0) *
+      states('input_number.ev_target_soc')|float(0) / 100) - 
+          (states('input_number.ev_battery_capacity')|float(0) * states('sensor.eveus_ev_charger_soc_percent')|float(0) / 100))|round(1) }}
+  time_data:
+    eta: >
+      {% set correction = states('input_number.ev_soc_correction')|float(0) %}
+      {% set remaining_kwh = ((states('input_number.ev_target_soc')|float(0) -
+                             states('sensor.eveus_ev_charger_soc_percent')|float(0)) * 
+                             states('input_number.ev_battery_capacity')|float(0) / 100) %}
+      {% set adjusted_power = 230 *
+                             states('number.eveus_ev_charger_charging_current')|float(0) * 0.9 / 1000 %}
+      {% set power_kw = adjusted_power * (1 - correction / 100) %} {% set
+      total_minutes = (remaining_kwh / power_kw * 60)|round(0) if power_kw > 0
+      else 0 %} {% set completion = now() + timedelta(minutes=total_minutes) %}
+      {{ completion.strftime('%H:%M %d.%m.%Y') }}
+    duration: >
+      {% set correction = states('input_number.ev_soc_correction')|float(0) %}
+      {% set remaining_kwh = ((states('input_number.ev_target_soc')|float(0) -
+                             states('sensor.eveus_ev_charger_soc_percent')|float(0)) * 
+                             states('input_number.ev_battery_capacity')|float(0) / 100) %}
+      {% set adjusted_power = 230 *
+                             states('number.eveus_ev_charger_charging_current')|float(0) * 0.9 / 1000 %}
+      {% set power_kw = adjusted_power * (1 - correction / 100) %} {% set
+      total_minutes = (remaining_kwh / power_kw * 60)|round(0) if power_kw > 0
+      else 0 %} {% set hours = (total_minutes / 60)|int %} {% set mins =
+      (total_minutes % 60)|int %} {{ hours|string + 'h ' + ('%02d'|format(mins))
+      + 'm' }}
 mode: restart
 max_exceeded: silent
