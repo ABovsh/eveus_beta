@@ -1,4 +1,4 @@
-"""Support for Eveus sensors.""""
+"""Support for Eveus sensors."""
 from __future__ import annotations
 
 import logging
