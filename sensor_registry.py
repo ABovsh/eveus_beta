@@ -319,46 +319,102 @@ def get_connection_quality(updater, hass) -> float:
         return 0
 
 def get_connection_attrs(updater, hass) -> dict:
-    """Get enhanced connection quality attributes without history."""
+    """Get enhanced connection quality attributes with comprehensive diagnostics."""
     try:
         metrics = updater._network.connection_quality
         now = time.time()
         
+        # Calculate connection trend
+        success_history = list(metrics.get('success_rate_history', []))
+        trend = "stable"
+        if len(success_history) > 10:
+            recent_avg = sum(success_history[-5:]) / min(5, len(success_history[-5:]))
+            earlier_avg = sum(success_history[-10:-5]) / min(5, len(success_history[-10:-5]))
+            if recent_avg > earlier_avg + 10:
+                trend = "improving"
+            elif recent_avg < earlier_avg - 10:
+                trend = "degrading"
+        
+        # Calculate hourly success rate
+        hourly_success = []
+        if len(success_history) > 0:
+            # Group by hour chunks (simplification)
+            chunk_size = min(12, len(success_history) // 4 + 1)  # Avoid dividing by zero
+            for i in range(0, len(success_history), chunk_size):
+                chunk = success_history[i:i+chunk_size]
+                if chunk:
+                    hourly_success.append(round(sum(chunk) / len(chunk), 1))
+        
         # Basic attributes
         attrs = {
-            "connection_quality": f"{round(max(0, min(100, metrics['success_rate'])))}%",  # Add percentage in attribute
+            "connection_quality": f"{round(max(0, min(100, metrics['success_rate'])))}%",
             "latency_avg": f"{max(0, metrics['latency_avg']):.2f}s",
             "recent_errors": metrics['recent_errors'],
             "requests_per_minute": max(0, metrics['requests_per_minute']),
             "status": "Excellent" if metrics['success_rate'] > 95 else 
-                    "Good" if metrics['success_rate'] > 80 else
-                    "Fair" if metrics['success_rate'] > 60 else
-                    "Poor" if metrics['success_rate'] > 30 else "Critical"
+                     "Good" if metrics['success_rate'] > 80 else
+                     "Fair" if metrics['success_rate'] > 60 else
+                     "Poor" if metrics['success_rate'] > 30 else "Critical",
+            "trend": trend,
+            "health_score": metrics.get('health_score', 100),  # Added health score
+            "hourly_success_rate": hourly_success,
+        }
+        
+        # Add network diagnostics
+        attrs["diagnostics"] = {
+            "last_successful_connection": time.strftime('%Y-%m-%d %H:%M:%S', 
+                                        time.localtime(metrics['last_successful_connection'])),
+            "consecutive_errors": metrics.get('consecutive_errors', 0),
+            "uptime": format_duration(int(now - metrics['last_successful_connection'])),
+            "peak_requests_per_minute": metrics.get('requests_per_minute', 0),
+        }
+        
+        # Add error analysis
+        attrs["error_analysis"] = {
+            "error_classes": metrics.get('error_classes', {}),
+            "recovery_recommendation": metrics.get('recovery_recommendation', {
+                "action": "none",
+                "description": "No recovery action needed",
+                "severity": "none"
+            }),
         }
         
         # Only store last errors with expanded details
-        last_errors = list(updater._network._quality_metrics['last_errors'])[-10:]
-        attrs["last_errors"] = [
-            {
-                "type": err["type"],
-                "time": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(err["timestamp"])),
-                "age": f"{(now - err['timestamp']):.0f}s ago",
-                "details": err.get("details", "No details available")
-            }
-            for err in last_errors
-        ]
+        last_errors = updater._network._quality_metrics.get('last_errors', [])
+        if last_errors:
+            attrs["recent_errors_detail"] = [
+                {
+                    "type": err.get("type", "Unknown"),
+                    "class": err.get("class", "unknown"),
+                    "time": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(err.get("timestamp", now))),
+                    "age": f"{int(now - err.get('timestamp', now))}s ago",
+                    "details": err.get("details", "No details available")
+                }
+                for err in list(last_errors)
+            ]
         
-        # Add uptime info
-        if 'last_successful_connection' in updater._network._quality_metrics:
-            last_success = updater._network._quality_metrics['last_successful_connection']
-            attrs["last_successful_connection"] = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(last_success))
-            attrs["uptime_duration"] = format_duration(int(now - last_success))
+        # Add performance metrics
+        if 'latency_avg' in metrics:
+            attrs["performance"] = {
+                "avg_latency": f"{metrics['latency_avg']:.3f}s",
+                "min_latency": f"{min(updater._network._quality_metrics.get('latency', [999])) if updater._network._quality_metrics.get('latency') else 0:.3f}s",
+                "max_latency": f"{max(updater._network._quality_metrics.get('latency', [0])) if updater._network._quality_metrics.get('latency') else 0:.3f}s",
+            }
+        
+        # Add device connectivity info based on host
+        attrs["device_info"] = {
+            "host": updater.host,
+            "protocol": "http",
+        }
             
         return attrs
         
     except Exception as err:
-        _LOGGER.error("Error getting connection attributes: %s", err)
-        return {}
+        _LOGGER.error("Error generating connection attributes: %s", err)
+        return {
+            "error": f"Failed to generate connection attributes: {str(err)}",
+            "status": "Unknown"
+        }
 
 # Create sensor definitions registry
 SENSOR_DEFINITIONS = [
