@@ -52,7 +52,7 @@ class SensorDefinition:
         device_class: Optional[str] = None,
         state_class: Optional[str] = None,
         unit: Optional[str] = None,
-        precision: Optional[int] = None,
+        precision: Optional[int] = None, # Correct parameter name
         category: Optional[EntityCategory] = None,
         attributes_fn: Optional[Callable] = None,
         # Default sensor_class to None, it will be handled below
@@ -65,7 +65,7 @@ class SensorDefinition:
         self.device_class = device_class
         self.state_class = state_class
         self.unit = unit
-        self.precision = precision
+        self.precision = precision # Store the precision
         self.category = category
         self.attributes_fn = attributes_fn
         # Correctly default to EveusTemplatedSensor if no specific class is provided
@@ -104,8 +104,9 @@ class EveusTemplatedSensor(EveusSensorBase):
             self._attr_state_class = definition.state_class
         if definition.unit:
             self._attr_native_unit_of_measurement = definition.unit
+        # Use suggested_display_precision for formatting hints in HA frontend
+        # This is set based on the 'precision' from the definition
         if definition.precision is not None:
-            # Use suggested_display_precision for formatting hints
             self._attr_suggested_display_precision = definition.precision
         if definition.category:
             self._attr_entity_category = definition.category
@@ -461,7 +462,7 @@ SENSOR_DEFINITIONS = [
         device_class=SensorDeviceClass.DURATION, # Use duration device class
         unit="s", # Base unit for duration is seconds
         state_class=SensorStateClass.TOTAL, # Represents total duration for session
-        suggested_display_precision=0, # Display seconds directly
+        precision=0, # Use correct parameter name 'precision'
     ),
     SensorDefinition(
         entity_name="Session Energy",
