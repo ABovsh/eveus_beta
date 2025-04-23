@@ -17,12 +17,11 @@ from homeassistant.const import (
     UnitOfEnergy,
     UnitOfPower,
     UnitOfTemperature,
-    PERCENTAGE # Import PERCENTAGE constant
 )
 from homeassistant.helpers.entity import EntityCategory
 import pytz
 
-from .common import EveusSensorBase # Import base class
+from .common import EveusSensorBase
 from .const import (
     CHARGING_STATES,
     ERROR_STATES,
@@ -37,10 +36,6 @@ from .utils import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Forward declaration for type hints if EveusTemplatedSensor is defined below
-# This avoids NameError if used in SensorDefinition before its definition
-class EveusTemplatedSensor(EveusSensorBase): pass
-
 class SensorDefinition:
     """Sensor definition class for template-based sensor creation."""
 
@@ -52,10 +47,9 @@ class SensorDefinition:
         device_class: Optional[str] = None,
         state_class: Optional[str] = None,
         unit: Optional[str] = None,
-        precision: Optional[int] = None, # Correct parameter name
+        precision: Optional[int] = None,
         category: Optional[EntityCategory] = None,
         attributes_fn: Optional[Callable] = None,
-        # Default sensor_class to None, it will be handled below
         sensor_class: Optional[Type[EveusSensorBase]] = None,
     ):
         """Initialize sensor definition."""
@@ -65,37 +59,28 @@ class SensorDefinition:
         self.device_class = device_class
         self.state_class = state_class
         self.unit = unit
-        self.precision = precision # Store the precision
+        self.precision = precision
         self.category = category
         self.attributes_fn = attributes_fn
-        # Correctly default to EveusTemplatedSensor if no specific class is provided
-        self.sensor_class = sensor_class or EveusTemplatedSensor
+        self.sensor_class = sensor_class or EveusSensorBase
 
     def create_sensor(self, updater):
-        """Create a sensor instance from this definition."""
-        sensor_cls = self.sensor_class
-        # Pass both updater and the definition itself to the constructor
-        # EveusTemplatedSensor expects this, custom classes might too.
-        return sensor_cls(updater, self)
+        """Create a sensor from this definition."""
+        return EveusTemplatedSensor(updater, self)
 
 
 class EveusTemplatedSensor(EveusSensorBase):
     """Templated sensor based on definitions."""
 
-    # Change constructor to accept definition
     def __init__(self, updater, definition: SensorDefinition):
         """Initialize the sensor with a definition."""
-        # Set ENTITY_NAME before calling super().__init__
         self.ENTITY_NAME = definition.entity_name
-        # Call the base class constructor (EveusSensorBase)
-        # It only expects 'updater'
         super().__init__(updater)
-
+        
         self._definition = definition
-        # Keep track of the last known value to avoid unnecessary updates if desired
-        self._last_value = None
-
-        # Apply definition attributes directly using _attr_ prefix
+        self._value = None
+        
+        # Apply definition attributes
         if definition.icon:
             self._attr_icon = definition.icon
         if definition.device_class:
@@ -104,8 +89,6 @@ class EveusTemplatedSensor(EveusSensorBase):
             self._attr_state_class = definition.state_class
         if definition.unit:
             self._attr_native_unit_of_measurement = definition.unit
-        # Use suggested_display_precision for formatting hints in HA frontend
-        # This is set based on the 'precision' from the definition
         if definition.precision is not None:
             self._attr_suggested_display_precision = definition.precision
         if definition.category:
@@ -113,184 +96,180 @@ class EveusTemplatedSensor(EveusSensorBase):
 
     @property
     def native_value(self) -> Any:
-        """Return the sensor value from definition's value function."""
+        """Return the sensor value from definition."""
         try:
-            # Call the value function defined in the SensorDefinition
-            new_value = self._definition.value_fn(self._updater, self.hass)
-            self._last_value = new_value # Store the latest value
-            return new_value
+            return self._definition.value_fn(self._updater, self.hass)
         except Exception as err:
-            # Log error and return the last known value or None
             _LOGGER.error("Error getting value for %s: %s", self.name, err)
-            return self._last_value # Return last good value during error
+            return None
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
-        """Return additional attributes if an attributes function is defined."""
-        attributes = {} # Start with empty dict
-
+        """Return additional attributes if defined."""
         if self._definition.attributes_fn:
             try:
-                # Get attributes from the definition's attributes function
-                custom_attributes = self._definition.attributes_fn(self._updater, self.hass)
-                if isinstance(custom_attributes, dict):
-                    attributes.update(custom_attributes)
-                else:
-                     _LOGGER.warning("Attributes function for %s did not return a dict.", self.name)
+                return self._definition.attributes_fn(self._updater, self.hass)
             except Exception as err:
                 _LOGGER.error("Error getting attributes for %s: %s", self.name, err)
-                attributes["error"] = f"Failed to retrieve attributes: {err}" # Add error info
-        return attributes
+        return {}
 
 
-# --- Sensor Value Functions ---
-
-def get_voltage(updater, hass) -> float | None:
+# Define sensor value functions
+def get_voltage(updater, hass) -> float:
     """Get voltage value."""
-    value = get_safe_value(updater.data, "voltMeas1", float)
-    return round(value, 0) if value is not None else None
+    value = get_safe_value(updater.data, "voltMeas1")
+    return None if value is None else round(value, 0)
 
-def get_current(updater, hass) -> float | None:
+def get_current(updater, hass) -> float:
     """Get current value."""
-    value = get_safe_value(updater.data, "curMeas1", float)
-    return round(value, 1) if value is not None else None
+    value = get_safe_value(updater.data, "curMeas1")
+    return None if value is None else round(value, 1)
 
-def get_power(updater, hass) -> float | None:
+def get_power(updater, hass) -> float:
     """Get power value."""
-    value = get_safe_value(updater.data, "powerMeas", float)
-    # Ensure power is non-negative
-    return max(0.0, round(value, 1)) if value is not None else None
+    value = get_safe_value(updater.data, "powerMeas")
+    return None if value is None else round(value, 1)
 
-def get_current_set(updater, hass) -> float | None:
+def get_current_set(updater, hass) -> float:
     """Get current set value."""
-    value = get_safe_value(updater.data, "currentSet", float)
-    return round(value, 0) if value is not None else None
+    value = get_safe_value(updater.data, "currentSet")
+    return None if value is None else round(value, 0)
 
-def get_session_time(updater, hass) -> int | None:
-    """Get session time in seconds."""
-    # Return raw seconds for duration sensor state
+def get_session_time(updater, hass) -> str:
+    """Get formatted session time."""
     seconds = get_safe_value(updater.data, "sessionTime", int)
-    return max(0, seconds) if seconds is not None else None
+    return None if seconds is None else format_duration(seconds)
 
 def get_session_time_attrs(updater, hass) -> dict:
-    """Get session time attributes (formatted duration)."""
+    """Get session time attributes."""
     seconds = get_safe_value(updater.data, "sessionTime", int)
-    attrs = {}
-    if seconds is not None:
-        attrs["formatted_duration"] = format_duration(max(0, seconds))
-    return attrs
+    return {"duration_seconds": seconds} if seconds is not None else {}
 
-def get_session_energy(updater, hass) -> float | None:
+def get_session_energy(updater, hass) -> float:
     """Get session energy."""
-    value = get_safe_value(updater.data, "sessionEnergy", float)
-    return round(value, 2) if value is not None else None
+    value = get_safe_value(updater.data, "sessionEnergy")
+    return None if value is None else round(value, 2)
 
-def get_total_energy(updater, hass) -> float | None:
+def get_total_energy(updater, hass) -> float:
     """Get total energy."""
-    value = get_safe_value(updater.data, "totalEnergy", float)
-    return round(value, 2) if value is not None else None
+    value = get_safe_value(updater.data, "totalEnergy")
+    return None if value is None else round(value, 2)
 
-def get_counter_a_energy(updater, hass) -> float | None:
+def get_counter_a_energy(updater, hass) -> float:
     """Get counter A energy."""
-    value = get_safe_value(updater.data, "IEM1", float)
-    return round(value, 2) if value is not None else None
+    value = get_safe_value(updater.data, "IEM1")
+    return None if value is None else round(value, 2)
 
-def get_counter_a_cost(updater, hass) -> float | None:
+def get_counter_a_cost(updater, hass) -> float:
     """Get counter A cost."""
-    value = get_safe_value(updater.data, "IEM1_money", float)
-    # Assume value is in smallest currency unit (e.g., cents, kopecks)
-    return round(value / 100, 2) if value is not None else None
+    value = get_safe_value(updater.data, "IEM1_money")
+    return None if value is None else round(value, 2)
 
-def get_counter_b_energy(updater, hass) -> float | None:
+def get_counter_b_energy(updater, hass) -> float:
     """Get counter B energy."""
-    value = get_safe_value(updater.data, "IEM2", float)
-    return round(value, 2) if value is not None else None
+    value = get_safe_value(updater.data, "IEM2")
+    return None if value is None else round(value, 2)
 
-def get_counter_b_cost(updater, hass) -> float | None:
+def get_counter_b_cost(updater, hass) -> float:
     """Get counter B cost."""
-    value = get_safe_value(updater.data, "IEM2_money", float)
-    # Assume value is in smallest currency unit (e.g., cents, kopecks)
-    return round(value / 100, 2) if value is not None else None
+    value = get_safe_value(updater.data, "IEM2_money")
+    return None if value is None else round(value, 2)
 
-def get_charger_state(updater, hass) -> str | None:
+def get_charger_state(updater, hass) -> str:
     """Get charger state."""
     state_value = get_safe_value(updater.data, "state", int)
     if state_value is not None:
-        return CHARGING_STATES.get(state_value, f"Unknown State ({state_value})")
+        return CHARGING_STATES.get(state_value, "Unknown")
     return None
 
-def get_charger_substate(updater, hass) -> str | None:
+def get_charger_substate(updater, hass) -> str:
     """Get charger substate."""
     state = get_safe_value(updater.data, "state", int)
     substate = get_safe_value(updater.data, "subState", int)
-
-    if state is None or substate is None:
+    
+    if None in (state, substate):
         return None
-
+        
     if state == 7:  # Error state
-        return ERROR_STATES.get(substate, f"Unknown Error ({substate})")
-    return NORMAL_SUBSTATES.get(substate, f"Unknown Substate ({substate})")
+        return ERROR_STATES.get(substate, "Unknown Error")
+    return NORMAL_SUBSTATES.get(substate, "Unknown State")
 
-def get_ground_status(updater, hass) -> str | None:
+def get_ground_status(updater, hass) -> str:
     """Get ground status."""
     value = get_safe_value(updater.data, "ground", int)
     if value is not None:
         return "Connected" if value == 1 else "Not Connected"
     return None
 
-def get_box_temperature(updater, hass) -> float | None:
+def get_box_temperature(updater, hass) -> float:
     """Get box temperature."""
-    return get_safe_value(updater.data, "temperature1", float)
+    return get_safe_value(updater.data, "temperature1")
 
-def get_plug_temperature(updater, hass) -> float | None:
+def get_plug_temperature(updater, hass) -> float:
     """Get plug temperature."""
-    return get_safe_value(updater.data, "temperature2", float)
+    return get_safe_value(updater.data, "temperature2")
 
-def get_battery_voltage(updater, hass) -> float | None:
+def get_battery_voltage(updater, hass) -> float:
     """Get battery voltage."""
-    value = get_safe_value(updater.data, "vBat", float)
-    return round(value, 2) if value is not None else None
+    value = get_safe_value(updater.data, "vBat")
+    return None if value is None else round(value, 2)
 
-def get_system_time(updater, hass) -> datetime | None:
-    """Get system time as datetime object."""
-    # Return datetime object for timestamp sensor state
+def get_system_time(updater, hass) -> str:
+    """Get system time with timezone correction."""
     try:
         timestamp = get_safe_value(updater.data, "systemTime", int)
-        if timestamp is None or timestamp <= 0:
+        if timestamp is None:
+            return None
+            
+        # Get HA timezone
+        ha_timezone = hass.config.time_zone
+        if not ha_timezone:
+            _LOGGER.warning("No timezone set in Home Assistant configuration")
             return None
 
-        # Assume device timestamp is UTC
-        dt_device_utc = datetime.fromtimestamp(timestamp, tz=pytz.UTC)
-        return dt_device_utc # Let HA handle timezone display
-
+        # Convert timestamp to datetime in UTC
+        dt_utc = datetime.fromtimestamp(timestamp, tz=pytz.UTC)
+        
+        # Get local timezone
+        local_tz = pytz.timezone(ha_timezone)
+        
+        # Check if we're in DST
+        offset = 7200  # Base offset (2 hours)
+        if is_dst(ha_timezone, dt_utc):
+            offset += 3600  # Add 1 hour during DST
+        
+        # Apply correction
+        corrected_timestamp = timestamp - offset
+        dt_corrected = datetime.fromtimestamp(corrected_timestamp, tz=pytz.UTC)
+        dt_local = dt_corrected.astimezone(local_tz)
+        
+        return dt_local.strftime("%H:%M")
+            
     except Exception as err:
-        _LOGGER.error("Error processing system time: %s", err)
+        _LOGGER.error("Error getting system time: %s", err)
         return None
 
-def get_primary_rate_cost(updater, hass) -> float | None:
+def get_primary_rate_cost(updater, hass) -> float:
     """Get primary rate cost."""
     value = get_safe_value(updater.data, "tarif", float)
-    # Assuming value is in cents/kopecks per kWh
-    return round(value / 100, 2) if value is not None else None
+    return None if value is None else round(value / 100, 2)
 
-def get_active_rate_cost(updater, hass) -> float | None:
+def get_active_rate_cost(updater, hass) -> float:
     """Get active rate cost."""
     try:
         active_rate = get_safe_value(updater.data, "activeTarif", int)
         if active_rate is None:
             return None
 
-        value = None
-        if active_rate == 0: # Primary
+        if active_rate == 0:
             value = get_safe_value(updater.data, "tarif", float)
-        elif active_rate == 1: # Rate 2 (Tarif A)
+        elif active_rate == 1:
             value = get_safe_value(updater.data, "tarifAValue", float)
-        elif active_rate == 2: # Rate 3 (Tarif B)
+        elif active_rate == 2:
             value = get_safe_value(updater.data, "tarifBValue", float)
         else:
-            return None # Unknown rate
+            return None
 
-        # Assuming value is in cents/kopecks per kWh
         return round(value / 100, 2) if value is not None else None
     except Exception as err:
         _LOGGER.error("Error getting active rate cost: %s", err)
@@ -301,122 +280,89 @@ def get_active_rate_attrs(updater, hass) -> dict:
     try:
         active_rate = get_safe_value(updater.data, "activeTarif", int)
         if active_rate is not None:
-            return {"active_rate_name": RATE_STATES.get(active_rate, f"Unknown ({active_rate})")}
-    except Exception as e:
-        _LOGGER.debug("Could not determine active rate attributes: %s", e)
+            return {"rate_name": RATE_STATES.get(active_rate, "Unknown")}
+    except Exception:
+        pass
     return {}
 
-def get_rate2_cost(updater, hass) -> float | None:
+def get_rate2_cost(updater, hass) -> float:
     """Get rate 2 cost."""
     value = get_safe_value(updater.data, "tarifAValue", float)
-    return round(value / 100, 2) if value is not None else None
+    return None if value is None else round(value / 100, 2)
 
-def get_rate3_cost(updater, hass) -> float | None:
+def get_rate3_cost(updater, hass) -> float:
     """Get rate 3 cost."""
     value = get_safe_value(updater.data, "tarifBValue", float)
-    return round(value / 100, 2) if value is not None else None
+    return None if value is None else round(value / 100, 2)
 
-def get_rate_status(updater, hass, enable_key: str) -> str | None:
-    """Helper to get rate status (Enabled/Disabled)."""
-    enabled = get_safe_value(updater.data, enable_key, int)
+def get_rate2_status(updater, hass) -> str:
+    """Get rate 2 status."""
+    enabled = get_safe_value(updater.data, "tarifAEnable", int)
     if enabled is None:
         return None
     return "Enabled" if enabled == 1 else "Disabled"
 
-def get_rate2_status(updater, hass) -> str | None:
-    """Get rate 2 status."""
-    return get_rate_status(updater, hass, "tarifAEnable")
-
-def get_rate3_status(updater, hass) -> str | None:
+def get_rate3_status(updater, hass) -> str:
     """Get rate 3 status."""
-    return get_rate_status(updater, hass, "tarifBEnable")
+    enabled = get_safe_value(updater.data, "tarifBEnable", int)
+    if enabled is None:
+        return None
+    return "Enabled" if enabled == 1 else "Disabled"
 
-# --- Connection Quality Functions ---
-
-def get_connection_quality(updater, hass) -> float | None:
-    """Get connection quality success rate as percentage."""
+def get_connection_quality(updater, hass) -> float:
+    """Get connection quality metrics as numeric value (not percentage string)."""
     try:
-        # Access NetworkManager instance via updater
         metrics = updater._network.connection_quality
-        # Ensure value is between 0 and 100
-        quality = round(max(0.0, min(100.0, metrics.get('success_rate', 100.0))))
-        return quality
+        return round(max(0, min(100, metrics['success_rate'])))
     except Exception as err:
         _LOGGER.error("Error getting connection quality: %s", err)
-        return None # Or return 0 if unavailable
+        return 0
 
 def get_connection_attrs(updater, hass) -> dict:
-    """Get enhanced connection quality attributes."""
-    attrs = {}
+    """Get enhanced connection quality attributes without history."""
     try:
-        # Access NetworkManager instance via updater
-        network_manager = updater._network
-        metrics = network_manager.connection_quality
-        quality_details = network_manager._quality_metrics # Access raw metrics
+        metrics = updater._network.connection_quality
         now = time.time()
-
-        # Basic metrics
-        attrs["average_latency_ms"] = round(metrics.get('latency_avg', 0) * 1000)
-        attrs["requests_per_minute"] = round(metrics.get('requests_per_minute', 0))
-        attrs["recent_errors_count"] = metrics.get('recent_errors', 0)
-
-        # Success rate and status
-        success_rate = metrics.get('success_rate', 100.0)
-        status = "Excellent" if success_rate > 95 else \
-                 "Good" if success_rate > 80 else \
-                 "Fair" if success_rate > 60 else \
-                 "Poor" if success_rate > 30 else "Critical"
-        attrs["status"] = status
-
-        # Last successful connection and uptime
-        last_success_ts = quality_details.get('last_successful_connection')
-        if last_success_ts:
-            last_success_dt = datetime.fromtimestamp(last_success_ts)
-            attrs["last_successful_connection"] = last_success_dt.isoformat()
-            attrs["time_since_last_success"] = format_duration(int(now - last_success_ts))
-        else:
-            attrs["last_successful_connection"] = "Never"
-            attrs["time_since_last_success"] = "N/A"
-
-        # Last errors details
-        last_errors = list(quality_details.get('last_errors', []))
-        if last_errors:
-            formatted_errors = []
-            for err in reversed(last_errors): # Show newest first
-                error_time = datetime.fromtimestamp(err.get('timestamp', now))
-                error_age = format_duration(int(now - err.get('timestamp', now)))
-                formatted_errors.append(
-                    f"{error_time.strftime('%H:%M:%S')} ({error_age} ago): {err.get('type', 'Unknown')}"
-                )
-            attrs["last_errors"] = formatted_errors
-            # Add details of the very last error
-            last_error_details = last_errors[-1]
-            attrs["last_error_type"] = last_error_details.get('type', 'Unknown')
-            attrs["last_error_time"] = datetime.fromtimestamp(last_error_details.get('timestamp', now)).isoformat()
-        else:
-            attrs["last_errors"] = []
-            attrs["last_error_type"] = "None"
-            attrs["last_error_time"] = "N/A"
-
-        # Error type counts
-        error_counts = quality_details.get('error_types')
-        if error_counts:
-             attrs["error_type_counts"] = dict(error_counts)
-
-        # Optional: Success Rate History (can make attributes large)
-        # attrs["success_rate_history"] = list(quality_details.get('success_rate_history', []))
-
+        
+        # Basic attributes
+        attrs = {
+            "connection_quality": f"{round(max(0, min(100, metrics['success_rate'])))}%",  # Add percentage in attribute
+            "latency_avg": f"{max(0, metrics['latency_avg']):.2f}s",
+            "recent_errors": metrics['recent_errors'],
+            "requests_per_minute": max(0, metrics['requests_per_minute']),
+            "status": "Excellent" if metrics['success_rate'] > 95 else 
+                    "Good" if metrics['success_rate'] > 80 else
+                    "Fair" if metrics['success_rate'] > 60 else
+                    "Poor" if metrics['success_rate'] > 30 else "Critical"
+        }
+        
+        # Only store last errors with expanded details
+        last_errors = list(updater._network._quality_metrics['last_errors'])[-10:]
+        attrs["last_errors"] = [
+            {
+                "type": err["type"],
+                "time": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(err["timestamp"])),
+                "age": f"{(now - err['timestamp']):.0f}s ago",
+                "details": err.get("details", "No details available")
+            }
+            for err in last_errors
+        ]
+        
+        # Add uptime info
+        if 'last_successful_connection' in updater._network._quality_metrics:
+            last_success = updater._network._quality_metrics['last_successful_connection']
+            attrs["last_successful_connection"] = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(last_success))
+            attrs["uptime_duration"] = format_duration(int(now - last_success))
+            
+        return attrs
+        
     except Exception as err:
         _LOGGER.error("Error getting connection attributes: %s", err)
-        attrs["error"] = f"Failed to retrieve attributes: {err}"
+        return {}
 
-    return attrs
-
-
-# --- Sensor Definitions Registry ---
-
+# Create sensor definitions registry
 SENSOR_DEFINITIONS = [
-    # --- Basic Sensors ---
+    # Basic sensors
     SensorDefinition(
         entity_name="Voltage",
         value_fn=get_voltage,
@@ -449,45 +395,36 @@ SENSOR_DEFINITIONS = [
         value_fn=get_current_set,
         icon="mdi:current-ac",
         device_class=SensorDeviceClass.CURRENT,
-        state_class=SensorStateClass.MEASUREMENT, # Not strictly measurement, but represents a setting
+        state_class=SensorStateClass.MEASUREMENT,
         unit=UnitOfElectricCurrent.AMPERE,
         precision=0,
-        category=EntityCategory.CONFIG # Configurable value
     ),
-    # ================================================================
-    # == CORRECTED Session Time Definition ==
-    # ================================================================
     SensorDefinition(
         entity_name="Session Time",
-        value_fn=get_session_time, # Returns seconds
-        icon="mdi:timer-outline", # Updated icon
-        attributes_fn=get_session_time_attrs, # Attribute for formatted string
-        device_class=SensorDeviceClass.DURATION, # Use duration device class
-        unit="s", # Base unit for duration is seconds
-        state_class=SensorStateClass.TOTAL, # Represents total duration for session
-        precision=0, # Use the correct parameter name 'precision'
+        value_fn=get_session_time,
+        icon="mdi:timer",
+        attributes_fn=get_session_time_attrs,
     ),
-    # ================================================================
     SensorDefinition(
         entity_name="Session Energy",
         value_fn=get_session_energy,
-        icon="mdi:lightning-bolt-circle", # Updated icon
+        icon="mdi:transmission-tower-export",
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL, # Energy for current session
+        state_class=SensorStateClass.TOTAL,
         unit=UnitOfEnergy.KILO_WATT_HOUR,
         precision=2,
     ),
     SensorDefinition(
         entity_name="Total Energy",
         value_fn=get_total_energy,
-        icon="mdi:meter-electric", # Updated icon
+        icon="mdi:transmission-tower",
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING, # Always increasing total
+        state_class=SensorStateClass.TOTAL_INCREASING,
         unit=UnitOfEnergy.KILO_WATT_HOUR,
         precision=2,
     ),
-
-    # --- Counter Sensors ---
+    
+    # Counter sensors
     SensorDefinition(
         entity_name="Counter A Energy",
         value_fn=get_counter_a_energy,
@@ -500,10 +437,9 @@ SENSOR_DEFINITIONS = [
     SensorDefinition(
         entity_name="Counter A Cost",
         value_fn=get_counter_a_cost,
-        icon="mdi:currency-usd", # Changed to generic currency icon
-        device_class=SensorDeviceClass.MONETARY, # Use monetary device class
+        icon="mdi:currency-uah",
         state_class=SensorStateClass.TOTAL_INCREASING,
-        # unit="USD", # Unit should be set based on HA currency settings ideally, fallback
+        unit="₴",
         precision=2,
     ),
     SensorDefinition(
@@ -518,37 +454,30 @@ SENSOR_DEFINITIONS = [
     SensorDefinition(
         entity_name="Counter B Cost",
         value_fn=get_counter_b_cost,
-        icon="mdi:currency-usd", # Changed to generic currency icon
-        device_class=SensorDeviceClass.MONETARY,
+        icon="mdi:currency-uah",
         state_class=SensorStateClass.TOTAL_INCREASING,
-        # unit="USD",
+        unit="₴",
         precision=2,
     ),
-
-    # --- Diagnostic Sensors ---
+    
+    # Diagnostic sensors
     SensorDefinition(
         entity_name="State",
         value_fn=get_charger_state,
         icon="mdi:state-machine",
         category=EntityCategory.DIAGNOSTIC,
-        device_class=SensorDeviceClass.ENUM, # Represents distinct states
-        # options=list(CHARGING_STATES.values()) # Optional: provide possible states
     ),
     SensorDefinition(
         entity_name="Substate",
         value_fn=get_charger_substate,
-        icon="mdi:information-outline", # Updated icon
+        icon="mdi:information-variant",
         category=EntityCategory.DIAGNOSTIC,
-        device_class=SensorDeviceClass.ENUM,
-        # options=list(NORMAL_SUBSTATES.values()) + list(ERROR_STATES.values()) # Optional
     ),
     SensorDefinition(
-        entity_name="Ground Status", # Renamed from "Ground"
+        entity_name="Ground",
         value_fn=get_ground_status,
-        icon="mdi:earth", # Updated icon
+        icon="mdi:electric-switch",
         category=EntityCategory.DIAGNOSTIC,
-        device_class=SensorDeviceClass.ENUM,
-        # options=["Connected", "Not Connected"] # Optional
     ),
     SensorDefinition(
         entity_name="Box Temperature",
@@ -557,104 +486,89 @@ SENSOR_DEFINITIONS = [
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         unit=UnitOfTemperature.CELSIUS,
-        precision=1, # Increased precision slightly
+        precision=0,
         category=EntityCategory.DIAGNOSTIC,
     ),
     SensorDefinition(
         entity_name="Plug Temperature",
         value_fn=get_plug_temperature,
-        icon="mdi:thermometer-lines", # Updated icon
+        icon="mdi:thermometer-high",
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         unit=UnitOfTemperature.CELSIUS,
-        precision=1, # Increased precision slightly
+        precision=0,
         category=EntityCategory.DIAGNOSTIC,
     ),
     SensorDefinition(
-        entity_name="Internal Battery Voltage", # Renamed for clarity
+        entity_name="Battery Voltage",
         value_fn=get_battery_voltage,
-        icon="mdi:battery-heart-variant", # Updated icon
+        icon="mdi:battery",
         device_class=SensorDeviceClass.VOLTAGE,
         state_class=SensorStateClass.MEASUREMENT,
-        unit=UnitOfElectricPotential.VOLT, # Corrected unit
+        unit="V",
         precision=2,
         category=EntityCategory.DIAGNOSTIC,
     ),
     SensorDefinition(
-        entity_name="Device Time", # Renamed from "System Time"
-        value_fn=get_system_time, # Returns datetime object
+        entity_name="System Time",
+        value_fn=get_system_time,
         icon="mdi:clock-outline",
         category=EntityCategory.DIAGNOSTIC,
-        device_class=SensorDeviceClass.TIMESTAMP # Use timestamp device class
     ),
     SensorDefinition(
         entity_name="Connection Quality",
-        value_fn=get_connection_quality, # Function for main state (percentage)
-        icon="mdi:signal-variant", # Updated icon
+        value_fn=get_connection_quality,
+        icon="mdi:connection",
         state_class=SensorStateClass.MEASUREMENT,
-        unit=PERCENTAGE, # Use HA constant for percentage
+        unit="%",  # Add percentage unit
         precision=0,
         category=EntityCategory.DIAGNOSTIC,
-        attributes_fn=get_connection_attrs, # Function for detailed attributes
+        attributes_fn=get_connection_attrs,
     ),
-
-    # --- Rate Sensors ---
+    
+    # Rate sensors
     SensorDefinition(
         entity_name="Primary Rate Cost",
         value_fn=get_primary_rate_cost,
-        icon="mdi:currency-usd",
-        device_class=SensorDeviceClass.MONETARY,
-        state_class=SensorStateClass.MEASUREMENT, # Cost is a measurement
-        # unit="USD/kWh", # Define unit clearly
-        precision=2, # Or more precision if needed (e.g., 3 for $0.123)
-        category=EntityCategory.CONFIG, # Related to configuration
+        icon="mdi:currency-uah",
+        state_class=SensorStateClass.MEASUREMENT,
+        unit="₴/kWh",
+        precision=2,
     ),
     SensorDefinition(
         entity_name="Active Rate Cost",
         value_fn=get_active_rate_cost,
-        icon="mdi:currency-usd-circle", # Updated icon
-        device_class=SensorDeviceClass.MONETARY,
+        icon="mdi:currency-uah",
         state_class=SensorStateClass.MEASUREMENT,
-        # unit="USD/kWh",
+        unit="₴/kWh",
         precision=2,
         attributes_fn=get_active_rate_attrs,
-        category=EntityCategory.CONFIG,
     ),
     SensorDefinition(
         entity_name="Rate 2 Cost",
         value_fn=get_rate2_cost,
-        icon="mdi:currency-usd",
-        device_class=SensorDeviceClass.MONETARY,
+        icon="mdi:currency-uah",
         state_class=SensorStateClass.MEASUREMENT,
-        # unit="USD/kWh",
+        unit="₴/kWh",
         precision=2,
-        category=EntityCategory.CONFIG,
     ),
     SensorDefinition(
         entity_name="Rate 3 Cost",
         value_fn=get_rate3_cost,
-        icon="mdi:currency-usd",
-        device_class=SensorDeviceClass.MONETARY,
+        icon="mdi:currency-uah",
         state_class=SensorStateClass.MEASUREMENT,
-        # unit="USD/kWh",
+        unit="₴/kWh",
         precision=2,
-        category=EntityCategory.CONFIG,
     ),
     SensorDefinition(
         entity_name="Rate 2 Status",
         value_fn=get_rate2_status,
-        icon="mdi:calendar-clock", # Updated icon
-        category=EntityCategory.CONFIG,
-        device_class=SensorDeviceClass.ENUM,
-        # options=["Enabled", "Disabled"]
+        icon="mdi:clock-check",
     ),
     SensorDefinition(
         entity_name="Rate 3 Status",
         value_fn=get_rate3_status,
-        icon="mdi:calendar-clock",
-        category=EntityCategory.CONFIG,
-        device_class=SensorDeviceClass.ENUM,
-        # options=["Enabled", "Disabled"]
+        icon="mdi:clock-check",
     ),
 ]
 
