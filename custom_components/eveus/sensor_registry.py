@@ -454,6 +454,9 @@ SENSOR_DEFINITIONS = [
         precision=0,
         category=EntityCategory.CONFIG # Configurable value
     ),
+    # ================================================================
+    # == CORRECTED Session Time Definition ==
+    # ================================================================
     SensorDefinition(
         entity_name="Session Time",
         value_fn=get_session_time, # Returns seconds
@@ -462,8 +465,9 @@ SENSOR_DEFINITIONS = [
         device_class=SensorDeviceClass.DURATION, # Use duration device class
         unit="s", # Base unit for duration is seconds
         state_class=SensorStateClass.TOTAL, # Represents total duration for session
-        precision=0, # Use correct parameter name 'precision'
+        precision=0, # Use the correct parameter name 'precision'
     ),
+    # ================================================================
     SensorDefinition(
         entity_name="Session Energy",
         value_fn=get_session_energy,
