@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import traceback
 from typing import Any
+from functools import lru_cache
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -15,6 +16,15 @@ from .common import EveusSensorBase
 from .utils import get_safe_value, validate_required_values, calculate_remaining_time
 
 _LOGGER = logging.getLogger(__name__)
+
+@lru_cache(maxsize=8)
+def calculate_soc_kwh(initial_soc, max_capacity, energy_charged, correction):
+    """Cached SOC calculation in kWh."""
+    initial_kwh = (initial_soc / 100) * max_capacity
+    efficiency = (1 - correction / 100)
+    charged_kwh = energy_charged * efficiency
+    total_kwh = initial_kwh + charged_kwh
+    return round(max(0, min(total_kwh, max_capacity)), 2)
 
 class EVSocKwhSensor(EveusSensorBase):
     """Sensor for state of charge in kWh."""
@@ -77,20 +87,8 @@ class EVSocKwhSensor(EveusSensorBase):
                               initial_soc, max_capacity)
                 return None
 
-            # Calculation details
-            initial_kwh = (initial_soc / 100) * max_capacity
-            _LOGGER.debug("Calculated initial energy: %s kWh", initial_kwh)
-            
-            efficiency = (1 - correction / 100)
-            _LOGGER.debug("Calculated efficiency factor: %s", efficiency)
-            
-            charged_kwh = energy_charged * efficiency
-            _LOGGER.debug("Calculated charged energy: %s kWh", charged_kwh)
-            
-            total_kwh = initial_kwh + charged_kwh
-            _LOGGER.debug("Calculated total energy: %s kWh", total_kwh)
-            
-            result = round(max(0, min(total_kwh, max_capacity)), 2)
+            # Use cached calculation
+            result = calculate_soc_kwh(initial_soc, max_capacity, energy_charged, correction)
             _LOGGER.info("SOC Energy calculation result: %s kWh", result)
             return result
 
@@ -282,27 +280,14 @@ class TimeToTargetSocSensor(EveusSensorBase):
             if power_meas <= 0:
                 return "Not charging"
                 
-            # Calculate time remaining
-            remaining_kwh = ((target_soc - current_soc) * battery_capacity / 100)
-            if remaining_kwh <= 0:
-                return "Target reached"
-                
-            efficiency = (1 - correction / 100)
-            power_kw = power_meas * efficiency / 1000
-            
-            total_minutes = round((remaining_kwh / power_kw * 60), 0)
-            
-            if total_minutes < 1:
-                return "< 1m"
-                
-            # Format duration
-            hours = int(total_minutes // 60)
-            mins = int(total_minutes % 60)
-            
-            if hours > 0:
-                result = f"{hours}h {mins:02d}m"
-            else:
-                result = f"{mins}m"
+            # Use the utility function to calculate remaining time
+            result = calculate_remaining_time(
+                current_soc=current_soc,
+                target_soc=target_soc,
+                power_meas=power_meas,
+                battery_capacity=battery_capacity,
+                correction=correction
+            )
                 
             _LOGGER.debug("Time to target calculation result: %s", result)
             return result
