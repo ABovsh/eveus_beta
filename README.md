@@ -44,6 +44,7 @@ This custom integration provides comprehensive monitoring and control of Eveus E
 - **Smoother sensor updates** with improved data processing pipelines
 - **Enhanced network efficiency** using persistent connections and keep-alive
 - **Lower CPU usage** through cached lookups and consolidated operations
+- **Immediate SOC updates** when input numbers change - no more waiting for refresh cycles
 
 ### 🔄 Network & Connectivity
 - **Improved connection persistence** - fewer "device unavailable" errors
@@ -296,15 +297,16 @@ input_number:
 
 #### 1. Before Starting a Charging Session
 - Set the correct EV battery capacity
-- Set the current state of charge (initial_soc)
+- Set the current state of charge (initial_soc) - **changes are now reflected immediately!**
 - Adjust the efficiency correction if needed
 - Set your desired target SOC
 
 #### 2. During Charging
 - Monitor charging progress with improved SOC sensors
 - Check the new time-to-target estimation
-- Monitor connection stability with the new error sensor
+- Monitor connection stability with the connection quality sensor
 - Adjust current if needed using the slider
+- **Any changes to input numbers (initial SOC, target SOC, etc.) are reflected immediately**
 
 #### 3. After Charging
 - Reset Counter A before starting a new session
@@ -827,6 +829,7 @@ Cannot perform calculations due to missing inputs.
 |-------|-------------------|
 | SOC sensors show "unknown" | Verify all required helper entities are created with exact names |
 | "Missing input entity" error | Check that all input_number entities exist and have valid values |
+| SOC calculations don't update immediately | This issue has been fixed - SOC updates happen instantly when you change input values |
 | Automation errors | Update entity names in automations to match integration's naming pattern (eveus_ev_charger_*) |
 | Connection failures | Verify network connectivity, check IP address, username, and password |
 | Incorrect SOC calculations | Set initial SOC to match your EV's current charge level |
