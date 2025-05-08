@@ -228,11 +228,24 @@ def get_system_time(updater, hass) -> str:
         # Get HA timezone
         ha_timezone = hass.config.time_zone
         if not ha_timezone:
-            return datetime.fromtimestamp(timestamp).strftime("%H:%M")
+            _LOGGER.warning("No timezone set in Home Assistant configuration")
+            return None
 
-        # Convert timestamp to local time in one step
+        # Convert timestamp to datetime in UTC
+        dt_utc = datetime.fromtimestamp(timestamp, tz=pytz.UTC)
+        
+        # Get local timezone
         local_tz = pytz.timezone(ha_timezone)
-        dt_local = datetime.fromtimestamp(timestamp, tz=local_tz)
+        
+        # Check if we're in DST - the charger seems to need special handling
+        offset = 7200  # Base offset (2 hours)
+        if is_dst(ha_timezone, dt_utc):
+            offset += 3600  # Add 1 hour during DST
+        
+        # Apply correction
+        corrected_timestamp = timestamp - offset
+        dt_corrected = datetime.fromtimestamp(corrected_timestamp, tz=pytz.UTC)
+        dt_local = dt_corrected.astimezone(local_tz)
         
         return dt_local.strftime("%H:%M")
             
