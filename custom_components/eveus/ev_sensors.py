@@ -11,6 +11,8 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.const import UnitOfEnergy
+from homeassistant.core import callback, Event
+from homeassistant.helpers.event import async_track_state_change_event
 
 from .common import EveusSensorBase
 from .utils import get_safe_value, validate_required_values, calculate_remaining_time
@@ -35,6 +37,40 @@ class EVSocKwhSensor(EveusSensorBase):
     _attr_icon = "mdi:battery-charging"
     _attr_suggested_display_precision = 1
     _attr_state_class = SensorStateClass.TOTAL
+    
+    def __init__(self, updater) -> None:
+        """Initialize the sensor."""
+        super().__init__(updater)
+        self._stop_listen = None
+
+    async def async_added_to_hass(self) -> None:
+        """Handle entity which will be added."""
+        await super().async_added_to_hass()
+        
+        # Listen for input_number changes to update immediately
+        self._stop_listen = async_track_state_change_event(
+            self.hass,
+            [
+                "input_number.ev_initial_soc",
+                "input_number.ev_battery_capacity",
+                "input_number.ev_soc_correction"
+            ],
+            self._on_input_changed
+        )
+
+    @callback
+    def _on_input_changed(self, event: Event) -> None:
+        """Handle input number state changes."""
+        _LOGGER.debug("Input changed: %s, updating SOC", event.data["entity_id"])
+        # Force recalculation by clearing the cache
+        calculate_soc_kwh.cache_clear()
+        # Update the sensor state
+        self.async_write_ha_state()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Handle entity removal."""
+        if self._stop_listen:
+            self._stop_listen()
 
     @property
     def native_value(self) -> float | None:
@@ -107,6 +143,39 @@ class EVSocPercentSensor(EveusSensorBase):
     _attr_icon = "mdi:battery-charging"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 0
+    
+    def __init__(self, updater) -> None:
+        """Initialize the sensor."""
+        super().__init__(updater)
+        self._stop_listen = None
+
+    async def async_added_to_hass(self) -> None:
+        """Handle entity which will be added."""
+        await super().async_added_to_hass()
+        
+        # Listen for input_number and SOC sensor changes
+        self._stop_listen = async_track_state_change_event(
+            self.hass,
+            [
+                "input_number.ev_initial_soc",
+                "input_number.ev_battery_capacity",
+                "input_number.ev_soc_correction",
+                "sensor.eveus_ev_charger_soc_energy"
+            ],
+            self._on_input_changed
+        )
+
+    @callback
+    def _on_input_changed(self, event: Event) -> None:
+        """Handle input number or SOC energy state changes."""
+        _LOGGER.debug("Input changed: %s, updating SOC", event.data["entity_id"])
+        # Update the sensor state
+        self.async_write_ha_state()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Handle entity removal."""
+        if self._stop_listen:
+            self._stop_listen()
 
     @property
     def native_value(self) -> float | None:
@@ -202,6 +271,40 @@ class TimeToTargetSocSensor(EveusSensorBase):
     
     ENTITY_NAME = "Time to Target SOC"
     _attr_icon = "mdi:timer"
+    
+    def __init__(self, updater) -> None:
+        """Initialize the sensor."""
+        super().__init__(updater)
+        self._stop_listen = None
+
+    async def async_added_to_hass(self) -> None:
+        """Handle entity which will be added."""
+        await super().async_added_to_hass()
+        
+        # Listen for input_number and SOC changes
+        self._stop_listen = async_track_state_change_event(
+            self.hass,
+            [
+                "input_number.ev_initial_soc",
+                "input_number.ev_battery_capacity",
+                "input_number.ev_soc_correction",
+                "input_number.ev_target_soc",
+                "sensor.eveus_ev_charger_soc_percent"
+            ],
+            self._on_input_changed
+        )
+
+    @callback
+    def _on_input_changed(self, event: Event) -> None:
+        """Handle input number or SOC changes."""
+        _LOGGER.debug("Input changed: %s, updating time to target", event.data["entity_id"])
+        # Update the sensor state
+        self.async_write_ha_state()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Handle entity removal."""
+        if self._stop_listen:
+            self._stop_listen()
 
     @property
     def native_value(self) -> str:
