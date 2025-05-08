@@ -39,12 +39,12 @@ This custom integration provides comprehensive monitoring and control of Eveus E
 ## New in Version 2.1.0
 
 ### ⚡ Performance Optimizations
+- **Immediate SOC updates** when input numbers change - no more waiting for refresh cycles
 - **Optimized SOC calculations** with intelligent caching for faster response times
 - **Reduced memory usage** through optimized data structures and smarter caching
 - **Smoother sensor updates** with improved data processing pipelines
 - **Enhanced network efficiency** using persistent connections and keep-alive
 - **Lower CPU usage** through cached lookups and consolidated operations
-- **Immediate SOC updates** when input numbers change - no more waiting for refresh cycles
 
 ### 🔄 Network & Connectivity
 - **Improved connection persistence** - fewer "device unavailable" errors
@@ -52,7 +52,7 @@ This custom integration provides comprehensive monitoring and control of Eveus E
 - **Enhanced connection monitoring** - detailed visibility of charger connectivity
 - **Keep-alive connections** maintain stable communication longer
 - **Optimized error handling** for better recovery from network issues
-
+  
 ### 🛠️ Code Quality & Reliability
 - **Consolidated duplicate code** for more efficient operation
 - **Standardized entity management** ensuring consistent behavior
