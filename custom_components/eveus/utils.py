@@ -176,10 +176,10 @@ def is_dst(timezone_str: str, timestamp: float) -> bool:
 
 @lru_cache(maxsize=128)
 def format_duration(seconds: int) -> str:
-    """Cached duration formatting for performance."""
+    """Cached duration formatting for performance - ensures consistent format for templates."""
     try:
         if seconds <= 0:
-            return "0m"
+            return "0h 0m"
             
         days = seconds // 86400
         hours = (seconds % 86400) // 3600
@@ -187,11 +187,11 @@ def format_duration(seconds: int) -> str:
         
         if days > 0:
             return f"{days}d {hours:02d}h {minutes:02d}m"
-        elif hours > 0:
+        else:
+            # Always include hours for template compatibility
             return f"{hours}h {minutes:02d}m"
-        return f"{minutes}m"
     except (TypeError, ValueError):
-        return "0m"
+        return "0h 0m"
 
 def get_system_time_corrected(
     timestamp: int, 
@@ -312,7 +312,7 @@ def calculate_remaining_time(
         total_seconds = int(time_hours * 3600)
         
         if total_seconds < 60:
-            return "< 1m"
+            return "0h 1m"  # Changed from "< 1m" to be template-compatible
 
         return format_duration(total_seconds)
 
