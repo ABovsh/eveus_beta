@@ -174,9 +174,8 @@ def is_dst(timezone_str: str, timestamp: float) -> bool:
         _LOGGER.error("Error checking DST for %s: %s", timezone_str, err)
         return False
 
-@lru_cache(maxsize=128)
 def format_duration(seconds: int) -> str:
-    """Cached duration formatting - original behavior restored."""
+    """Format duration in seconds to human readable string - original behavior."""
     try:
         if seconds <= 0:
             return "0m"
@@ -272,24 +271,32 @@ def calculate_remaining_time(
     battery_capacity: Union[float, int],
     correction: Union[float, int]
 ) -> str:
-    """Calculate remaining charging time with descriptive states."""
+    """Calculate remaining time to target SOC - original behavior."""
     try:
-        # Input validation and conversion
-        if any(v is None for v in [current_soc, target_soc, power_meas, battery_capacity]):
-            return "Unavailable"
+        # Double check inputs
+        if current_soc is None or target_soc is None or power_meas is None or battery_capacity is None:
+            _LOGGER.debug("Missing inputs for remaining time calculation")
+            return "unavailable"
             
+        # Convert to float to ensure correct math
         current_soc = float(current_soc)
         target_soc = float(target_soc)
         power_meas = float(power_meas)
         battery_capacity = float(battery_capacity)
         correction = float(correction) if correction is not None else 7.5
 
-        # Range validation
-        if not (0 <= current_soc <= 100) or not (0 <= target_soc <= 100):
-            return "Invalid SOC"
+        # Validate ranges
+        if current_soc < 0 or current_soc > 100:
+            _LOGGER.debug("Current SOC out of range: %s", current_soc)
+            return "unavailable"
+            
+        if target_soc < 0 or target_soc > 100:
+            _LOGGER.debug("Target SOC out of range: %s", target_soc)
+            return "unavailable"
             
         if battery_capacity <= 0:
-            return "Invalid capacity"
+            _LOGGER.debug("Invalid battery capacity: %s", battery_capacity)
+            return "unavailable"
 
         if power_meas <= 0:
             return "Not charging"
@@ -302,23 +309,22 @@ def calculate_remaining_time(
 
         # Account for efficiency loss
         efficiency = (1 - correction / 100)
-        effective_power_kw = power_meas * efficiency / 1000
+        power_kw = power_meas * efficiency / 1000
         
-        if effective_power_kw <= 0:
+        if power_kw <= 0:
             return "Not charging"
 
-        # Calculate time in hours, then convert to seconds
-        time_hours = remaining_kwh / effective_power_kw
-        total_seconds = int(time_hours * 3600)
+        # Calculate time in minutes then convert to seconds
+        total_minutes = round((remaining_kwh / power_kw * 60), 0)
         
-        if total_seconds < 60:
-            return "< 1 minute"
+        if total_minutes < 1:
+            return "< 1m"
 
-        return format_duration(total_seconds)
+        return format_duration(int(total_minutes * 60))
 
     except Exception as err:
-        _LOGGER.error("Error calculating remaining time: %s", err)
-        return "Error"
+        _LOGGER.error("Error calculating remaining time: %s", err, exc_info=True)
+        return "unavailable"
 
 # =============================================================================
 # Performance Utilities
