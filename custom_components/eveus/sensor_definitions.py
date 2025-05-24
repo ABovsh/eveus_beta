@@ -392,32 +392,78 @@ def create_sensor_specifications() -> List[SensorSpec]:
         ) for name, fn, icon, state_class in energy_sensors
     ]
     
-    # Diagnostic sensors - created programmatically
-    diagnostic_sensors = [
-        ("State", get_charger_state, "mdi:state-machine"),
-        ("Substate", get_charger_substate, "mdi:information-variant"),
-        ("Ground", get_ground_status, "mdi:electric-switch"),
-        ("Box Temperature", get_box_temperature, "mdi:thermometer", SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS, 0),
-        ("Plug Temperature", get_plug_temperature, "mdi:thermometer-high", SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS, 0),
-        ("Battery Voltage", get_battery_voltage, "mdi:battery", SensorDeviceClass.VOLTAGE, "V", 2),
-        ("System Time", get_system_time, "mdi:clock-outline"),
-    ]
-    
+    # Diagnostic sensors - create individually for clarity
     diagnostic_specs = [
+        # Simple diagnostic sensors
         SensorSpec(
-            key=name.lower().replace(" ", "_"),
-            name=name,
-            value_fn=fn,
+            key="state",
+            name="State",
+            value_fn=get_charger_state,
             sensor_type=SensorType.DIAGNOSTIC,
-            icon=icon,
-            device_class=device_class if len(item) > 3 else None,
-            state_class=SensorStateClass.MEASUREMENT if len(item) > 3 and device_class else None,
-            unit=unit if len(item) > 4 else None,
-            precision=precision if len(item) > 5 else None,
+            icon="mdi:state-machine",
             category=EntityCategory.DIAGNOSTIC
-        ) for item in diagnostic_sensors 
-        for name, fn, icon, *rest in [item]
-        for device_class, unit, precision in [rest + [None, None, None]][:1]
+        ),
+        SensorSpec(
+            key="substate",
+            name="Substate",
+            value_fn=get_charger_substate,
+            sensor_type=SensorType.DIAGNOSTIC,
+            icon="mdi:information-variant",
+            category=EntityCategory.DIAGNOSTIC
+        ),
+        SensorSpec(
+            key="ground",
+            name="Ground",
+            value_fn=get_ground_status,
+            sensor_type=SensorType.DIAGNOSTIC,
+            icon="mdi:electric-switch",
+            category=EntityCategory.DIAGNOSTIC
+        ),
+        SensorSpec(
+            key="system_time",
+            name="System Time",
+            value_fn=get_system_time,
+            sensor_type=SensorType.DIAGNOSTIC,
+            icon="mdi:clock-outline",
+            category=EntityCategory.DIAGNOSTIC
+        ),
+        # Temperature sensors with device class
+        SensorSpec(
+            key="box_temperature",
+            name="Box Temperature",
+            value_fn=get_box_temperature,
+            sensor_type=SensorType.DIAGNOSTIC,
+            icon="mdi:thermometer",
+            device_class=SensorDeviceClass.TEMPERATURE,
+            state_class=SensorStateClass.MEASUREMENT,
+            unit=UnitOfTemperature.CELSIUS,
+            precision=0,
+            category=EntityCategory.DIAGNOSTIC
+        ),
+        SensorSpec(
+            key="plug_temperature",
+            name="Plug Temperature",
+            value_fn=get_plug_temperature,
+            sensor_type=SensorType.DIAGNOSTIC,
+            icon="mdi:thermometer-high",
+            device_class=SensorDeviceClass.TEMPERATURE,
+            state_class=SensorStateClass.MEASUREMENT,
+            unit=UnitOfTemperature.CELSIUS,
+            precision=0,
+            category=EntityCategory.DIAGNOSTIC
+        ),
+        SensorSpec(
+            key="battery_voltage",
+            name="Battery Voltage",
+            value_fn=get_battery_voltage,
+            sensor_type=SensorType.DIAGNOSTIC,
+            icon="mdi:battery",
+            device_class=SensorDeviceClass.VOLTAGE,
+            state_class=SensorStateClass.MEASUREMENT,
+            unit="V",
+            precision=2,
+            category=EntityCategory.DIAGNOSTIC
+        ),
     ]
     
     # Special sensors with individual specifications
