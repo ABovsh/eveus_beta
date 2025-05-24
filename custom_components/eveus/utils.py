@@ -176,10 +176,10 @@ def is_dst(timezone_str: str, timestamp: float) -> bool:
 
 @lru_cache(maxsize=128)
 def format_duration(seconds: int) -> str:
-    """Cached duration formatting for performance - ensures consistent format for templates."""
+    """Cached duration formatting - original behavior restored."""
     try:
         if seconds <= 0:
-            return "0h 0m"
+            return "0m"
             
         days = seconds // 86400
         hours = (seconds % 86400) // 3600
@@ -187,11 +187,11 @@ def format_duration(seconds: int) -> str:
         
         if days > 0:
             return f"{days}d {hours:02d}h {minutes:02d}m"
-        else:
-            # Always include hours for template compatibility
+        elif hours > 0:
             return f"{hours}h {minutes:02d}m"
+        return f"{minutes}m"
     except (TypeError, ValueError):
-        return "0h 0m"
+        return "0m"
 
 def get_system_time_corrected(
     timestamp: int, 
@@ -272,11 +272,11 @@ def calculate_remaining_time(
     battery_capacity: Union[float, int],
     correction: Union[float, int]
 ) -> str:
-    """Calculate remaining charging time with comprehensive validation."""
+    """Calculate remaining charging time with descriptive states."""
     try:
         # Input validation and conversion
         if any(v is None for v in [current_soc, target_soc, power_meas, battery_capacity]):
-            return "unavailable"
+            return "Unavailable"
             
         current_soc = float(current_soc)
         target_soc = float(target_soc)
@@ -286,10 +286,10 @@ def calculate_remaining_time(
 
         # Range validation
         if not (0 <= current_soc <= 100) or not (0 <= target_soc <= 100):
-            return "unavailable"
+            return "Invalid SOC"
             
         if battery_capacity <= 0:
-            return "unavailable"
+            return "Invalid capacity"
 
         if power_meas <= 0:
             return "Not charging"
@@ -312,13 +312,13 @@ def calculate_remaining_time(
         total_seconds = int(time_hours * 3600)
         
         if total_seconds < 60:
-            return "0h 1m"  # Changed from "< 1m" to be template-compatible
+            return "< 1 minute"
 
         return format_duration(total_seconds)
 
     except Exception as err:
         _LOGGER.error("Error calculating remaining time: %s", err)
-        return "unavailable"
+        return "Error"
 
 # =============================================================================
 # Performance Utilities
