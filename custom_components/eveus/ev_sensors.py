@@ -397,15 +397,20 @@ class InputEntitiesStatusSensor(EveusSensorBase):
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
         """Get optimized status attributes.""" 
-        return {
+        attrs = {
             "missing_entities": list(self._missing_entities),
             "invalid_entities": list(self._invalid_entities),
             "required_count": len(self.REQUIRED_INPUTS),
             "missing_count": len(self._missing_entities),
             "invalid_count": len(self._invalid_entities),
             "status_summary": self._get_status_summary(),
-            "configuration_help": self._get_configuration_help() if self._missing_entities else None
         }
+        
+        # Only include configuration help if there are missing entities
+        if self._missing_entities:
+            attrs["configuration_help"] = self._get_configuration_help()
+            
+        return attrs
     
     def _check_inputs(self) -> None:
         """Efficiently check all required inputs."""
