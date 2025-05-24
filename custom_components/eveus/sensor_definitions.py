@@ -259,9 +259,9 @@ def get_system_time(updater, hass) -> str:
         dt_utc = datetime.fromtimestamp(timestamp, tz=pytz.UTC)
         local_tz = pytz.timezone(ha_timezone)
         
-        # Apply DST correction
+        # Apply DST correction - fix: pass timestamp, not datetime object
         offset = 7200  # Base offset
-        if is_dst(ha_timezone, dt_utc):
+        if is_dst(ha_timezone, timestamp):  # Pass timestamp instead of dt_utc
             offset += 3600
         
         corrected_timestamp = timestamp - offset
