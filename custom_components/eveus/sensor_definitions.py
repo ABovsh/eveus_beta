@@ -143,69 +143,80 @@ def _make_data_hashable(data: dict) -> tuple:
     """Convert dict to hashable tuple for caching."""
     return tuple(sorted(data.items()))
 
-# Efficient value functions using partial application
+# Efficient value functions - simplified without problematic caching
 def get_voltage(updater, hass) -> float:
-    """Get voltage with caching.""" 
-    return _get_numeric_value(_make_data_hashable(updater.data), "voltMeas1", 0)
+    """Get voltage.""" 
+    value = get_safe_value(updater.data, "voltMeas1")
+    return round(value, 0) if value is not None else None
 
 def get_current(updater, hass) -> float:
-    """Get current with caching."""
-    return _get_numeric_value(_make_data_hashable(updater.data), "curMeas1", 1)
+    """Get current."""
+    value = get_safe_value(updater.data, "curMeas1")
+    return round(value, 1) if value is not None else None
 
 def get_power(updater, hass) -> float: 
-    """Get power with caching."""
-    return _get_numeric_value(_make_data_hashable(updater.data), "powerMeas", 1)
+    """Get power."""
+    value = get_safe_value(updater.data, "powerMeas")
+    return round(value, 1) if value is not None else None
 
 def get_current_set(updater, hass) -> float:
-    """Get current set with caching."""
-    return _get_numeric_value(_make_data_hashable(updater.data), "currentSet", 0)
+    """Get current set."""
+    value = get_safe_value(updater.data, "currentSet")
+    return round(value, 0) if value is not None else None
 
 def get_session_energy(updater, hass) -> float:
-    """Get session energy with caching."""
-    return _get_numeric_value(_make_data_hashable(updater.data), "sessionEnergy", 2)
+    """Get session energy."""
+    value = get_safe_value(updater.data, "sessionEnergy")
+    return round(value, 2) if value is not None else None
 
 def get_total_energy(updater, hass) -> float:
-    """Get total energy with caching."""
-    return _get_numeric_value(_make_data_hashable(updater.data), "totalEnergy", 2)
+    """Get total energy."""
+    value = get_safe_value(updater.data, "totalEnergy")
+    return round(value, 2) if value is not None else None
 
 def get_counter_a_energy(updater, hass) -> float:
-    """Get counter A energy with caching."""
-    return _get_numeric_value(_make_data_hashable(updater.data), "IEM1", 2)
+    """Get counter A energy."""
+    value = get_safe_value(updater.data, "IEM1")
+    return round(value, 2) if value is not None else None
 
 def get_counter_a_cost(updater, hass) -> float:
-    """Get counter A cost with caching."""
-    return _get_numeric_value(_make_data_hashable(updater.data), "IEM1_money", 2)
+    """Get counter A cost."""
+    value = get_safe_value(updater.data, "IEM1_money")
+    return round(value, 2) if value is not None else None
 
 def get_counter_b_energy(updater, hass) -> float:
-    """Get counter B energy with caching."""
-    return _get_numeric_value(_make_data_hashable(updater.data), "IEM2", 2)
+    """Get counter B energy."""
+    value = get_safe_value(updater.data, "IEM2")
+    return round(value, 2) if value is not None else None
 
 def get_counter_b_cost(updater, hass) -> float:
-    """Get counter B cost with caching."""
-    return _get_numeric_value(_make_data_hashable(updater.data), "IEM2_money", 2)
+    """Get counter B cost."""
+    value = get_safe_value(updater.data, "IEM2_money")
+    return round(value, 2) if value is not None else None
 
 def get_box_temperature(updater, hass) -> float:
-    """Get box temperature with caching."""
-    return _get_numeric_value(_make_data_hashable(updater.data), "temperature1", 0)
+    """Get box temperature."""
+    value = get_safe_value(updater.data, "temperature1")
+    return round(value, 0) if value is not None else None
 
 def get_plug_temperature(updater, hass) -> float:
-    """Get plug temperature with caching."""
-    return _get_numeric_value(_make_data_hashable(updater.data), "temperature2", 0)
+    """Get plug temperature."""
+    value = get_safe_value(updater.data, "temperature2")
+    return round(value, 0) if value is not None else None
 
 def get_battery_voltage(updater, hass) -> float:
-    """Get battery voltage with caching."""
-    return _get_numeric_value(_make_data_hashable(updater.data), "vBat", 2)
+    """Get battery voltage."""
+    value = get_safe_value(updater.data, "vBat")
+    return round(value, 2) if value is not None else None
 
-# State functions with caching
-@lru_cache(maxsize=16)
+# State functions - fixed without problematic caching
 def get_charger_state(updater, hass) -> str:
-    """Get charger state with caching."""
+    """Get charger state."""
     state_value = get_safe_value(updater.data, "state", int)
     return get_charging_state(state_value) if state_value is not None else None
 
-@lru_cache(maxsize=16) 
 def get_charger_substate(updater, hass) -> str:
-    """Get charger substate with caching."""
+    """Get charger substate."""
     state = get_safe_value(updater.data, "state", int)
     substate = get_safe_value(updater.data, "subState", int)
     
@@ -216,9 +227,8 @@ def get_charger_substate(updater, hass) -> str:
         return get_error_state(substate)
     return get_normal_substate(substate)
 
-@lru_cache(maxsize=8)
 def get_ground_status(updater, hass) -> str:
-    """Get ground status with caching."""
+    """Get ground status."""
     value = get_safe_value(updater.data, "ground", int)
     return "Connected" if value == 1 else "Not Connected" if value == 0 else None
 
@@ -233,9 +243,8 @@ def get_session_time_attrs(updater, hass) -> dict:
     seconds = get_safe_value(updater.data, "sessionTime", int)
     return {"duration_seconds": seconds} if seconds is not None else {}
 
-@lru_cache(maxsize=16)
 def get_system_time(updater, hass) -> str:
-    """Get system time with timezone correction and caching."""
+    """Get system time with timezone correction."""
     try:
         timestamp = get_safe_value(updater.data, "systemTime", int)
         if timestamp is None:
