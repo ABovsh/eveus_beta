@@ -271,10 +271,11 @@ def calculate_remaining_time(
     battery_capacity: Union[float, int],
     correction: Union[float, int]
 ) -> str:
-    """Calculate remaining time - template compatible with your existing template."""
+    """Calculate remaining time with proper handling of target reached state."""
     try:
         # Double check inputs
         if current_soc is None or target_soc is None or power_meas is None or battery_capacity is None:
+            _LOGGER.debug("Missing inputs for remaining time calculation")
             return "unavailable"
             
         # Convert to float to ensure correct math
@@ -286,45 +287,42 @@ def calculate_remaining_time(
 
         # Validate ranges
         if current_soc < 0 or current_soc > 100:
+            _LOGGER.debug("Current SOC out of range: %s", current_soc)
             return "unavailable"
             
         if target_soc < 0 or target_soc > 100:
+            _LOGGER.debug("Target SOC out of range: %s", target_soc)
             return "unavailable"
             
         if battery_capacity <= 0:
-            return "unavailable"
-
-        # Return unavailable for non-charging states to avoid template errors
-        if power_meas <= 0:
+            _LOGGER.debug("Invalid battery capacity: %s", battery_capacity)
             return "unavailable"
 
         # Calculate energy needed
         remaining_kwh = (target_soc - current_soc) * battery_capacity / 100
         
-        # Return unavailable when target is reached to avoid template errors
+        # Handle case when target is already reached or exceeded
         if remaining_kwh <= 0:
-            return "unavailable"
+            return "Target reached"
+
+        # Handle non-charging state
+        if power_meas <= 0:
+            return "Not charging"
 
         # Account for efficiency loss
         efficiency = (1 - correction / 100)
         power_kw = power_meas * efficiency / 1000
         
         if power_kw <= 0:
-            return "unavailable"
+            return "Not charging"
 
         # Calculate time in minutes then convert to seconds
         total_minutes = round((remaining_kwh / power_kw * 60), 0)
         
         if total_minutes < 1:
-            return "0h 1m"  # Always include hours for template compatibility
+            return "< 1m"
 
-        duration = format_duration(int(total_minutes * 60))
-        
-        # Ensure all time formats include hours for template compatibility
-        if 'h' not in duration:
-            return f"0h {duration}"
-        
-        return duration
+        return format_duration(int(total_minutes * 60))
 
     except Exception as err:
         _LOGGER.error("Error calculating remaining time: %s", err, exc_info=True)
