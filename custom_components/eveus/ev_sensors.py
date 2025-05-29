@@ -123,12 +123,18 @@ class CachedSOCCalculator:
         return round(max(0, min(percentage, 100)), 0)
     
     def get_time_to_target(self, hass: HomeAssistant, power_meas: float) -> str:
-        """Calculate time to target SOC."""
+        """Calculate time to target SOC with improved state handling."""
         if not self._update_input_cache(hass):
             return "Unavailable"
             
         try:
-            current_soc = self.get_soc_percent(hass, 0)  # Get current SOC
+            # Get current SOC percentage
+            energy_charged = get_safe_value(
+                hass.data.get("eveus", {}).get("updater", {}).data if hasattr(hass, "data") else {},
+                "IEM1", float, default=0
+            )
+            current_soc = self.get_soc_percent(hass, energy_charged)
+            
             if current_soc is None:
                 return "Unavailable"
                 
@@ -279,7 +285,7 @@ class EVSocPercentSensor(EveusSensorBase):
             return self._cached_value or 0  # Return cached or 0 on error
 
 class TimeToTargetSocSensor(EveusSensorBase):
-    """Optimized time to target SOC sensor."""
+    """Optimized time to target SOC sensor with improved state handling."""
     
     ENTITY_NAME = "Time to Target SOC"
     _attr_icon = "mdi:timer"
@@ -322,14 +328,11 @@ class TimeToTargetSocSensor(EveusSensorBase):
 
     @property
     def native_value(self) -> str:
-        """Calculate time to target using optimized calculator."""
+        """Calculate time to target with proper state handling."""
         try:
             power_meas = get_safe_value(self._updater.data, "powerMeas", float, default=0)
             
-            if power_meas <= 0:
-                self._cached_value = "Not charging"
-                return self._cached_value
-                
+            # Use the calculator which now handles all states properly
             result = _soc_calculator.get_time_to_target(self.hass, power_meas)
             self._cached_value = result
             return result
