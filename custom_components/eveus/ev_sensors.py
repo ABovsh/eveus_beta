@@ -122,29 +122,6 @@ class CachedSOCCalculator:
         percentage = (soc_kwh / self._input_cache.battery_capacity) * 100
         return round(max(0, min(percentage, 100)), 0)
     
-    def get_time_to_target(self, hass: HomeAssistant, power_meas: float, energy_charged: float) -> str:
-        """Calculate time to target SOC with improved state handling."""
-        if not self._update_input_cache(hass):
-            return "Unavailable"
-            
-        try:
-            # Get current SOC percentage using provided energy_charged
-            current_soc = self.get_soc_percent(hass, energy_charged)
-            
-            if current_soc is None:
-                return "Unavailable"
-                
-            return calculate_remaining_time(
-                current_soc=current_soc,
-                target_soc=self._input_cache.target_soc or 80,
-                power_meas=power_meas,
-                battery_capacity=self._input_cache.battery_capacity,
-                correction=self._input_cache.soc_correction or 7.5
-            )
-        except Exception as err:
-            _LOGGER.error("Error calculating time to target: %s", err)
-            return "Unavailable"
-    
     def invalidate_cache(self):
         """Force cache invalidation."""
         self._input_cache.timestamp = 0
@@ -281,7 +258,7 @@ class EVSocPercentSensor(EveusSensorBase):
             return self._cached_value or 0  # Return cached or 0 on error
 
 class TimeToTargetSocSensor(EveusSensorBase):
-    """Optimized time to target SOC sensor with improved state handling."""
+    """Optimized time to target SOC sensor with direct calculation."""
     
     ENTITY_NAME = "Time to Target SOC"
     _attr_icon = "mdi:timer"
@@ -322,15 +299,67 @@ class TimeToTargetSocSensor(EveusSensorBase):
         if self._stop_listen:
             self._stop_listen()
 
+    def _get_input_values(self) -> Dict[str, Optional[float]]:
+        """Get all required input values safely."""
+        try:
+            values = {}
+            
+            # Get input entities
+            initial_soc_entity = self.hass.states.get("input_number.ev_initial_soc")
+            battery_capacity_entity = self.hass.states.get("input_number.ev_battery_capacity")
+            soc_correction_entity = self.hass.states.get("input_number.ev_soc_correction")
+            target_soc_entity = self.hass.states.get("input_number.ev_target_soc")
+            
+            # Convert to float with fallbacks
+            values['initial_soc'] = float(initial_soc_entity.state) if initial_soc_entity else None
+            values['battery_capacity'] = float(battery_capacity_entity.state) if battery_capacity_entity else None
+            values['soc_correction'] = float(soc_correction_entity.state) if soc_correction_entity else 7.5
+            values['target_soc'] = float(target_soc_entity.state) if target_soc_entity else None
+            
+            return values
+            
+        except (ValueError, TypeError, AttributeError) as err:
+            _LOGGER.debug("Error getting input values: %s", err)
+            return {}
+
     @property
     def native_value(self) -> str:
-        """Calculate time to target with proper state handling."""
+        """Calculate time to target with direct approach to avoid data access issues."""
         try:
+            # Get all required values directly
             power_meas = get_safe_value(self._updater.data, "powerMeas", float, default=0)
             energy_charged = get_safe_value(self._updater.data, "IEM1", float, default=0)
             
-            # Use the calculator which now handles all states properly
-            result = _soc_calculator.get_time_to_target(self.hass, power_meas, energy_charged)
+            # Get input values
+            input_values = self._get_input_values()
+            if not all(v is not None for k, v in input_values.items() if k != 'soc_correction'):
+                self._cached_value = "Unavailable"
+                return self._cached_value
+            
+            # Calculate current SOC directly
+            initial_soc = input_values['initial_soc']
+            battery_capacity = input_values['battery_capacity']
+            soc_correction = input_values['soc_correction']
+            target_soc = input_values['target_soc']
+            
+            # Calculate current SOC
+            initial_kwh = (initial_soc / 100) * battery_capacity
+            efficiency = (1 - soc_correction / 100)
+            charged_kwh = energy_charged * efficiency
+            total_kwh = initial_kwh + charged_kwh
+            current_soc_kwh = max(0, min(total_kwh, battery_capacity))
+            current_soc = (current_soc_kwh / battery_capacity) * 100
+            current_soc = round(max(0, min(current_soc, 100)), 0)
+            
+            # Calculate time to target using utils function
+            result = calculate_remaining_time(
+                current_soc=current_soc,
+                target_soc=target_soc,
+                power_meas=power_meas,
+                battery_capacity=battery_capacity,
+                correction=soc_correction
+            )
+            
             self._cached_value = result
             return result
             
