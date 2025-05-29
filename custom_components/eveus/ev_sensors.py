@@ -122,17 +122,13 @@ class CachedSOCCalculator:
         percentage = (soc_kwh / self._input_cache.battery_capacity) * 100
         return round(max(0, min(percentage, 100)), 0)
     
-    def get_time_to_target(self, hass: HomeAssistant, power_meas: float) -> str:
+    def get_time_to_target(self, hass: HomeAssistant, power_meas: float, energy_charged: float) -> str:
         """Calculate time to target SOC with improved state handling."""
         if not self._update_input_cache(hass):
             return "Unavailable"
             
         try:
-            # Get current SOC percentage
-            energy_charged = get_safe_value(
-                hass.data.get("eveus", {}).get("updater", {}).data if hasattr(hass, "data") else {},
-                "IEM1", float, default=0
-            )
+            # Get current SOC percentage using provided energy_charged
             current_soc = self.get_soc_percent(hass, energy_charged)
             
             if current_soc is None:
@@ -331,9 +327,10 @@ class TimeToTargetSocSensor(EveusSensorBase):
         """Calculate time to target with proper state handling."""
         try:
             power_meas = get_safe_value(self._updater.data, "powerMeas", float, default=0)
+            energy_charged = get_safe_value(self._updater.data, "IEM1", float, default=0)
             
             # Use the calculator which now handles all states properly
-            result = _soc_calculator.get_time_to_target(self.hass, power_meas)
+            result = _soc_calculator.get_time_to_target(self.hass, power_meas, energy_charged)
             self._cached_value = result
             return result
             
