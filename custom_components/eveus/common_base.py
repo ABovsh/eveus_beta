@@ -1,236 +1,177 @@
-"""The Eveus integration with enhanced state persistence."""
-from __future__ import annotations
-
+"""Base entity classes for Eveus integration with enhanced state persistence."""
 import logging
+import time
 import asyncio
-from typing import Any
+from typing import Any, Optional
 
-import aiohttp
-import voluptuous as vol
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform, CONF_HOST, CONF_USERNAME, CONF_PASSWORD
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryNotReady, ConfigEntryAuthFailed
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.typing import ConfigType
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.entity import Entity
+from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.components.sensor import SensorEntity
+from homeassistant.helpers.entity import EntityCategory
 
-from .const import DOMAIN, MODEL_MAX_CURRENT, CONF_MODEL
-from .common import EveusUpdater, EveusConnectionError
-from .utils import get_next_device_number
+from .utils import get_device_info, get_device_suffix
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [
-    Platform.SENSOR,
-    Platform.SWITCH,
-    Platform.NUMBER,
-]
+# Type checking imports to avoid circular imports
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .common_network import EveusUpdater
 
-CONFIG_SCHEMA = vol.Schema({DOMAIN: vol.Schema({})}, extra=vol.ALLOW_EXTRA)
+class BaseEveusEntity(RestoreEntity, Entity):
+    """Base implementation for Eveus entities with enhanced state persistence."""
 
-async def async_validate_connection(
-    hass: HomeAssistant, 
-    host: str, 
-    username: str, 
-    password: str
-) -> None:
-    """Validate connection to Eveus device."""
-    session = async_get_clientsession(hass)
-    
-    try:
-        async with session.post(
-            f"http://{host}/main",
-            auth=aiohttp.BasicAuth(username, password),
-            timeout=15
-        ) as response:
-            response.raise_for_status()
-            if response.status == 401:
-                raise ConfigEntryAuthFailed("Invalid authentication")
-            await response.json()  # Validate response format
-            
-    except aiohttp.ClientResponseError as err:
-        if err.status == 401:
-            raise ConfigEntryAuthFailed("Invalid authentication")
-        raise ConfigEntryNotReady(f"Connection error: {err}")
-    except aiohttp.ClientError as err:
-        raise ConfigEntryNotReady(f"Connection error: {err}")
-    except asyncio.TimeoutError:
-        raise ConfigEntryNotReady("Connection timeout")
-    except ValueError as err:
-        raise ConfigEntryNotReady(f"Invalid response format: {err}")
+    ENTITY_NAME: str = None
+    _attr_has_entity_name = True
+    _attr_should_poll = False
 
-
-async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up the Eveus component."""
-    hass.data.setdefault(DOMAIN, {})
-    return True
-
-
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Eveus from a config entry with enhanced state management."""
-    try:
-        # Extract and validate configuration
-        host = entry.data.get(CONF_HOST)
-        username = entry.data.get(CONF_USERNAME)
-        password = entry.data.get(CONF_PASSWORD)
-        model = entry.data.get(CONF_MODEL)
+    def __init__(self, updater, device_number: int = 1) -> None:
+        """Initialize the entity."""
+        super().__init__()
+        self._updater = updater
+        self._device_number = device_number
+        self._updater.register_entity(self)
         
-        if not host:
-            raise ConfigEntryNotReady("No host specified")
-        if not username:
-            raise ConfigEntryNotReady("No username specified")
-        if not password:
-            raise ConfigEntryNotReady("No password specified")
-        if model not in MODEL_MAX_CURRENT:
-            raise ConfigEntryNotReady("Invalid model specified")
+        # State persistence tracking
+        self._state_restored = False
+        self._restore_in_progress = False
+        
+        # Offline handling
+        self._last_available_log = 0
+        self._availability_log_interval = 600  # Log availability changes max every 10 minutes
+        self._last_known_available = True
 
-        # Validate connection
-        await async_validate_connection(hass, host, username, password)
+        if self.ENTITY_NAME is None:
+            raise NotImplementedError("ENTITY_NAME must be defined in child class")
+
+        self._attr_name = self.ENTITY_NAME
         
-        # Determine device number for multi-device support
-        device_number = entry.data.get("device_number")
-        if device_number is None:
-            # This is a new device, assign next available number
-            device_number = get_next_device_number(hass)
-            
-            # Update config entry with device number for future use
-            new_data = entry.data.copy()
-            new_data["device_number"] = device_number
-            hass.config_entries.async_update_entry(entry, data=new_data)
-            
-            _LOGGER.info("Assigned device number %d to %s", device_number, host)
+        # Generate unique ID with device suffix for multi-device support
+        device_suffix = get_device_suffix(device_number)
+        entity_key = self.ENTITY_NAME.lower().replace(' ', '_')
+        self._attr_unique_id = f"eveus{device_suffix}_{entity_key}"
+
+    @property
+    def available(self) -> bool:
+        """Return if entity is available with quiet offline handling."""
+        current_available = self._updater.available
         
-        # Initialize data structure
-        hass.data.setdefault(DOMAIN, {})
-        hass.data[DOMAIN][entry.entry_id] = {
-            "title": entry.title,
-            "host": host,
-            "username": username,
-            "password": password,
-            "device_number": device_number,
-            "entities": {},
-            "state_coordination_task": None,  # For coordinating state restoration
-        }
+        # Only log availability changes occasionally to reduce noise
+        if current_available != self._last_known_available:
+            current_time = time.time()
+            if current_time - self._last_available_log > self._availability_log_interval:
+                self._last_available_log = current_time
+                if not current_available:
+                    _LOGGER.debug("Entity %s became unavailable (device offline)", self.unique_id)
+                else:
+                    _LOGGER.debug("Entity %s became available (device online)", self.unique_id)
+            self._last_known_available = current_available
         
-        # Create updater instance
+        return current_available
+
+    @property
+    def device_info(self) -> dict[str, Any]:
+        """Return device information."""
         try:
-            updater = EveusUpdater(
-                host=host,
-                username=username,
-                password=password,
-                hass=hass,
-            )
-            hass.data[DOMAIN][entry.entry_id]["updater"] = updater
+            return get_device_info(self._updater.host, self._updater.data, self._device_number)
         except Exception as err:
-            raise ConfigEntryNotReady(f"Failed to initialize updater: {err}")
+            # Gracefully handle device info errors when offline
+            _LOGGER.debug("Error getting device info for %s: %s", self.unique_id, err)
+            # Return minimal device info when offline
+            device_suffix = "" if self._device_number == 1 else f" {self._device_number}"
+            return {
+                "identifiers": {("eveus", f"{self._updater.host}_{self._device_number}")},
+                "name": f"Eveus EV Charger{device_suffix}",
+                "manufacturer": "Eveus",
+                "model": "Eveus EV Charger",
+            }
 
-        # Set up platforms
-        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    async def async_added_to_hass(self) -> None:
+        """Handle entity which will be added with enhanced state restoration."""
+        await super().async_added_to_hass()
         
-        # Start state coordination task for better restoration
-        coordination_task = hass.async_create_task(
-            _coordinate_state_restoration(hass, entry.entry_id)
-        )
-        hass.data[DOMAIN][entry.entry_id]["state_coordination_task"] = coordination_task
+        # Start the updater first
+        try:
+            await self._updater.async_start_updates()
+        except Exception as err:
+            _LOGGER.debug("Could not start updates for %s: %s", self.unique_id, err)
         
-        # Register update listener
-        entry.async_on_unload(entry.add_update_listener(update_listener))
-        
-        return True
+        # Then handle state restoration with proper timing
+        try:
+            self._restore_in_progress = True
+            state = await self.async_get_last_state()
+            if state:
+                _LOGGER.debug("Restoring state for %s: %s", self.unique_id, state.state)
+                await self._async_restore_state(state)
+                self._state_restored = True
+            else:
+                _LOGGER.debug("No previous state found for %s", self.unique_id)
+        except Exception as err:
+            _LOGGER.debug("Could not restore state for %s: %s", self.unique_id, err)
+        finally:
+            self._restore_in_progress = False
 
-    except ConfigEntryAuthFailed as auth_err:
-        _LOGGER.error("Authentication failed: %s", str(auth_err))
-        raise
-    except ConfigEntryNotReady as ready_err:
-        _LOGGER.error("Integration not ready: %s", str(ready_err))
-        raise
-    except EveusConnectionError as conn_err:
-        _LOGGER.error("Connection error: %s", str(conn_err))
-        raise ConfigEntryNotReady(f"Connection error: {str(conn_err)}")
-    except Exception as ex:
-        _LOGGER.error(
-            "Unexpected error setting up Eveus integration: %s",
-            str(ex),
-            exc_info=True
-        )
-        raise ConfigEntryNotReady(f"Unexpected error: {str(ex)}")
+    async def _async_restore_state(self, state) -> None:
+        """Restore previous state - overridden by child classes."""
+        pass
 
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        try:
+            self.async_write_ha_state()
+        except Exception as err:
+            # Gracefully handle state write errors (device might be offline)
+            _LOGGER.debug("Could not write state for %s: %s", self.unique_id, err)
 
-async def _coordinate_state_restoration(hass: HomeAssistant, entry_id: str) -> None:
-    """Coordinate state restoration across all entities for better reliability."""
-    try:
-        # Wait for entities to be set up
-        await asyncio.sleep(10)
+    async def _wait_for_device_ready(self, timeout: int = 30) -> bool:
+        """Wait for device to be ready for commands."""
+        start_time = time.time()
         
-        data = hass.data[DOMAIN].get(entry_id)
-        if not data:
-            return
+        while time.time() - start_time < timeout:
+            if self._updater.available and self._updater.data:
+                # Give a bit more time for data to stabilize
+                await asyncio.sleep(2)
+                return True
+            await asyncio.sleep(1)
             
-        updater = data.get("updater")
-        if not updater:
-            return
-            
-        # Wait for device to be available and have initial data
-        max_wait = 60  # Wait up to 60 seconds
-        wait_time = 0
-        
-        while wait_time < max_wait:
-            if updater.available and updater.data:
-                # Device is ready, give entities time to restore state
-                await asyncio.sleep(5)
-                break
-            await asyncio.sleep(2)
-            wait_time += 2
-            
-        if wait_time >= max_wait:
-            _LOGGER.debug("State coordination timed out for entry %s", entry_id)
-            
-    except Exception as err:
-        _LOGGER.debug("Error in state coordination for entry %s: %s", entry_id, err)
-
-
-async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Handle options update."""
-    await hass.config_entries.async_reload(entry.entry_id)
-
-
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
-    try:
-        # Get updater instance and coordination task
-        data = hass.data[DOMAIN].get(entry.entry_id, {})
-        updater = data.get("updater")
-        coordination_task = data.get("state_coordination_task")
-        
-        # Cancel coordination task
-        if coordination_task and not coordination_task.done():
-            coordination_task.cancel()
-            try:
-                await coordination_task
-            except asyncio.CancelledError:
-                pass
-        
-        # Unload platforms
-        unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-        
-        # Shutdown updater if exists
-        if updater:
-            try:
-                await updater.async_shutdown()
-            except Exception as err:
-                _LOGGER.error("Error shutting down updater: %s", err)
-        
-        # Clean up data structure
-        if unload_ok and entry.entry_id in hass.data[DOMAIN]:
-            hass.data[DOMAIN].pop(entry.entry_id)
-        
-        return unload_ok
-
-    except Exception as ex:
-        _LOGGER.error(
-            "Error unloading Eveus integration: %s", 
-            str(ex),
-            exc_info=True
-        )
         return False
+
+
+class EveusSensorBase(BaseEveusEntity, SensorEntity):
+    """Base sensor entity for Eveus with stable handling."""
+    
+    def __init__(self, updater: "EveusUpdater", device_number: int = 1) -> None:
+        """Initialize the sensor."""
+        super().__init__(updater, device_number)
+        self._attr_native_value = None
+        self._last_valid_value = None
+        self._last_error_log = 0
+        self._error_log_interval = 300  # Log errors max every 5 minutes
+
+    @property
+    def native_value(self) -> Any:
+        """Return sensor value with graceful error handling."""
+        try:
+            value = self._get_sensor_value()
+            if value is not None:
+                self._last_valid_value = value
+            return value
+        except Exception as err:
+            # Log errors occasionally, return last known value
+            current_time = time.time()
+            if current_time - self._last_error_log > self._error_log_interval:
+                self._last_error_log = current_time
+                _LOGGER.debug("Error getting sensor value for %s: %s", self.unique_id, err)
+            return self._last_valid_value
+
+    def _get_sensor_value(self) -> Any:
+        """Get sensor value - to be overridden by subclasses."""
+        return self._attr_native_value
+
+
+class EveusDiagnosticSensor(EveusSensorBase):
+    """Base diagnostic sensor with stable handling."""
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:information"
