@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import time
+import asyncio
 from typing import Any, Optional, Dict, Set
 from functools import lru_cache
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ from homeassistant.helpers.entity import EntityCategory
 
 from .common import EveusSensorBase
 from .utils import get_safe_value, calculate_remaining_time, format_duration, get_device_suffix
+from .const import ERROR_LOG_RATE_LIMIT  # Phase 1
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -51,7 +53,6 @@ class CachedSOCCalculator:
         self._soc_percent_cache: Optional[float] = None
         self._cache_timestamp = 0
         self._last_error_log = 0
-        self._error_log_interval = 300  # Log errors max every 5 minutes
         
     def _update_input_cache(self, hass: HomeAssistant) -> bool:
         """Update input entity cache if needed with quiet error handling."""
@@ -71,7 +72,7 @@ class CachedSOCCalculator:
             missing = [k for k, v in entities.items() if v is None]
             if missing:
                 current_time = time.time()
-                if current_time - self._last_error_log > self._error_log_interval:
+                if current_time - self._last_error_log > ERROR_LOG_RATE_LIMIT:  # Phase 1
                     self._last_error_log = current_time
                     _LOGGER.debug("Missing input entities: %s", missing)
                 return False
@@ -83,7 +84,7 @@ class CachedSOCCalculator:
                     updates[key] = float(entity.state)
                 except (ValueError, TypeError):
                     current_time = time.time()
-                    if current_time - self._last_error_log > self._error_log_interval:
+                    if current_time - self._last_error_log > ERROR_LOG_RATE_LIMIT:  # Phase 1
                         self._last_error_log = current_time
                         _LOGGER.debug("Invalid value for %s: %s", key, entity.state)
                     return False
@@ -93,7 +94,7 @@ class CachedSOCCalculator:
             
         except Exception as err:
             current_time = time.time()
-            if current_time - self._last_error_log > self._error_log_interval:
+            if current_time - self._last_error_log > ERROR_LOG_RATE_LIMIT:  # Phase 1
                 self._last_error_log = current_time
                 _LOGGER.debug("Error updating input cache: %s", err)
             return False
@@ -122,7 +123,7 @@ class CachedSOCCalculator:
             )
         except Exception as err:
             current_time = time.time()
-            if current_time - self._last_error_log > self._error_log_interval:
+            if current_time - self._last_error_log > ERROR_LOG_RATE_LIMIT:  # Phase 1
                 self._last_error_log = current_time
                 _LOGGER.debug("Error calculating SOC kWh: %s", err)
             return None
@@ -205,7 +206,12 @@ class EVSocKwhSensor(EveusSensorBase):
     def _get_sensor_value(self) -> Optional[float]:
         """Get SOC in kWh using optimized calculator with stable error handling."""
         try:
-            energy_charged = get_safe_value(self._updater.data, "IEM1", float, default=0)
+            # Phase 1: Use cached data fallback
+            energy_charged = (
+                get_safe_value(self._updater.data, "IEM1", float, default=0) or
+                self.get_cached_data_value("IEM1", 0)
+            )
+            
             result = _soc_calculator.get_soc_kwh(self.hass, energy_charged)
             
             if result is not None:
@@ -274,7 +280,12 @@ class EVSocPercentSensor(EveusSensorBase):
     def _get_sensor_value(self) -> Optional[float]:
         """Get SOC percentage using optimized calculator with stable error handling."""
         try:
-            energy_charged = get_safe_value(self._updater.data, "IEM1", float, default=0)
+            # Phase 1: Use cached data fallback
+            energy_charged = (
+                get_safe_value(self._updater.data, "IEM1", float, default=0) or
+                self.get_cached_data_value("IEM1", 0)
+            )
+            
             result = _soc_calculator.get_soc_percent(self.hass, energy_charged)
             
             if result is not None:
@@ -372,9 +383,15 @@ class TimeToTargetSocSensor(EveusSensorBase):
     def _get_sensor_value(self) -> str:
         """Calculate time to target with stable direct approach."""
         try:
-            # Get all required values directly
-            power_meas = get_safe_value(self._updater.data, "powerMeas", float, default=0)
-            energy_charged = get_safe_value(self._updater.data, "IEM1", float, default=0)
+            # Phase 1: Use cached data fallback
+            power_meas = (
+                get_safe_value(self._updater.data, "powerMeas", float, default=0) or
+                self.get_cached_data_value("powerMeas", 0)
+            )
+            energy_charged = (
+                get_safe_value(self._updater.data, "IEM1", float, default=0) or
+                self.get_cached_data_value("IEM1", 0)
+            )
             
             # Get input values
             input_values = self._get_input_values()
