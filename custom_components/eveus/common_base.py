@@ -1,6 +1,7 @@
-"""Base entity classes for Eveus integration with stable offline handling."""
+"""Base entity classes for Eveus integration with enhanced state persistence."""
 import logging
 import time
+import asyncio
 from typing import Any, Optional
 
 from homeassistant.core import HomeAssistant, callback
@@ -14,7 +15,7 @@ from .utils import get_device_info, get_device_suffix
 _LOGGER = logging.getLogger(__name__)
 
 class BaseEveusEntity(RestoreEntity, Entity):
-    """Base implementation for Eveus entities with stable offline handling."""
+    """Base implementation for Eveus entities with enhanced state persistence."""
 
     ENTITY_NAME: str = None
     _attr_has_entity_name = True
@@ -26,6 +27,10 @@ class BaseEveusEntity(RestoreEntity, Entity):
         self._updater = updater
         self._device_number = device_number
         self._updater.register_entity(self)
+        
+        # State persistence tracking
+        self._state_restored = False
+        self._restore_in_progress = False
         
         # Offline handling
         self._last_available_log = 0
@@ -78,24 +83,29 @@ class BaseEveusEntity(RestoreEntity, Entity):
             }
 
     async def async_added_to_hass(self) -> None:
-        """Handle entity which will be added."""
+        """Handle entity which will be added with enhanced state restoration."""
         await super().async_added_to_hass()
         
-        # Restore previous state if available
-        try:
-            state = await self.async_get_last_state()
-            if state:
-                await self._async_restore_state(state)
-        except Exception as err:
-            # Gracefully handle restore errors
-            _LOGGER.debug("Could not restore state for %s: %s", self.unique_id, err)
-            
-        # Start updates if needed
+        # Start the updater first
         try:
             await self._updater.async_start_updates()
         except Exception as err:
-            # Don't fail entity setup if updater has issues
             _LOGGER.debug("Could not start updates for %s: %s", self.unique_id, err)
+        
+        # Then handle state restoration with proper timing
+        try:
+            self._restore_in_progress = True
+            state = await self.async_get_last_state()
+            if state:
+                _LOGGER.debug("Restoring state for %s: %s", self.unique_id, state.state)
+                await self._async_restore_state(state)
+                self._state_restored = True
+            else:
+                _LOGGER.debug("No previous state found for %s", self.unique_id)
+        except Exception as err:
+            _LOGGER.debug("Could not restore state for %s: %s", self.unique_id, err)
+        finally:
+            self._restore_in_progress = False
 
     async def _async_restore_state(self, state) -> None:
         """Restore previous state - overridden by child classes."""
@@ -109,6 +119,19 @@ class BaseEveusEntity(RestoreEntity, Entity):
         except Exception as err:
             # Gracefully handle state write errors (device might be offline)
             _LOGGER.debug("Could not write state for %s: %s", self.unique_id, err)
+
+    async def _wait_for_device_ready(self, timeout: int = 30) -> bool:
+        """Wait for device to be ready for commands."""
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            if self._updater.available and self._updater.data:
+                # Give a bit more time for data to stabilize
+                await asyncio.sleep(2)
+                return True
+            await asyncio.sleep(1)
+            
+        return False
 
 
 class EveusSensorBase(BaseEveusEntity, SensorEntity):
