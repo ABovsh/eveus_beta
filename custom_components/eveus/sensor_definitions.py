@@ -31,6 +31,7 @@ from .const import (
     get_error_state,
     get_normal_substate,
     RATE_STATES,
+    ERROR_LOG_RATE_LIMIT,  # Phase 1
 )
 from .utils import (
     get_safe_value,
@@ -42,15 +43,14 @@ from .utils import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Global error logging control to reduce noise
+# Phase 1: Global error logging control to reduce noise
 _last_error_logs = {}
-_error_log_interval = 300  # Log errors max every 5 minutes
 
 def _should_log_error(function_name: str) -> bool:
-    """Check if we should log errors for a function (rate limited)."""
+    """Phase 1: Check if we should log errors for a function (rate limited)."""
     current_time = time.time()
     last_log = _last_error_logs.get(function_name, 0)
-    if current_time - last_log > _error_log_interval:
+    if current_time - last_log > ERROR_LOG_RATE_LIMIT:
         _last_error_logs[function_name] = current_time
         return True
     return False
@@ -143,11 +143,31 @@ class OptimizedEveusSensor(EveusSensorBase):
                     _LOGGER.debug("Error getting attributes for %s: %s", self.name, err)
         return {}
 
-# Efficient value functions with stable error handling
+# Phase 1: Enhanced value functions with cached data fallback
+def _get_data_value(updater, key: str, converter=float, default=None):
+    """Phase 1: Helper to get value from current or cached data."""
+    # Try current data first
+    if updater.data and key in updater.data:
+        return get_safe_value(updater.data, key, converter, default)
+    
+    # Try cached data from base entity
+    entities = getattr(updater, '_entities', set())
+    for entity in entities:
+        if hasattr(entity, 'get_cached_data_value'):
+            cached_value = entity.get_cached_data_value(key, default)
+            if cached_value is not None:
+                try:
+                    return converter(cached_value)
+                except (ValueError, TypeError):
+                    pass
+                    
+    return default
+
+# Enhanced value functions with stable error handling and caching
 def get_voltage(updater, hass) -> float:
-    """Get voltage with stable error handling."""
+    """Get voltage with stable error handling and cached fallback."""
     try:
-        value = get_safe_value(updater.data, "voltMeas1")
+        value = _get_data_value(updater, "voltMeas1", float)
         return round(value, 0) if value is not None else None
     except Exception as err:
         if _should_log_error("get_voltage"):
@@ -155,9 +175,9 @@ def get_voltage(updater, hass) -> float:
         return None
 
 def get_current(updater, hass) -> float:
-    """Get current with stable error handling."""
+    """Get current with stable error handling and cached fallback."""
     try:
-        value = get_safe_value(updater.data, "curMeas1")
+        value = _get_data_value(updater, "curMeas1", float)
         return round(value, 1) if value is not None else None
     except Exception as err:
         if _should_log_error("get_current"):
@@ -165,9 +185,9 @@ def get_current(updater, hass) -> float:
         return None
 
 def get_power(updater, hass) -> float: 
-    """Get power with stable error handling."""
+    """Get power with stable error handling and cached fallback."""
     try:
-        value = get_safe_value(updater.data, "powerMeas")
+        value = _get_data_value(updater, "powerMeas", float)
         return round(value, 1) if value is not None else None
     except Exception as err:
         if _should_log_error("get_power"):
@@ -175,9 +195,9 @@ def get_power(updater, hass) -> float:
         return None
 
 def get_current_set(updater, hass) -> float:
-    """Get current set with stable error handling."""
+    """Get current set with stable error handling and cached fallback."""
     try:
-        value = get_safe_value(updater.data, "currentSet")
+        value = _get_data_value(updater, "currentSet", float)
         return round(value, 0) if value is not None else None
     except Exception as err:
         if _should_log_error("get_current_set"):
@@ -185,9 +205,9 @@ def get_current_set(updater, hass) -> float:
         return None
 
 def get_session_energy(updater, hass) -> float:
-    """Get session energy with stable error handling."""
+    """Get session energy with stable error handling and cached fallback."""
     try:
-        value = get_safe_value(updater.data, "sessionEnergy")
+        value = _get_data_value(updater, "sessionEnergy", float)
         return round(value, 2) if value is not None else None
     except Exception as err:
         if _should_log_error("get_session_energy"):
@@ -195,9 +215,9 @@ def get_session_energy(updater, hass) -> float:
         return None
 
 def get_total_energy(updater, hass) -> float:
-    """Get total energy with stable error handling."""
+    """Get total energy with stable error handling and cached fallback."""
     try:
-        value = get_safe_value(updater.data, "totalEnergy")
+        value = _get_data_value(updater, "totalEnergy", float)
         return round(value, 2) if value is not None else None
     except Exception as err:
         if _should_log_error("get_total_energy"):
@@ -205,9 +225,9 @@ def get_total_energy(updater, hass) -> float:
         return None
 
 def get_counter_a_energy(updater, hass) -> float:
-    """Get counter A energy with stable error handling."""
+    """Get counter A energy with stable error handling and cached fallback."""
     try:
-        value = get_safe_value(updater.data, "IEM1")
+        value = _get_data_value(updater, "IEM1", float)
         return round(value, 2) if value is not None else None
     except Exception as err:
         if _should_log_error("get_counter_a_energy"):
@@ -215,9 +235,9 @@ def get_counter_a_energy(updater, hass) -> float:
         return None
 
 def get_counter_a_cost(updater, hass) -> float:
-    """Get counter A cost with stable error handling."""
+    """Get counter A cost with stable error handling and cached fallback."""
     try:
-        value = get_safe_value(updater.data, "IEM1_money")
+        value = _get_data_value(updater, "IEM1_money", float)
         return round(value, 2) if value is not None else None
     except Exception as err:
         if _should_log_error("get_counter_a_cost"):
@@ -225,9 +245,9 @@ def get_counter_a_cost(updater, hass) -> float:
         return None
 
 def get_counter_b_energy(updater, hass) -> float:
-    """Get counter B energy with stable error handling."""
+    """Get counter B energy with stable error handling and cached fallback."""
     try:
-        value = get_safe_value(updater.data, "IEM2")
+        value = _get_data_value(updater, "IEM2", float)
         return round(value, 2) if value is not None else None
     except Exception as err:
         if _should_log_error("get_counter_b_energy"):
@@ -235,9 +255,9 @@ def get_counter_b_energy(updater, hass) -> float:
         return None
 
 def get_counter_b_cost(updater, hass) -> float:
-    """Get counter B cost with stable error handling."""
+    """Get counter B cost with stable error handling and cached fallback."""
     try:
-        value = get_safe_value(updater.data, "IEM2_money")
+        value = _get_data_value(updater, "IEM2_money", float)
         return round(value, 2) if value is not None else None
     except Exception as err:
         if _should_log_error("get_counter_b_cost"):
@@ -245,9 +265,9 @@ def get_counter_b_cost(updater, hass) -> float:
         return None
 
 def get_box_temperature(updater, hass) -> float:
-    """Get box temperature with stable error handling."""
+    """Get box temperature with stable error handling and cached fallback."""
     try:
-        value = get_safe_value(updater.data, "temperature1")
+        value = _get_data_value(updater, "temperature1", float)
         return round(value, 0) if value is not None else None
     except Exception as err:
         if _should_log_error("get_box_temperature"):
@@ -255,9 +275,9 @@ def get_box_temperature(updater, hass) -> float:
         return None
 
 def get_plug_temperature(updater, hass) -> float:
-    """Get plug temperature with stable error handling."""
+    """Get plug temperature with stable error handling and cached fallback."""
     try:
-        value = get_safe_value(updater.data, "temperature2")
+        value = _get_data_value(updater, "temperature2", float)
         return round(value, 0) if value is not None else None
     except Exception as err:
         if _should_log_error("get_plug_temperature"):
@@ -265,20 +285,20 @@ def get_plug_temperature(updater, hass) -> float:
         return None
 
 def get_battery_voltage(updater, hass) -> float:
-    """Get battery voltage with stable error handling."""
+    """Get battery voltage with stable error handling and cached fallback."""
     try:
-        value = get_safe_value(updater.data, "vBat")
+        value = _get_data_value(updater, "vBat", float)
         return round(value, 2) if value is not None else None
     except Exception as err:
         if _should_log_error("get_battery_voltage"):
             _LOGGER.debug("Error getting battery voltage: %s", err)
         return None
 
-# State functions with stable error handling
+# State functions with stable error handling and cached fallback
 def get_charger_state(updater, hass) -> str:
-    """Get charger state with stable error handling."""
+    """Get charger state with stable error handling and cached fallback."""
     try:
-        state_value = get_safe_value(updater.data, "state", int)
+        state_value = _get_data_value(updater, "state", int)
         return get_charging_state(state_value) if state_value is not None else None
     except Exception as err:
         if _should_log_error("get_charger_state"):
@@ -286,10 +306,10 @@ def get_charger_state(updater, hass) -> str:
         return None
 
 def get_charger_substate(updater, hass) -> str:
-    """Get charger substate with stable error handling."""
+    """Get charger substate with stable error handling and cached fallback."""
     try:
-        state = get_safe_value(updater.data, "state", int)
-        substate = get_safe_value(updater.data, "subState", int)
+        state = _get_data_value(updater, "state", int)
+        substate = _get_data_value(updater, "subState", int)
         
         if None in (state, substate):
             return None
@@ -303,20 +323,20 @@ def get_charger_substate(updater, hass) -> str:
         return None
 
 def get_ground_status(updater, hass) -> str:
-    """Get ground status with stable error handling."""
+    """Get ground status with stable error handling and cached fallback."""
     try:
-        value = get_safe_value(updater.data, "ground", int)
+        value = _get_data_value(updater, "ground", int)
         return "Connected" if value == 1 else "Not Connected" if value == 0 else None
     except Exception as err:
         if _should_log_error("get_ground_status"):
             _LOGGER.debug("Error getting ground status: %s", err)
         return None
 
-# Time and session functions with stable error handling
+# Time and session functions with stable error handling and cached fallback
 def get_session_time(updater, hass) -> str:
-    """Get formatted session time with stable error handling."""
+    """Get formatted session time with stable error handling and cached fallback."""
     try:
-        seconds = get_safe_value(updater.data, "sessionTime", int)
+        seconds = _get_data_value(updater, "sessionTime", int)
         return format_duration(seconds) if seconds is not None else None
     except Exception as err:
         if _should_log_error("get_session_time"):
@@ -324,9 +344,9 @@ def get_session_time(updater, hass) -> str:
         return None
 
 def get_session_time_attrs(updater, hass) -> dict:
-    """Get session time attributes with stable error handling."""
+    """Get session time attributes with stable error handling and cached fallback."""
     try:
-        seconds = get_safe_value(updater.data, "sessionTime", int)
+        seconds = _get_data_value(updater, "sessionTime", int)
         return {"duration_seconds": seconds} if seconds is not None else {}
     except Exception as err:
         if _should_log_error("get_session_time_attrs"):
@@ -334,9 +354,9 @@ def get_session_time_attrs(updater, hass) -> dict:
         return {}
 
 def get_system_time(updater, hass) -> str:
-    """Get system time with timezone correction and stable error handling."""
+    """Get system time with timezone correction, stable error handling and cached fallback."""
     try:
-        timestamp = get_safe_value(updater.data, "systemTime", int)
+        timestamp = _get_data_value(updater, "systemTime", int)
         if timestamp is None:
             return None
             
@@ -365,11 +385,11 @@ def get_system_time(updater, hass) -> str:
             _LOGGER.debug("Error getting system time: %s", err)
         return None
 
-# Rate and cost functions with stable error handling
+# Rate and cost functions with stable error handling and cached fallback
 def get_primary_rate_cost(updater, hass) -> float:
-    """Get primary rate cost with stable error handling."""
+    """Get primary rate cost with stable error handling and cached fallback."""
     try:
-        value = get_safe_value(updater.data, "tarif", float)
+        value = _get_data_value(updater, "tarif", float)
         return round(value / 100, 2) if value is not None else None
     except Exception as err:
         if _should_log_error("get_primary_rate_cost"):
@@ -377,9 +397,9 @@ def get_primary_rate_cost(updater, hass) -> float:
         return None
 
 def get_active_rate_cost(updater, hass) -> float:
-    """Get active rate cost with stable error handling."""
+    """Get active rate cost with stable error handling and cached fallback."""
     try:
-        active_rate = get_safe_value(updater.data, "activeTarif", int)
+        active_rate = _get_data_value(updater, "activeTarif", int)
         if active_rate is None:
             return None
 
@@ -389,7 +409,7 @@ def get_active_rate_cost(updater, hass) -> float:
         if not key:
             return None
             
-        value = get_safe_value(updater.data, key, float)
+        value = _get_data_value(updater, key, float)
         return round(value / 100, 2) if value is not None else None
     except Exception as err:
         if _should_log_error("get_active_rate_cost"):
@@ -397,9 +417,9 @@ def get_active_rate_cost(updater, hass) -> float:
         return None
 
 def get_active_rate_attrs(updater, hass) -> dict:
-    """Get active rate attributes with stable error handling."""
+    """Get active rate attributes with stable error handling and cached fallback."""
     try:
-        active_rate = get_safe_value(updater.data, "activeTarif", int)
+        active_rate = _get_data_value(updater, "activeTarif", int)
         return {"rate_name": RATE_STATES.get(active_rate, "Unknown")} if active_rate is not None else {}
     except Exception as err:
         if _should_log_error("get_active_rate_attrs"):
@@ -407,9 +427,9 @@ def get_active_rate_attrs(updater, hass) -> dict:
         return {}
 
 def get_rate2_cost(updater, hass) -> float:
-    """Get rate 2 cost with stable error handling."""
+    """Get rate 2 cost with stable error handling and cached fallback."""
     try:
-        value = get_safe_value(updater.data, "tarifAValue", float)
+        value = _get_data_value(updater, "tarifAValue", float)
         return round(value / 100, 2) if value is not None else None
     except Exception as err:
         if _should_log_error("get_rate2_cost"):
@@ -417,9 +437,9 @@ def get_rate2_cost(updater, hass) -> float:
         return None
 
 def get_rate3_cost(updater, hass) -> float:
-    """Get rate 3 cost with stable error handling."""
+    """Get rate 3 cost with stable error handling and cached fallback."""
     try:
-        value = get_safe_value(updater.data, "tarifBValue", float)
+        value = _get_data_value(updater, "tarifBValue", float)
         return round(value / 100, 2) if value is not None else None
     except Exception as err:
         if _should_log_error("get_rate3_cost"):
@@ -427,10 +447,10 @@ def get_rate3_cost(updater, hass) -> float:
         return None
 
 def get_rate_status(rate_key: str):
-    """Factory function for rate status sensors with stable error handling."""
+    """Factory function for rate status sensors with stable error handling and cached fallback."""
     def _get_rate_status(updater, hass) -> str:
         try:
-            enabled = get_safe_value(updater.data, rate_key, int)
+            enabled = _get_data_value(updater, rate_key, int)
             return "Enabled" if enabled == 1 else "Disabled" if enabled == 0 else None
         except Exception as err:
             if _should_log_error(f"get_rate_status_{rate_key}"):
