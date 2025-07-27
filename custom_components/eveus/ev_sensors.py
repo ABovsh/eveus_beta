@@ -17,7 +17,7 @@ from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.entity import EntityCategory
 
 from .common import EveusSensorBase
-from .utils import get_safe_value, calculate_remaining_time, format_duration
+from .utils import get_safe_value, calculate_remaining_time, format_duration, get_device_suffix
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -140,9 +140,9 @@ class EVSocKwhSensor(EveusSensorBase):
     _attr_suggested_display_precision = 1
     _attr_state_class = SensorStateClass.TOTAL
     
-    def __init__(self, updater) -> None:
+    def __init__(self, updater, device_number: int = 1) -> None:
         """Initialize optimized SOC sensor."""
-        super().__init__(updater)
+        super().__init__(updater, device_number)
         self._stop_listen = None
         self._last_update_time = 0
         self._cached_value = None
@@ -205,9 +205,9 @@ class EVSocPercentSensor(EveusSensorBase):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 0
     
-    def __init__(self, updater) -> None:
+    def __init__(self, updater, device_number: int = 1) -> None:
         """Initialize optimized SOC percent sensor."""
-        super().__init__(updater)
+        super().__init__(updater, device_number)
         self._stop_listen = None
         self._last_update_time = 0
         self._cached_value = None
@@ -217,13 +217,16 @@ class EVSocPercentSensor(EveusSensorBase):
         await super().async_added_to_hass()
         
         # Track input changes and SOC energy sensor
+        device_suffix = get_device_suffix(self._device_number)
+        soc_energy_entity = f"sensor.eveus{device_suffix}_ev_charger_soc_energy"
+        
         self._stop_listen = async_track_state_change_event(
             self.hass,
             [
                 "input_number.ev_initial_soc",
                 "input_number.ev_battery_capacity",
                 "input_number.ev_soc_correction",
-                "sensor.eveus_ev_charger_soc_energy"
+                soc_energy_entity
             ],
             self._on_input_changed
         )
@@ -263,9 +266,9 @@ class TimeToTargetSocSensor(EveusSensorBase):
     ENTITY_NAME = "Time to Target SOC"
     _attr_icon = "mdi:timer"
     
-    def __init__(self, updater) -> None:
+    def __init__(self, updater, device_number: int = 1) -> None:
         """Initialize optimized time to target sensor."""
-        super().__init__(updater)
+        super().__init__(updater, device_number)
         self._stop_listen = None
         self._last_update_time = 0
         self._cached_value = "Unavailable"
@@ -275,13 +278,16 @@ class TimeToTargetSocSensor(EveusSensorBase):
         await super().async_added_to_hass()
         
         # Track relevant input changes
+        device_suffix = get_device_suffix(self._device_number)
+        soc_percent_entity = f"sensor.eveus{device_suffix}_ev_charger_soc_percent"
+        
         self._stop_listen = async_track_state_change_event(
             self.hass,
             [
                 "input_number.ev_target_soc",
                 "input_number.ev_battery_capacity",
                 "input_number.ev_soc_correction",
-                "sensor.eveus_ev_charger_soc_percent"
+                soc_percent_entity
             ],
             self._on_input_changed
         )
@@ -402,9 +408,9 @@ class InputEntitiesStatusSensor(EveusSensorBase):
         }
     }
     
-    def __init__(self, updater) -> None:
+    def __init__(self, updater, device_number: int = 1) -> None:
         """Initialize optimized input status sensor."""
-        super().__init__(updater)
+        super().__init__(updater, device_number)
         self._state = "Unknown"
         self._missing_entities: Set[str] = set()
         self._invalid_entities: Set[str] = set()
