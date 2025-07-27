@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 import aiohttp
 
-from .const import COMMAND_TIMEOUT
+from .const import COMMAND_TIMEOUT, ERROR_LOG_RATE_LIMIT  # Phase 1
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -26,7 +26,6 @@ class CommandManager:
         self._consecutive_failures = 0
         self._quiet_mode = False
         self._last_error_log = 0
-        self._error_log_interval = 300  # Log errors max every 5 minutes
 
     async def start(self) -> None:
         """Start command processing."""
@@ -62,12 +61,12 @@ class CommandManager:
                                 future.set_result(result)
                         except asyncio.TimeoutError:
                             if not self._quiet_mode and self._should_log_error():
-                                _LOGGER.warning("Command %s timed out after %s seconds", command, self._timeout)
+                                _LOGGER.debug("Command %s timed out after %s seconds", command, self._timeout)
                             if not future.done():
                                 future.set_result(False)  # Set result to False instead of exception
                         except Exception as err:
                             if not self._quiet_mode and self._should_log_error():
-                                _LOGGER.warning("Command execution error for %s: %s", command, err)
+                                _LOGGER.debug("Command execution error for %s: %s", command, err)
                             if not future.done():
                                 future.set_exception(err)
                 except Exception as err:
@@ -85,9 +84,9 @@ class CommandManager:
                 await asyncio.sleep(1)
 
     def _should_log_error(self) -> bool:
-        """Check if we should log errors (rate limited)."""
+        """Phase 1: Check if we should log errors (rate limited)."""
         current_time = time.time()
-        if current_time - self._last_error_log > self._error_log_interval:
+        if current_time - self._last_error_log > ERROR_LOG_RATE_LIMIT:
             self._last_error_log = current_time
             return True
         return False
@@ -135,17 +134,17 @@ class CommandManager:
             except aiohttp.ClientResponseError as err:
                 self._update_failure_tracking(False)
                 if not self._quiet_mode and self._should_log_error():
-                    _LOGGER.warning("Command %s HTTP error %d: %s", command, err.status, err)
+                    _LOGGER.debug("Command %s HTTP error %d: %s", command, err.status, err)
                 return False
             except aiohttp.ClientConnectorError as err:
                 self._update_failure_tracking(False)
                 if not self._quiet_mode and self._should_log_error():
-                    _LOGGER.warning("Connection error for command %s: %s", command, err)
+                    _LOGGER.debug("Connection error for command %s: %s", command, err)
                 return False
             except asyncio.TimeoutError:
                 self._update_failure_tracking(False)
                 if not self._quiet_mode and self._should_log_error():
-                    _LOGGER.warning("Command %s timed out", command)
+                    _LOGGER.debug("Command %s timed out", command)
                 return False
             except Exception as err:
                 self._update_failure_tracking(False)
@@ -164,7 +163,7 @@ class CommandManager:
             return await asyncio.wait_for(future, timeout=60)
         except asyncio.TimeoutError:
             if not self._quiet_mode and self._should_log_error():
-                _LOGGER.warning("Command %s queue processing timed out", command)
+                _LOGGER.debug("Command %s queue processing timed out", command)
             return False
         except Exception as err:
             if self._should_log_error():
@@ -194,6 +193,6 @@ async def send_eveus_command(
             response.raise_for_status()
             return True
     except Exception as err:
-        # Only log at debug level to reduce noise for legacy function
-        _LOGGER.debug("Command %s failed: %s", command, str(err))
+        # Phase 1: Only log at debug level to reduce noise for legacy function
+        _LOGGER.debug("Legacy command %s failed: %s", command, str(err))
         return False
