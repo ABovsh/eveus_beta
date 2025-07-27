@@ -40,7 +40,7 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
     @property
     def is_on(self) -> bool:
         """Return true if the switch is on - prioritize intended state."""
-        # Priority: pending command > intended state > device state > default
+        # Priority: pending command > intended state > device state > cached fallback
         if self._pending_command is not None:
             return self._pending_command
         if self._intended_state is not None:
@@ -48,9 +48,15 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
         if self._device_state is not None:
             return self._device_state
         
-        # Default fallback
-        device_value = get_safe_value(self._updater.data, self._state_key, int, 0)
-        return bool(device_value)
+        # SAFE: Only use cached data when live data is completely unavailable
+        if self._updater.data and self._state_key in self._updater.data:
+            # Fresh data available - use it even if it's 0 (OFF)
+            device_value = get_safe_value(self._updater.data, self._state_key, int, 0)
+            return bool(device_value)
+        else:
+            # No fresh data - fallback to cached data only as last resort
+            cached_value = self.get_cached_data_value(self._state_key, 0)
+            return bool(cached_value)
 
     @property
     def available(self) -> bool:
@@ -107,19 +113,24 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
         if not self._restore_attempted and self._intended_state is not None:
             self._restore_attempted = True
             
-            # Only send command if device state differs from intended state
-            current_device_state = bool(get_safe_value(self._updater.data, self._state_key, int, 0))
+            # SAFE: Check device state with proper priority
+            current_device_state = None
+            if self._updater.data and self._state_key in self._updater.data:
+                current_device_state = bool(get_safe_value(self._updater.data, self._state_key, int, 0))
+            elif self._cached_data and self._state_key in self._cached_data:
+                current_device_state = bool(self.get_cached_data_value(self._state_key, 0))
             
-            if current_device_state != self._intended_state:
+            if current_device_state is None or current_device_state != self._intended_state:
                 _LOGGER.info("Applying restored state for %s: %s", self.name, "on" if self._intended_state else "off")
                 await self._async_send_command(1 if self._intended_state else 0)
 
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
-        # Update device state from coordinator data
-        if self._state_key in self._updater.data:
-            new_device_state = bool(get_safe_value(self._updater.data, self._state_key, int, 0))
+        # SAFE: Only use fresh data when available, never override with cached
+        if self._updater.data and self._state_key in self._updater.data:
+            device_data_value = get_safe_value(self._updater.data, self._state_key, int, 0)
+            new_device_state = bool(device_data_value)
             
             # Only update if device state actually changed
             if self._device_state != new_device_state:
@@ -197,8 +208,14 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
         if self._safe_mode:
             return False
             
-        # For reset switch, "on" means there's energy to reset
-        value = get_safe_value(self._updater.data, self._state_key, float, 0)
+        # SAFE: Check counter value with proper priority (never cached for reset switch)
+        if self._updater.data and self._state_key in self._updater.data:
+            value = get_safe_value(self._updater.data, self._state_key, float, 0)
+        elif self._cached_data and self._state_key in self._cached_data:
+            value = self.get_cached_data_value(self._state_key, 0)
+        else:
+            value = 0
+            
         return value > 0
 
     async def async_turn_on(self, **kwargs: Any) -> None:
