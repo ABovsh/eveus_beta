@@ -26,9 +26,10 @@ async def async_setup_entry(
 ) -> None:
     """Set up Eveus sensors with optimized factory pattern."""
     try:
-        # Get updater from stored data
+        # Get updater and device info from stored data
         data = hass.data[DOMAIN][entry.entry_id]
         updater = data["updater"]
+        device_number = data.get("device_number", 1)  # Default to 1 for backward compatibility
         
         if not updater:
             _LOGGER.error("No updater found for entry %s", entry.entry_id)
@@ -39,15 +40,15 @@ async def async_setup_entry(
         
         # Create standard sensors from specifications
         sensor_specs = get_sensor_specifications()
-        standard_sensors = [spec.create_sensor(updater) for spec in sensor_specs]
+        standard_sensors = [spec.create_sensor(updater, device_number) for spec in sensor_specs]
         sensors.extend(standard_sensors)
         
         # Create EV-specific optimized sensors
         ev_sensors = [
-            EVSocKwhSensor(updater),
-            EVSocPercentSensor(updater),
-            TimeToTargetSocSensor(updater),
-            InputEntitiesStatusSensor(updater),
+            EVSocKwhSensor(updater, device_number),
+            EVSocPercentSensor(updater, device_number),
+            TimeToTargetSocSensor(updater, device_number),
+            InputEntitiesStatusSensor(updater, device_number),
         ]
         sensors.extend(ev_sensors)
         
@@ -63,11 +64,12 @@ async def async_setup_entry(
         async_add_entities(sensors, update_before_add=False)
         
         _LOGGER.info(
-            "Successfully created %d sensors (%d standard, %d EV-specific) for %s",
+            "Successfully created %d sensors (%d standard, %d EV-specific) for %s (device %d)",
             len(sensors),
             len(standard_sensors),
             len(ev_sensors),
-            entry.title
+            entry.title,
+            device_number
         )
         
     except Exception as err:
