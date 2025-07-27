@@ -1,4 +1,4 @@
-"""Optimized EV-specific sensors with smart caching and performance improvements."""
+"""Optimized EV-specific sensors with stable offline handling."""
 from __future__ import annotations
 
 import logging
@@ -42,7 +42,7 @@ class InputEntityCache:
         self.timestamp = time.time()
 
 class CachedSOCCalculator:
-    """High-performance SOC calculator with intelligent caching."""
+    """High-performance SOC calculator with stable error handling."""
     
     def __init__(self, cache_ttl: int = 30):
         self.cache_ttl = cache_ttl
@@ -50,9 +50,11 @@ class CachedSOCCalculator:
         self._soc_kwh_cache: Optional[float] = None
         self._soc_percent_cache: Optional[float] = None
         self._cache_timestamp = 0
+        self._last_error_log = 0
+        self._error_log_interval = 300  # Log errors max every 5 minutes
         
     def _update_input_cache(self, hass: HomeAssistant) -> bool:
-        """Update input entity cache if needed."""
+        """Update input entity cache if needed with quiet error handling."""
         if self._input_cache.is_valid(self.cache_ttl):
             return True
             
@@ -65,10 +67,13 @@ class CachedSOCCalculator:
                 'target_soc': hass.states.get("input_number.ev_target_soc")
             }
             
-            # Check if any entities are missing
+            # Check if any entities are missing (quietly)
             missing = [k for k, v in entities.items() if v is None]
             if missing:
-                _LOGGER.debug("Missing input entities: %s", missing)
+                current_time = time.time()
+                if current_time - self._last_error_log > self._error_log_interval:
+                    self._last_error_log = current_time
+                    _LOGGER.debug("Missing input entities: %s", missing)
                 return False
             
             # Update cache with all values at once
@@ -77,14 +82,20 @@ class CachedSOCCalculator:
                 try:
                     updates[key] = float(entity.state)
                 except (ValueError, TypeError):
-                    _LOGGER.warning("Invalid value for %s: %s", key, entity.state)
+                    current_time = time.time()
+                    if current_time - self._last_error_log > self._error_log_interval:
+                        self._last_error_log = current_time
+                        _LOGGER.debug("Invalid value for %s: %s", key, entity.state)
                     return False
                     
             self._input_cache.update(**updates)
             return True
             
         except Exception as err:
-            _LOGGER.error("Error updating input cache: %s", err)
+            current_time = time.time()
+            if current_time - self._last_error_log > self._error_log_interval:
+                self._last_error_log = current_time
+                _LOGGER.debug("Error updating input cache: %s", err)
             return False
     
     @lru_cache(maxsize=32)
@@ -98,7 +109,7 @@ class CachedSOCCalculator:
         return round(max(0, min(total_kwh, capacity)), 2)
     
     def get_soc_kwh(self, hass: HomeAssistant, energy_charged: float) -> Optional[float]:
-        """Get SOC in kWh with caching."""
+        """Get SOC in kWh with stable error handling."""
         if not self._update_input_cache(hass):
             return None
             
@@ -110,11 +121,14 @@ class CachedSOCCalculator:
                 self._input_cache.soc_correction or 7.5
             )
         except Exception as err:
-            _LOGGER.error("Error calculating SOC kWh: %s", err)
+            current_time = time.time()
+            if current_time - self._last_error_log > self._error_log_interval:
+                self._last_error_log = current_time
+                _LOGGER.debug("Error calculating SOC kWh: %s", err)
             return None
     
     def get_soc_percent(self, hass: HomeAssistant, energy_charged: float) -> Optional[float]:
-        """Get SOC percentage with caching."""
+        """Get SOC percentage with stable error handling."""
         soc_kwh = self.get_soc_kwh(hass, energy_charged)
         if soc_kwh is None or not self._input_cache.battery_capacity:
             return self._input_cache.initial_soc or 0
@@ -131,7 +145,7 @@ class CachedSOCCalculator:
 _soc_calculator = CachedSOCCalculator()
 
 class EVSocKwhSensor(EveusSensorBase):
-    """Optimized SOC energy sensor with smart caching."""
+    """Optimized SOC energy sensor with stable offline handling."""
     
     ENTITY_NAME = "SOC Energy"
     _attr_device_class = SensorDeviceClass.ENERGY
@@ -148,40 +162,48 @@ class EVSocKwhSensor(EveusSensorBase):
         self._cached_value = None
         
     async def async_added_to_hass(self) -> None:
-        """Handle entity addition with optimized event tracking.""" 
+        """Handle entity addition with stable event tracking.""" 
         await super().async_added_to_hass()
         
-        # Track only essential input changes
-        self._stop_listen = async_track_state_change_event(
-            self.hass,
-            [
-                "input_number.ev_initial_soc",
-                "input_number.ev_battery_capacity", 
-                "input_number.ev_soc_correction"
-            ],
-            self._on_input_changed
-        )
+        # Track only essential input changes (with error handling)
+        try:
+            self._stop_listen = async_track_state_change_event(
+                self.hass,
+                [
+                    "input_number.ev_initial_soc",
+                    "input_number.ev_battery_capacity", 
+                    "input_number.ev_soc_correction"
+                ],
+                self._on_input_changed
+            )
+        except Exception as err:
+            _LOGGER.debug("Could not set up state tracking for %s: %s", self.unique_id, err)
 
     @callback
     def _on_input_changed(self, event: Event) -> None:
-        """Handle input changes efficiently."""
-        # Invalidate calculator cache
-        _soc_calculator.invalidate_cache()
-        
-        # Rate limit updates
-        current_time = time.time()
-        if current_time - self._last_update_time > 1:  # Max 1 update per second
-            self._last_update_time = current_time
-            self.async_write_ha_state()
+        """Handle input changes efficiently with error protection."""
+        try:
+            # Invalidate calculator cache
+            _soc_calculator.invalidate_cache()
+            
+            # Rate limit updates
+            current_time = time.time()
+            if current_time - self._last_update_time > 1:  # Max 1 update per second
+                self._last_update_time = current_time
+                self.async_write_ha_state()
+        except Exception as err:
+            _LOGGER.debug("Error handling input change for %s: %s", self.unique_id, err)
 
     async def async_will_remove_from_hass(self) -> None:
-        """Clean up event listeners."""
-        if self._stop_listen:
-            self._stop_listen()
+        """Clean up event listeners safely."""
+        try:
+            if self._stop_listen:
+                self._stop_listen()
+        except Exception as err:
+            _LOGGER.debug("Error cleaning up listeners for %s: %s", self.unique_id, err)
 
-    @property
-    def native_value(self) -> Optional[float]:
-        """Get SOC in kWh using optimized calculator."""
+    def _get_sensor_value(self) -> Optional[float]:
+        """Get SOC in kWh using optimized calculator with stable error handling."""
         try:
             energy_charged = get_safe_value(self._updater.data, "IEM1", float, default=0)
             result = _soc_calculator.get_soc_kwh(self.hass, energy_charged)
@@ -189,14 +211,14 @@ class EVSocKwhSensor(EveusSensorBase):
             if result is not None:
                 self._cached_value = result
                 
-            return result
+            return result or self._cached_value  # Fallback to cached value
             
         except Exception as err:
-            _LOGGER.error("Error in SOC Energy calculation: %s", err)
+            _LOGGER.debug("Error in SOC Energy calculation for %s: %s", self.unique_id, err)
             return self._cached_value  # Return cached value on error
 
 class EVSocPercentSensor(EveusSensorBase):
-    """Optimized SOC percentage sensor."""
+    """Optimized SOC percentage sensor with stable offline handling."""
     
     ENTITY_NAME = "SOC Percent"
     _attr_device_class = SensorDeviceClass.BATTERY
@@ -213,40 +235,48 @@ class EVSocPercentSensor(EveusSensorBase):
         self._cached_value = None
         
     async def async_added_to_hass(self) -> None:
-        """Handle entity addition."""
+        """Handle entity addition with stable tracking."""
         await super().async_added_to_hass()
         
-        # Track input changes and SOC energy sensor
-        device_suffix = get_device_suffix(self._device_number)
-        soc_energy_entity = f"sensor.eveus{device_suffix}_ev_charger_soc_energy"
-        
-        self._stop_listen = async_track_state_change_event(
-            self.hass,
-            [
-                "input_number.ev_initial_soc",
-                "input_number.ev_battery_capacity",
-                "input_number.ev_soc_correction",
-                soc_energy_entity
-            ],
-            self._on_input_changed
-        )
+        # Track input changes and SOC energy sensor (with error handling)
+        try:
+            device_suffix = get_device_suffix(self._device_number)
+            soc_energy_entity = f"sensor.eveus{device_suffix}_ev_charger_soc_energy"
+            
+            self._stop_listen = async_track_state_change_event(
+                self.hass,
+                [
+                    "input_number.ev_initial_soc",
+                    "input_number.ev_battery_capacity",
+                    "input_number.ev_soc_correction",
+                    soc_energy_entity
+                ],
+                self._on_input_changed
+            )
+        except Exception as err:
+            _LOGGER.debug("Could not set up state tracking for %s: %s", self.unique_id, err)
 
     @callback
     def _on_input_changed(self, event: Event) -> None:
-        """Handle input changes with rate limiting."""
-        current_time = time.time()
-        if current_time - self._last_update_time > 1:
-            self._last_update_time = current_time
-            self.async_write_ha_state()
+        """Handle input changes with stable rate limiting."""
+        try:
+            current_time = time.time()
+            if current_time - self._last_update_time > 1:
+                self._last_update_time = current_time
+                self.async_write_ha_state()
+        except Exception as err:
+            _LOGGER.debug("Error handling input change for %s: %s", self.unique_id, err)
 
     async def async_will_remove_from_hass(self) -> None:
-        """Clean up event listeners."""
-        if self._stop_listen:
-            self._stop_listen()
+        """Clean up event listeners safely."""
+        try:
+            if self._stop_listen:
+                self._stop_listen()
+        except Exception as err:
+            _LOGGER.debug("Error cleaning up listeners for %s: %s", self.unique_id, err)
 
-    @property
-    def native_value(self) -> Optional[float]:
-        """Get SOC percentage using optimized calculator."""
+    def _get_sensor_value(self) -> Optional[float]:
+        """Get SOC percentage using optimized calculator with stable error handling."""
         try:
             energy_charged = get_safe_value(self._updater.data, "IEM1", float, default=0)
             result = _soc_calculator.get_soc_percent(self.hass, energy_charged)
@@ -254,14 +284,14 @@ class EVSocPercentSensor(EveusSensorBase):
             if result is not None:
                 self._cached_value = result
                 
-            return result
+            return result if result is not None else (self._cached_value or 0)
             
         except Exception as err:
-            _LOGGER.error("Error in SOC Percent calculation: %s", err)
+            _LOGGER.debug("Error in SOC Percent calculation for %s: %s", self.unique_id, err)
             return self._cached_value or 0  # Return cached or 0 on error
 
 class TimeToTargetSocSensor(EveusSensorBase):
-    """Optimized time to target SOC sensor with direct calculation."""
+    """Optimized time to target SOC sensor with stable calculation."""
     
     ENTITY_NAME = "Time to Target SOC"
     _attr_icon = "mdi:timer"
@@ -274,63 +304,81 @@ class TimeToTargetSocSensor(EveusSensorBase):
         self._cached_value = "Unavailable"
         
     async def async_added_to_hass(self) -> None:
-        """Handle entity addition."""
+        """Handle entity addition with stable tracking."""
         await super().async_added_to_hass()
         
-        # Track relevant input changes
-        device_suffix = get_device_suffix(self._device_number)
-        soc_percent_entity = f"sensor.eveus{device_suffix}_ev_charger_soc_percent"
-        
-        self._stop_listen = async_track_state_change_event(
-            self.hass,
-            [
-                "input_number.ev_target_soc",
-                "input_number.ev_battery_capacity",
-                "input_number.ev_soc_correction",
-                soc_percent_entity
-            ],
-            self._on_input_changed
-        )
+        # Track relevant input changes (with error handling)
+        try:
+            device_suffix = get_device_suffix(self._device_number)
+            soc_percent_entity = f"sensor.eveus{device_suffix}_ev_charger_soc_percent"
+            
+            self._stop_listen = async_track_state_change_event(
+                self.hass,
+                [
+                    "input_number.ev_target_soc",
+                    "input_number.ev_battery_capacity",
+                    "input_number.ev_soc_correction",
+                    soc_percent_entity
+                ],
+                self._on_input_changed
+            )
+        except Exception as err:
+            _LOGGER.debug("Could not set up state tracking for %s: %s", self.unique_id, err)
 
     @callback 
     def _on_input_changed(self, event: Event) -> None:
-        """Handle input changes with rate limiting."""
-        current_time = time.time()
-        if current_time - self._last_update_time > 2:  # Rate limit to every 2 seconds
-            self._last_update_time = current_time
-            self.async_write_ha_state()
+        """Handle input changes with stable rate limiting."""
+        try:
+            current_time = time.time()
+            if current_time - self._last_update_time > 2:  # Rate limit to every 2 seconds
+                self._last_update_time = current_time
+                self.async_write_ha_state()
+        except Exception as err:
+            _LOGGER.debug("Error handling input change for %s: %s", self.unique_id, err)
 
     async def async_will_remove_from_hass(self) -> None:
-        """Clean up event listeners."""
-        if self._stop_listen:
-            self._stop_listen()
+        """Clean up event listeners safely."""
+        try:
+            if self._stop_listen:
+                self._stop_listen()
+        except Exception as err:
+            _LOGGER.debug("Error cleaning up listeners for %s: %s", self.unique_id, err)
 
     def _get_input_values(self) -> Dict[str, Optional[float]]:
-        """Get all required input values safely."""
+        """Get all required input values safely with stable error handling."""
         try:
             values = {}
             
             # Get input entities
-            initial_soc_entity = self.hass.states.get("input_number.ev_initial_soc")
-            battery_capacity_entity = self.hass.states.get("input_number.ev_battery_capacity")
-            soc_correction_entity = self.hass.states.get("input_number.ev_soc_correction")
-            target_soc_entity = self.hass.states.get("input_number.ev_target_soc")
+            entities = {
+                'initial_soc': self.hass.states.get("input_number.ev_initial_soc"),
+                'battery_capacity': self.hass.states.get("input_number.ev_battery_capacity"),
+                'soc_correction': self.hass.states.get("input_number.ev_soc_correction"),
+                'target_soc': self.hass.states.get("input_number.ev_target_soc")
+            }
             
             # Convert to float with fallbacks
-            values['initial_soc'] = float(initial_soc_entity.state) if initial_soc_entity else None
-            values['battery_capacity'] = float(battery_capacity_entity.state) if battery_capacity_entity else None
-            values['soc_correction'] = float(soc_correction_entity.state) if soc_correction_entity else 7.5
-            values['target_soc'] = float(target_soc_entity.state) if target_soc_entity else None
+            for key, entity in entities.items():
+                if entity is not None:
+                    try:
+                        values[key] = float(entity.state)
+                    except (ValueError, TypeError):
+                        values[key] = None
+                else:
+                    values[key] = None
+            
+            # Set default for soc_correction
+            if values.get('soc_correction') is None:
+                values['soc_correction'] = 7.5
             
             return values
             
-        except (ValueError, TypeError, AttributeError) as err:
-            _LOGGER.debug("Error getting input values: %s", err)
+        except Exception as err:
+            _LOGGER.debug("Error getting input values for %s: %s", self.unique_id, err)
             return {}
 
-    @property
-    def native_value(self) -> str:
-        """Calculate time to target with direct approach to avoid data access issues."""
+    def _get_sensor_value(self) -> str:
+        """Calculate time to target with stable direct approach."""
         try:
             # Get all required values directly
             power_meas = get_safe_value(self._updater.data, "powerMeas", float, default=0)
@@ -338,7 +386,8 @@ class TimeToTargetSocSensor(EveusSensorBase):
             
             # Get input values
             input_values = self._get_input_values()
-            if not all(v is not None for k, v in input_values.items() if k != 'soc_correction'):
+            required_keys = ['initial_soc', 'battery_capacity', 'target_soc']
+            if not all(input_values.get(k) is not None for k in required_keys):
                 self._cached_value = "Unavailable"
                 return self._cached_value
             
@@ -370,11 +419,11 @@ class TimeToTargetSocSensor(EveusSensorBase):
             return result
             
         except Exception as err:
-            _LOGGER.error("Error calculating time to target: %s", err)
+            _LOGGER.debug("Error calculating time to target for %s: %s", self.unique_id, err)
             return self._cached_value
 
 class InputEntitiesStatusSensor(EveusSensorBase):
-    """Optimized input status monitoring sensor."""
+    """Optimized input status monitoring sensor with stable checking."""
     
     ENTITY_NAME = "Input Entities Status"
     _attr_icon = "mdi:clipboard-check"
@@ -417,9 +466,8 @@ class InputEntitiesStatusSensor(EveusSensorBase):
         self._last_check_time = 0
         self._check_interval = 30  # Check every 30 seconds
         
-    @property
-    def native_value(self) -> str:
-        """Get input status with caching."""
+    def _get_sensor_value(self) -> str:
+        """Get input status with stable caching."""
         current_time = time.time()
         
         # Rate limit status checks
@@ -431,78 +479,102 @@ class InputEntitiesStatusSensor(EveusSensorBase):
     
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
-        """Get optimized status attributes.""" 
-        attrs = {
-            "missing_entities": list(self._missing_entities),
-            "invalid_entities": list(self._invalid_entities),
-            "required_count": len(self.REQUIRED_INPUTS),
-            "missing_count": len(self._missing_entities),
-            "invalid_count": len(self._invalid_entities),
-            "status_summary": self._get_status_summary(),
-        }
-        
-        # Only include configuration help if there are missing entities
-        if self._missing_entities:
-            attrs["configuration_help"] = self._get_configuration_help()
+        """Get optimized status attributes with stable error handling."""
+        try:
+            attrs = {
+                "missing_entities": list(self._missing_entities),
+                "invalid_entities": list(self._invalid_entities),
+                "required_count": len(self.REQUIRED_INPUTS),
+                "missing_count": len(self._missing_entities),
+                "invalid_count": len(self._invalid_entities),
+                "status_summary": self._get_status_summary(),
+            }
             
-        return attrs
+            # Only include configuration help if there are missing entities
+            if self._missing_entities:
+                attrs["configuration_help"] = self._get_configuration_help()
+                
+            return attrs
+        except Exception as err:
+            _LOGGER.debug("Error getting attributes for %s: %s", self.unique_id, err)
+            return {}
     
     def _check_inputs(self) -> None:
-        """Efficiently check all required inputs."""
-        self._missing_entities.clear()
-        self._invalid_entities.clear()
-        
-        for entity_id in self.REQUIRED_INPUTS:
-            state = self.hass.states.get(entity_id)
+        """Efficiently check all required inputs with stable error handling."""
+        try:
+            self._missing_entities.clear()
+            self._invalid_entities.clear()
             
-            if state is None:
-                self._missing_entities.add(entity_id)
-                continue
-                
-            # Validate entity value
-            try:
-                value = float(state.state)
-                if value < 0:  # Simple validation
+            for entity_id in self.REQUIRED_INPUTS:
+                try:
+                    state = self.hass.states.get(entity_id)
+                    
+                    if state is None:
+                        self._missing_entities.add(entity_id)
+                        continue
+                        
+                    # Validate entity value
+                    try:
+                        value = float(state.state)
+                        if value < 0:  # Simple validation
+                            self._invalid_entities.add(entity_id)
+                    except (ValueError, TypeError):
+                        self._invalid_entities.add(entity_id)
+                except Exception:
+                    # Silently handle individual entity check errors
                     self._invalid_entities.add(entity_id)
-            except (ValueError, TypeError):
-                self._invalid_entities.add(entity_id)
-        
-        # Update status efficiently
-        if self._missing_entities:
-            self._state = f"Missing {len(self._missing_entities)} Inputs"
-        elif self._invalid_entities:
-            self._state = f"Invalid {len(self._invalid_entities)} Inputs"
-        else:
-            self._state = "OK"
+            
+            # Update status efficiently
+            if self._missing_entities:
+                self._state = f"Missing {len(self._missing_entities)} Inputs"
+            elif self._invalid_entities:
+                self._state = f"Invalid {len(self._invalid_entities)} Inputs"
+            else:
+                self._state = "OK"
+        except Exception as err:
+            _LOGGER.debug("Error checking inputs for %s: %s", self.unique_id, err)
+            self._state = "Error"
     
     def _get_status_summary(self) -> Dict[str, Any]:
-        """Get concise status summary."""
-        return {
-            entity_id: "Missing" if entity_id in self._missing_entities 
-                      else "Invalid" if entity_id in self._invalid_entities 
-                      else "OK"
-            for entity_id in self.REQUIRED_INPUTS
-        }
+        """Get concise status summary with stable error handling."""
+        try:
+            return {
+                entity_id: "Missing" if entity_id in self._missing_entities 
+                          else "Invalid" if entity_id in self._invalid_entities 
+                          else "OK"
+                for entity_id in self.REQUIRED_INPUTS
+            }
+        except Exception as err:
+            _LOGGER.debug("Error getting status summary for %s: %s", self.unique_id, err)
+            return {}
     
     def _get_configuration_help(self) -> Dict[str, str]:
-        """Get configuration help for missing entities."""
-        if not self._missing_entities:
-            return None
+        """Get configuration help for missing entities with stable error handling."""
+        try:
+            if not self._missing_entities:
+                return None
+                
+            help_text = {}
+            for entity_id in self._missing_entities:
+                try:
+                    config = self.REQUIRED_INPUTS[entity_id]
+                    input_name = entity_id.split(".", 1)[1]
+                    help_text[entity_id] = (
+                        f"{input_name}:\n"
+                        f"  name: '{config['name']}'\n" 
+                        f"  min: {config['min']}\n"
+                        f"  max: {config['max']}\n"
+                        f"  step: {config['step']}\n"
+                        f"  initial: {config['initial']}\n"
+                        f"  unit_of_measurement: '{config['unit_of_measurement']}'\n"
+                        f"  mode: {config['mode']}\n"
+                        f"  icon: '{config['icon']}'"
+                    )
+                except Exception:
+                    # Skip entities with config errors
+                    continue
             
-        help_text = {}
-        for entity_id in self._missing_entities:
-            config = self.REQUIRED_INPUTS[entity_id]
-            input_name = entity_id.split(".", 1)[1]
-            help_text[entity_id] = (
-                f"{input_name}:\n"
-                f"  name: '{config['name']}'\n" 
-                f"  min: {config['min']}\n"
-                f"  max: {config['max']}\n"
-                f"  step: {config['step']}\n"
-                f"  initial: {config['initial']}\n"
-                f"  unit_of_measurement: '{config['unit_of_measurement']}'\n"
-                f"  mode: {config['mode']}\n"
-                f"  icon: '{config['icon']}'"
-            )
-        
-        return help_text
+            return help_text
+        except Exception as err:
+            _LOGGER.debug("Error getting configuration help for %s: %s", self.unique_id, err)
+            return None
