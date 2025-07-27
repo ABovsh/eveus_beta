@@ -38,9 +38,9 @@ class EveusNumberEntity(BaseEveusEntity, NumberEntity):
     _attr_has_entity_name = True
     _attr_should_poll = False
     
-    def __init__(self, updater) -> None:
+    def __init__(self, updater, device_number: int = 1) -> None:
         """Initialize the entity."""
-        super().__init__(updater)
+        super().__init__(updater, device_number)
         self._attr_native_value = None
         
     async def async_added_to_hass(self) -> None:
@@ -65,9 +65,9 @@ class EveusCurrentNumber(EveusNumberEntity):
     _attr_entity_category = EntityCategory.CONFIG
     _command = "currentSet"
 
-    def __init__(self, updater, model: str) -> None:
+    def __init__(self, updater, model: str, device_number: int = 1) -> None:
         """Initialize the current control."""
-        super().__init__(updater)
+        super().__init__(updater, device_number)
         self._model = model
         self._command_lock = asyncio.Lock()
         
@@ -114,6 +114,7 @@ async def async_setup_entry(
     """Set up the Eveus number entities."""
     data = hass.data[DOMAIN][entry.entry_id]
     updater = data.get("updater")
+    device_number = data.get("device_number", 1)  # Default to 1 for backward compatibility
     
     if not updater:
         _LOGGER.error("No updater found in data")
@@ -125,7 +126,7 @@ async def async_setup_entry(
         return
 
     entities = [
-        EveusCurrentNumber(updater, model),
+        EveusCurrentNumber(updater, model, device_number),
     ]
 
     # Initialize entities dict if needed
