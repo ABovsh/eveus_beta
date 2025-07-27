@@ -85,7 +85,7 @@ class EveusCurrentNumber(EveusNumberEntity):
     @property
     def native_value(self) -> float | None:
         """Return the current value - prioritize intended value."""
-        # Priority: pending value > intended value > device value > fallback
+        # Priority: pending value > intended value > device value > cached fallback
         if self._pending_value is not None:
             return self._pending_value
         if self._intended_value is not None:
@@ -93,11 +93,19 @@ class EveusCurrentNumber(EveusNumberEntity):
         if self._device_value is not None:
             return self._device_value
             
-        # Fallback to device data
-        device_value = get_safe_value(self._updater.data, self._command)
-        if device_value is not None:
-            self._device_value = float(device_value)
-            return self._device_value
+        # SAFE: Only use cached data when live data is completely unavailable
+        if self._updater.data and self._command in self._updater.data:
+            # Fresh data available - use it (even if it's different from expected)
+            device_value = get_safe_value(self._updater.data, self._command)
+            if device_value is not None:
+                self._device_value = float(device_value)
+                return self._device_value
+        else:
+            # No fresh data - fallback to cached data only as last resort
+            cached_value = self.get_cached_data_value(self._command)
+            if cached_value is not None:
+                self._device_value = float(cached_value)
+                return self._device_value
             
         return None
 
@@ -163,8 +171,12 @@ class EveusCurrentNumber(EveusNumberEntity):
         if not self._restore_attempted and self._intended_value is not None:
             self._restore_attempted = True
             
-            # Only send command if device value differs significantly from intended value
-            current_device_value = get_safe_value(self._updater.data, self._command, float)
+            # SAFE: Check device value with proper priority
+            current_device_value = None
+            if self._updater.data and self._command in self._updater.data:
+                current_device_value = get_safe_value(self._updater.data, self._command, float)
+            elif self._cached_data and self._command in self._cached_data:
+                current_device_value = self.get_cached_data_value(self._command, float)
             
             if (current_device_value is None or 
                 abs(current_device_value - self._intended_value) > 0.5):
@@ -175,11 +187,13 @@ class EveusCurrentNumber(EveusNumberEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
-        # Update device value from coordinator data
-        if self._command in self._updater.data:
-            new_device_value = get_safe_value(self._updater.data, self._command, float)
+        # SAFE: Only use fresh data when available, never override with cached
+        if self._updater.data and self._command in self._updater.data:
+            device_data_value = get_safe_value(self._updater.data, self._command, float)
             
-            if new_device_value is not None:
+            if device_data_value is not None:
+                new_device_value = float(device_data_value)
+                
                 # Only update if device value actually changed significantly
                 if (self._device_value is None or 
                     abs(self._device_value - new_device_value) > 0.5):
