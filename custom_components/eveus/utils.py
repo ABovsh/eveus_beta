@@ -22,6 +22,44 @@ _LOGGER = logging.getLogger(__name__)
 T = TypeVar('T')
 
 # =============================================================================
+# Multi-Device Support Utilities
+# =============================================================================
+
+def get_next_device_number(hass: HomeAssistant) -> int:
+    """Find the next available device number for multi-device support."""
+    existing_numbers = set()
+    
+    # Check existing config entries for this domain
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        device_number = entry.data.get("device_number")
+        if device_number is not None:
+            existing_numbers.add(device_number)
+    
+    # Find next available number starting from 1
+    next_number = 1
+    while next_number in existing_numbers:
+        next_number += 1
+    
+    return next_number
+
+def get_device_suffix(device_number: int) -> str:
+    """Get device suffix for unique IDs (empty for device 1, number for others)."""
+    return "" if device_number == 1 else str(device_number)
+
+def get_device_display_suffix(device_number: int) -> str:
+    """Get device suffix for display names (empty for device 1, ' N' for others)."""
+    return "" if device_number == 1 else f" {device_number}"
+
+def get_device_identifier(host: str, device_number: int) -> tuple:
+    """Get device identifier for device registry (backward compatible)."""
+    if device_number == 1:
+        # Backward compatibility: first device uses original identifier format
+        return (DOMAIN, host)
+    else:
+        # Additional devices include device number
+        return (DOMAIN, f"{host}_{device_number}")
+
+# =============================================================================
 # Data Conversion and Validation Utilities
 # =============================================================================
 
@@ -86,8 +124,8 @@ def safe_int_cached(value: Union[str, int, float], default: int = 0) -> int:
 # Device Information and Networking
 # =============================================================================
 
-def get_device_info(host: str, data: Dict[str, Any]) -> Dict[str, Any]:
-    """Get standardized device information with optimized data extraction."""
+def get_device_info(host: str, data: Dict[str, Any], device_number: int = 1) -> Dict[str, Any]:
+    """Get standardized device information with optimized data extraction and multi-device support."""
     # Use safe getters with fallbacks
     firmware = (data.get('verFWMain') or data.get('firmware') or 'Unknown').strip()
     hardware = (data.get('verFWWifi') or data.get('hardware') or 'Unknown').strip()
@@ -97,10 +135,14 @@ def get_device_info(host: str, data: Dict[str, Any]) -> Dict[str, Any]:
         firmware = "Unknown"
     if len(hardware) < 2:
         hardware = "Unknown"
+    
+    # Get device-specific naming
+    device_suffix = get_device_display_suffix(device_number)
+    device_identifier = get_device_identifier(host, device_number)
         
     return {
-        "identifiers": {(DOMAIN, host)},
-        "name": "Eveus EV Charger",
+        "identifiers": {device_identifier},
+        "name": f"Eveus EV Charger{device_suffix}",
         "manufacturer": "Eveus",
         "model": "Eveus EV Charger",
         "sw_version": firmware,
