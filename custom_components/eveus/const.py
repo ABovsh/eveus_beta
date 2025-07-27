@@ -14,6 +14,11 @@ UPDATE_TIMEOUT: Final[int] = 20
 COMMAND_TIMEOUT: Final[int] = 25
 ERROR_COOLDOWN: Final[int] = 300  # 5 minutes
 
+# Phase 1: Availability and resilience improvements
+AVAILABILITY_GRACE_PERIOD: Final[int] = 120  # 2 minutes before marking unavailable
+ERROR_LOG_RATE_LIMIT: Final[int] = 300       # Log errors max every 5 minutes
+STATE_CACHE_TTL: Final[int] = 180            # Cache state for 3 minutes during outages
+
 # Current limits
 MIN_CURRENT: Final[int] = 7
 MODEL_16A: Final[str] = "16A"
