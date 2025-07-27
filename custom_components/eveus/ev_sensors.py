@@ -1,4 +1,4 @@
-"""Optimized EV-specific sensors with stable offline handling."""
+"""Optimized EV-specific sensors with stable offline handling - FIXED."""
 from __future__ import annotations
 
 import logging
@@ -165,7 +165,7 @@ class EVSocKwhSensor(EveusSensorBase):
         """Handle entity addition with stable event tracking.""" 
         await super().async_added_to_hass()
         
-        # Track only essential input changes (with error handling)
+        # Track only input entities (removed cross-sensor tracking)
         try:
             self._stop_listen = async_track_state_change_event(
                 self.hass,
@@ -238,18 +238,14 @@ class EVSocPercentSensor(EveusSensorBase):
         """Handle entity addition with stable tracking."""
         await super().async_added_to_hass()
         
-        # Track input changes and SOC energy sensor (with error handling)
+        # Track only input entities (removed cross-sensor tracking)
         try:
-            device_suffix = get_device_suffix(self._device_number)
-            soc_energy_entity = f"sensor.eveus{device_suffix}_ev_charger_soc_energy"
-            
             self._stop_listen = async_track_state_change_event(
                 self.hass,
                 [
                     "input_number.ev_initial_soc",
                     "input_number.ev_battery_capacity",
-                    "input_number.ev_soc_correction",
-                    soc_energy_entity
+                    "input_number.ev_soc_correction"
                 ],
                 self._on_input_changed
             )
@@ -307,18 +303,14 @@ class TimeToTargetSocSensor(EveusSensorBase):
         """Handle entity addition with stable tracking."""
         await super().async_added_to_hass()
         
-        # Track relevant input changes (with error handling)
+        # Track only input entities (removed cross-sensor tracking)
         try:
-            device_suffix = get_device_suffix(self._device_number)
-            soc_percent_entity = f"sensor.eveus{device_suffix}_ev_charger_soc_percent"
-            
             self._stop_listen = async_track_state_change_event(
                 self.hass,
                 [
                     "input_number.ev_target_soc",
                     "input_number.ev_battery_capacity",
-                    "input_number.ev_soc_correction",
-                    soc_percent_entity
+                    "input_number.ev_soc_correction"
                 ],
                 self._on_input_changed
             )
