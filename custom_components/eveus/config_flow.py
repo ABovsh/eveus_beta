@@ -175,15 +175,30 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             try:
                 info = await validate_input(self.hass, user_input)
                 
-                # Check if device is already configured
+                # Check if device is already configured (host-based uniqueness for backward compatibility)
                 self._host = user_input[CONF_HOST]
                 await self.async_set_unique_id(self._host)
                 self._abort_if_unique_id_configured()
 
                 self._device_info = info["device_info"]
+                
+                # Determine device number for multi-device support
+                from .utils import get_next_device_number
+                device_number = get_next_device_number(self.hass)
+                
+                # Add device number to entry data
+                entry_data = user_input.copy()
+                entry_data["device_number"] = device_number
+                
+                # Create title that reflects device number for multiple devices
+                if device_number == 1:
+                    title = "Eveus EV Charger"
+                else:
+                    title = f"Eveus EV Charger {device_number}"
+                
                 return self.async_create_entry(
-                    title=info["title"],
-                    data=user_input
+                    title=title,
+                    data=entry_data
                 )
 
             except CannotConnect:
