@@ -65,17 +65,17 @@ class SensorSpec:
     category: Optional[EntityCategory] = None
     attributes_fn: Optional[Callable] = None
     
-    def create_sensor(self, updater) -> 'OptimizedEveusSensor':
+    def create_sensor(self, updater, device_number: int = 1) -> 'OptimizedEveusSensor':
         """Create sensor instance from specification."""
-        return OptimizedEveusSensor(updater, self)
+        return OptimizedEveusSensor(updater, self, device_number)
 
 class OptimizedEveusSensor(EveusSensorBase):
     """High-performance templated sensor with caching and optimization."""
     
-    def __init__(self, updater, spec: SensorSpec):
+    def __init__(self, updater, spec: SensorSpec, device_number: int = 1):
         """Initialize optimized sensor."""
         self.ENTITY_NAME = spec.name
-        super().__init__(updater)
+        super().__init__(updater, device_number)
         
         self._spec = spec
         self._cached_value = None
