@@ -1,4 +1,4 @@
-"""Sensor definitions and factory for Eveus integration."""
+"""Sensor definitions and factory for Eveus integration with stable offline handling."""
 from __future__ import annotations
 
 import logging
@@ -42,6 +42,19 @@ from .utils import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Global error logging control to reduce noise
+_last_error_logs = {}
+_error_log_interval = 300  # Log errors max every 5 minutes
+
+def _should_log_error(function_name: str) -> bool:
+    """Check if we should log errors for a function (rate limited)."""
+    current_time = time.time()
+    last_log = _last_error_logs.get(function_name, 0)
+    if current_time - last_log > _error_log_interval:
+        _last_error_logs[function_name] = current_time
+        return True
+    return False
+
 class SensorType(Enum):
     """Sensor type enumeration for categorization."""
     MEASUREMENT = "measurement"
@@ -70,7 +83,7 @@ class SensorSpec:
         return OptimizedEveusSensor(updater, self, device_number)
 
 class OptimizedEveusSensor(EveusSensorBase):
-    """High-performance templated sensor with caching and optimization."""
+    """High-performance templated sensor with stable offline handling."""
     
     def __init__(self, updater, spec: SensorSpec, device_number: int = 1):
         """Initialize optimized sensor."""
@@ -96,9 +109,8 @@ class OptimizedEveusSensor(EveusSensorBase):
         if spec.category:
             self._attr_entity_category = spec.category
 
-    @property
-    def native_value(self) -> Any:
-        """Return cached or computed sensor value."""
+    def _get_sensor_value(self) -> Any:
+        """Return cached or computed sensor value with stable error handling."""
         current_time = time.time()
         
         # Use cache for non-critical sensors
@@ -116,135 +128,213 @@ class OptimizedEveusSensor(EveusSensorBase):
             
             return value
         except Exception as err:
-            _LOGGER.error("Error getting value for %s: %s", self.name, err)
+            if _should_log_error(f"sensor_{self._spec.key}"):
+                _LOGGER.debug("Error getting value for %s: %s", self.name, err)
             return self._cached_value  # Return cached value on error
 
     @property 
     def extra_state_attributes(self) -> Dict[str, Any]:
-        """Return cached or computed attributes."""
+        """Return cached or computed attributes with stable error handling."""
         if self._spec.attributes_fn:
             try:
                 return self._spec.attributes_fn(self._updater, self.hass)
             except Exception as err:
-                _LOGGER.error("Error getting attributes for %s: %s", self.name, err)
+                if _should_log_error(f"attributes_{self._spec.key}"):
+                    _LOGGER.debug("Error getting attributes for %s: %s", self.name, err)
         return {}
 
-# Optimized value functions with caching
-@lru_cache(maxsize=32)
-def _get_numeric_value(data: tuple, key: str, precision: int = None) -> float:
-    """Cached numeric value extraction."""
-    data_dict = dict(data)  # Convert tuple back to dict for lookup
-    value = get_safe_value(data_dict, key)
-    if value is None:
-        return None
-    return round(value, precision) if precision is not None else value
-
-def _make_data_hashable(data: dict) -> tuple:
-    """Convert dict to hashable tuple for caching."""
-    return tuple(sorted(data.items()))
-
-# Efficient value functions - simplified without problematic caching
+# Efficient value functions with stable error handling
 def get_voltage(updater, hass) -> float:
-    """Get voltage.""" 
-    value = get_safe_value(updater.data, "voltMeas1")
-    return round(value, 0) if value is not None else None
+    """Get voltage with stable error handling."""
+    try:
+        value = get_safe_value(updater.data, "voltMeas1")
+        return round(value, 0) if value is not None else None
+    except Exception as err:
+        if _should_log_error("get_voltage"):
+            _LOGGER.debug("Error getting voltage: %s", err)
+        return None
 
 def get_current(updater, hass) -> float:
-    """Get current."""
-    value = get_safe_value(updater.data, "curMeas1")
-    return round(value, 1) if value is not None else None
+    """Get current with stable error handling."""
+    try:
+        value = get_safe_value(updater.data, "curMeas1")
+        return round(value, 1) if value is not None else None
+    except Exception as err:
+        if _should_log_error("get_current"):
+            _LOGGER.debug("Error getting current: %s", err)
+        return None
 
 def get_power(updater, hass) -> float: 
-    """Get power."""
-    value = get_safe_value(updater.data, "powerMeas")
-    return round(value, 1) if value is not None else None
+    """Get power with stable error handling."""
+    try:
+        value = get_safe_value(updater.data, "powerMeas")
+        return round(value, 1) if value is not None else None
+    except Exception as err:
+        if _should_log_error("get_power"):
+            _LOGGER.debug("Error getting power: %s", err)
+        return None
 
 def get_current_set(updater, hass) -> float:
-    """Get current set."""
-    value = get_safe_value(updater.data, "currentSet")
-    return round(value, 0) if value is not None else None
+    """Get current set with stable error handling."""
+    try:
+        value = get_safe_value(updater.data, "currentSet")
+        return round(value, 0) if value is not None else None
+    except Exception as err:
+        if _should_log_error("get_current_set"):
+            _LOGGER.debug("Error getting current set: %s", err)
+        return None
 
 def get_session_energy(updater, hass) -> float:
-    """Get session energy."""
-    value = get_safe_value(updater.data, "sessionEnergy")
-    return round(value, 2) if value is not None else None
+    """Get session energy with stable error handling."""
+    try:
+        value = get_safe_value(updater.data, "sessionEnergy")
+        return round(value, 2) if value is not None else None
+    except Exception as err:
+        if _should_log_error("get_session_energy"):
+            _LOGGER.debug("Error getting session energy: %s", err)
+        return None
 
 def get_total_energy(updater, hass) -> float:
-    """Get total energy."""
-    value = get_safe_value(updater.data, "totalEnergy")
-    return round(value, 2) if value is not None else None
+    """Get total energy with stable error handling."""
+    try:
+        value = get_safe_value(updater.data, "totalEnergy")
+        return round(value, 2) if value is not None else None
+    except Exception as err:
+        if _should_log_error("get_total_energy"):
+            _LOGGER.debug("Error getting total energy: %s", err)
+        return None
 
 def get_counter_a_energy(updater, hass) -> float:
-    """Get counter A energy."""
-    value = get_safe_value(updater.data, "IEM1")
-    return round(value, 2) if value is not None else None
+    """Get counter A energy with stable error handling."""
+    try:
+        value = get_safe_value(updater.data, "IEM1")
+        return round(value, 2) if value is not None else None
+    except Exception as err:
+        if _should_log_error("get_counter_a_energy"):
+            _LOGGER.debug("Error getting counter A energy: %s", err)
+        return None
 
 def get_counter_a_cost(updater, hass) -> float:
-    """Get counter A cost."""
-    value = get_safe_value(updater.data, "IEM1_money")
-    return round(value, 2) if value is not None else None
+    """Get counter A cost with stable error handling."""
+    try:
+        value = get_safe_value(updater.data, "IEM1_money")
+        return round(value, 2) if value is not None else None
+    except Exception as err:
+        if _should_log_error("get_counter_a_cost"):
+            _LOGGER.debug("Error getting counter A cost: %s", err)
+        return None
 
 def get_counter_b_energy(updater, hass) -> float:
-    """Get counter B energy."""
-    value = get_safe_value(updater.data, "IEM2")
-    return round(value, 2) if value is not None else None
+    """Get counter B energy with stable error handling."""
+    try:
+        value = get_safe_value(updater.data, "IEM2")
+        return round(value, 2) if value is not None else None
+    except Exception as err:
+        if _should_log_error("get_counter_b_energy"):
+            _LOGGER.debug("Error getting counter B energy: %s", err)
+        return None
 
 def get_counter_b_cost(updater, hass) -> float:
-    """Get counter B cost."""
-    value = get_safe_value(updater.data, "IEM2_money")
-    return round(value, 2) if value is not None else None
+    """Get counter B cost with stable error handling."""
+    try:
+        value = get_safe_value(updater.data, "IEM2_money")
+        return round(value, 2) if value is not None else None
+    except Exception as err:
+        if _should_log_error("get_counter_b_cost"):
+            _LOGGER.debug("Error getting counter B cost: %s", err)
+        return None
 
 def get_box_temperature(updater, hass) -> float:
-    """Get box temperature."""
-    value = get_safe_value(updater.data, "temperature1")
-    return round(value, 0) if value is not None else None
+    """Get box temperature with stable error handling."""
+    try:
+        value = get_safe_value(updater.data, "temperature1")
+        return round(value, 0) if value is not None else None
+    except Exception as err:
+        if _should_log_error("get_box_temperature"):
+            _LOGGER.debug("Error getting box temperature: %s", err)
+        return None
 
 def get_plug_temperature(updater, hass) -> float:
-    """Get plug temperature."""
-    value = get_safe_value(updater.data, "temperature2")
-    return round(value, 0) if value is not None else None
+    """Get plug temperature with stable error handling."""
+    try:
+        value = get_safe_value(updater.data, "temperature2")
+        return round(value, 0) if value is not None else None
+    except Exception as err:
+        if _should_log_error("get_plug_temperature"):
+            _LOGGER.debug("Error getting plug temperature: %s", err)
+        return None
 
 def get_battery_voltage(updater, hass) -> float:
-    """Get battery voltage."""
-    value = get_safe_value(updater.data, "vBat")
-    return round(value, 2) if value is not None else None
+    """Get battery voltage with stable error handling."""
+    try:
+        value = get_safe_value(updater.data, "vBat")
+        return round(value, 2) if value is not None else None
+    except Exception as err:
+        if _should_log_error("get_battery_voltage"):
+            _LOGGER.debug("Error getting battery voltage: %s", err)
+        return None
 
-# State functions - fixed without problematic caching
+# State functions with stable error handling
 def get_charger_state(updater, hass) -> str:
-    """Get charger state."""
-    state_value = get_safe_value(updater.data, "state", int)
-    return get_charging_state(state_value) if state_value is not None else None
+    """Get charger state with stable error handling."""
+    try:
+        state_value = get_safe_value(updater.data, "state", int)
+        return get_charging_state(state_value) if state_value is not None else None
+    except Exception as err:
+        if _should_log_error("get_charger_state"):
+            _LOGGER.debug("Error getting charger state: %s", err)
+        return None
 
 def get_charger_substate(updater, hass) -> str:
-    """Get charger substate."""
-    state = get_safe_value(updater.data, "state", int)
-    substate = get_safe_value(updater.data, "subState", int)
-    
-    if None in (state, substate):
-        return None
+    """Get charger substate with stable error handling."""
+    try:
+        state = get_safe_value(updater.data, "state", int)
+        substate = get_safe_value(updater.data, "subState", int)
         
-    if state == 7:  # Error state
-        return get_error_state(substate)
-    return get_normal_substate(substate)
+        if None in (state, substate):
+            return None
+            
+        if state == 7:  # Error state
+            return get_error_state(substate)
+        return get_normal_substate(substate)
+    except Exception as err:
+        if _should_log_error("get_charger_substate"):
+            _LOGGER.debug("Error getting charger substate: %s", err)
+        return None
 
 def get_ground_status(updater, hass) -> str:
-    """Get ground status."""
-    value = get_safe_value(updater.data, "ground", int)
-    return "Connected" if value == 1 else "Not Connected" if value == 0 else None
+    """Get ground status with stable error handling."""
+    try:
+        value = get_safe_value(updater.data, "ground", int)
+        return "Connected" if value == 1 else "Not Connected" if value == 0 else None
+    except Exception as err:
+        if _should_log_error("get_ground_status"):
+            _LOGGER.debug("Error getting ground status: %s", err)
+        return None
 
-# Time and session functions
+# Time and session functions with stable error handling
 def get_session_time(updater, hass) -> str:
-    """Get formatted session time."""
-    seconds = get_safe_value(updater.data, "sessionTime", int)
-    return format_duration(seconds) if seconds is not None else None
+    """Get formatted session time with stable error handling."""
+    try:
+        seconds = get_safe_value(updater.data, "sessionTime", int)
+        return format_duration(seconds) if seconds is not None else None
+    except Exception as err:
+        if _should_log_error("get_session_time"):
+            _LOGGER.debug("Error getting session time: %s", err)
+        return None
 
 def get_session_time_attrs(updater, hass) -> dict:
-    """Get session time attributes."""
-    seconds = get_safe_value(updater.data, "sessionTime", int)
-    return {"duration_seconds": seconds} if seconds is not None else {}
+    """Get session time attributes with stable error handling."""
+    try:
+        seconds = get_safe_value(updater.data, "sessionTime", int)
+        return {"duration_seconds": seconds} if seconds is not None else {}
+    except Exception as err:
+        if _should_log_error("get_session_time_attrs"):
+            _LOGGER.debug("Error getting session time attributes: %s", err)
+        return {}
 
 def get_system_time(updater, hass) -> str:
-    """Get system time with timezone correction."""
+    """Get system time with timezone correction and stable error handling."""
     try:
         timestamp = get_safe_value(updater.data, "systemTime", int)
         if timestamp is None:
@@ -259,9 +349,9 @@ def get_system_time(updater, hass) -> str:
         dt_utc = datetime.fromtimestamp(timestamp, tz=pytz.UTC)
         local_tz = pytz.timezone(ha_timezone)
         
-        # Apply DST correction - fix: pass timestamp, not datetime object
+        # Apply DST correction - pass timestamp
         offset = 7200  # Base offset
-        if is_dst(ha_timezone, timestamp):  # Pass timestamp instead of dt_utc
+        if is_dst(ha_timezone, timestamp):
             offset += 3600
         
         corrected_timestamp = timestamp - offset
@@ -271,66 +361,98 @@ def get_system_time(updater, hass) -> str:
         return dt_local.strftime("%H:%M")
             
     except Exception as err:
-        _LOGGER.error("Error getting system time: %s", err)
+        if _should_log_error("get_system_time"):
+            _LOGGER.debug("Error getting system time: %s", err)
         return None
 
-# Rate and cost functions
+# Rate and cost functions with stable error handling
 def get_primary_rate_cost(updater, hass) -> float:
-    """Get primary rate cost."""
-    value = get_safe_value(updater.data, "tarif", float)
-    return round(value / 100, 2) if value is not None else None
+    """Get primary rate cost with stable error handling."""
+    try:
+        value = get_safe_value(updater.data, "tarif", float)
+        return round(value / 100, 2) if value is not None else None
+    except Exception as err:
+        if _should_log_error("get_primary_rate_cost"):
+            _LOGGER.debug("Error getting primary rate cost: %s", err)
+        return None
 
 def get_active_rate_cost(updater, hass) -> float:
-    """Get active rate cost with logic optimization."""
-    active_rate = get_safe_value(updater.data, "activeTarif", int)
-    if active_rate is None:
-        return None
+    """Get active rate cost with stable error handling."""
+    try:
+        active_rate = get_safe_value(updater.data, "activeTarif", int)
+        if active_rate is None:
+            return None
 
-    # Use mapping for efficiency
-    rate_keys = {0: "tarif", 1: "tarifAValue", 2: "tarifBValue"}
-    key = rate_keys.get(active_rate)
-    if not key:
+        # Use mapping for efficiency
+        rate_keys = {0: "tarif", 1: "tarifAValue", 2: "tarifBValue"}
+        key = rate_keys.get(active_rate)
+        if not key:
+            return None
+            
+        value = get_safe_value(updater.data, key, float)
+        return round(value / 100, 2) if value is not None else None
+    except Exception as err:
+        if _should_log_error("get_active_rate_cost"):
+            _LOGGER.debug("Error getting active rate cost: %s", err)
         return None
-        
-    value = get_safe_value(updater.data, key, float)
-    return round(value / 100, 2) if value is not None else None
 
 def get_active_rate_attrs(updater, hass) -> dict:
-    """Get active rate attributes."""
-    active_rate = get_safe_value(updater.data, "activeTarif", int)
-    return {"rate_name": RATE_STATES.get(active_rate, "Unknown")} if active_rate is not None else {}
+    """Get active rate attributes with stable error handling."""
+    try:
+        active_rate = get_safe_value(updater.data, "activeTarif", int)
+        return {"rate_name": RATE_STATES.get(active_rate, "Unknown")} if active_rate is not None else {}
+    except Exception as err:
+        if _should_log_error("get_active_rate_attrs"):
+            _LOGGER.debug("Error getting active rate attributes: %s", err)
+        return {}
 
 def get_rate2_cost(updater, hass) -> float:
-    """Get rate 2 cost.""" 
-    value = get_safe_value(updater.data, "tarifAValue", float)
-    return round(value / 100, 2) if value is not None else None
+    """Get rate 2 cost with stable error handling."""
+    try:
+        value = get_safe_value(updater.data, "tarifAValue", float)
+        return round(value / 100, 2) if value is not None else None
+    except Exception as err:
+        if _should_log_error("get_rate2_cost"):
+            _LOGGER.debug("Error getting rate 2 cost: %s", err)
+        return None
 
 def get_rate3_cost(updater, hass) -> float:
-    """Get rate 3 cost."""
-    value = get_safe_value(updater.data, "tarifBValue", float)
-    return round(value / 100, 2) if value is not None else None
+    """Get rate 3 cost with stable error handling."""
+    try:
+        value = get_safe_value(updater.data, "tarifBValue", float)
+        return round(value / 100, 2) if value is not None else None
+    except Exception as err:
+        if _should_log_error("get_rate3_cost"):
+            _LOGGER.debug("Error getting rate 3 cost: %s", err)
+        return None
 
 def get_rate_status(rate_key: str):
-    """Factory function for rate status sensors."""
+    """Factory function for rate status sensors with stable error handling."""
     def _get_rate_status(updater, hass) -> str:
-        enabled = get_safe_value(updater.data, rate_key, int)
-        return "Enabled" if enabled == 1 else "Disabled" if enabled == 0 else None
+        try:
+            enabled = get_safe_value(updater.data, rate_key, int)
+            return "Enabled" if enabled == 1 else "Disabled" if enabled == 0 else None
+        except Exception as err:
+            if _should_log_error(f"get_rate_status_{rate_key}"):
+                _LOGGER.debug("Error getting rate status for %s: %s", rate_key, err)
+            return None
     return _get_rate_status
 
-# Network quality functions (optimized)
+# Network quality functions with stable error handling
 def get_connection_quality(updater, hass) -> float:
-    """Get connection quality as numeric value."""
+    """Get connection quality as numeric value with stable error handling."""
     try:
         if hasattr(updater, '_network') and hasattr(updater._network, 'connection_quality'):
             metrics = updater._network.connection_quality
             return round(max(0, min(100, metrics.get('success_rate', 0))))
         return 100  # Default to 100% if no metrics available
     except Exception as err:
-        _LOGGER.error("Error getting connection quality: %s", err)
+        if _should_log_error("get_connection_quality"):
+            _LOGGER.debug("Error getting connection quality: %s", err)
         return 0
 
 def get_connection_attrs(updater, hass) -> dict:
-    """Get optimized connection attributes."""
+    """Get optimized connection attributes with stable error handling."""
     try:
         if not hasattr(updater, '_network'):
             return {"status": "Unknown"}
@@ -350,7 +472,8 @@ def get_connection_attrs(updater, hass) -> dict:
         }
         
     except Exception as err:
-        _LOGGER.error("Error getting connection attributes: %s", err)
+        if _should_log_error("get_connection_attrs"):
+            _LOGGER.debug("Error getting connection attributes: %s", err)
         return {"status": "Error"}
 
 # Sensor specification factory - creates all sensors efficiently
