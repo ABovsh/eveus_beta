@@ -11,6 +11,7 @@ from homeassistant.components.sensor import SensorEntity
 from homeassistant.helpers.entity import EntityCategory
 
 from .utils import get_device_info, get_device_suffix
+from .const import AVAILABILITY_GRACE_PERIOD, ERROR_LOG_RATE_LIMIT, STATE_CACHE_TTL
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -37,10 +38,14 @@ class BaseEveusEntity(RestoreEntity, Entity):
         self._state_restored = False
         self._restore_in_progress = False
         
-        # Offline handling
+        # Phase 1: Enhanced availability tracking with grace period
         self._last_available_log = 0
-        self._availability_log_interval = 600  # Log availability changes max every 10 minutes
         self._last_known_available = True
+        self._unavailable_since = None  # Track when device became unavailable
+        
+        # Phase 1: State caching for outages
+        self._cached_data = None
+        self._cached_data_time = 0
 
         if self.ENTITY_NAME is None:
             raise NotImplementedError("ENTITY_NAME must be defined in child class")
@@ -54,30 +59,79 @@ class BaseEveusEntity(RestoreEntity, Entity):
 
     @property
     def available(self) -> bool:
-        """Return if entity is available with quiet offline handling."""
-        current_available = self._updater.available
+        """Return if entity is available with grace period support."""
+        current_updater_available = self._updater.available
+        current_time = time.time()
         
-        # Only log availability changes occasionally to reduce noise
-        if current_available != self._last_known_available:
-            current_time = time.time()
-            if current_time - self._last_available_log > self._availability_log_interval:
-                self._last_available_log = current_time
-                if not current_available:
-                    _LOGGER.debug("Entity %s became unavailable (device offline)", self.unique_id)
-                else:
-                    _LOGGER.debug("Entity %s became available (device online)", self.unique_id)
-            self._last_known_available = current_available
+        # Phase 1: Implement grace period logic
+        if current_updater_available:
+            # Device is available - reset unavailable tracking
+            if self._unavailable_since is not None:
+                # Log restoration if we should
+                if self._should_log_availability():
+                    _LOGGER.debug("Entity %s connection restored", self.unique_id)
+                self._unavailable_since = None
+            
+            self._last_known_available = True
+            return True
+        else:
+            # Device reports unavailable - check grace period
+            if self._unavailable_since is None:
+                # First time unavailable - start grace period
+                self._unavailable_since = current_time
+                return True  # Still show as available during grace period
+            
+            # Check if grace period has expired
+            unavailable_duration = current_time - self._unavailable_since
+            if unavailable_duration < AVAILABILITY_GRACE_PERIOD:
+                # Still in grace period
+                return True
+            else:
+                # Grace period expired - mark as unavailable
+                if self._last_known_available and self._should_log_availability():
+                    _LOGGER.info("Entity %s unavailable after grace period (%.0fs)", 
+                               self.unique_id, unavailable_duration)
+                self._last_known_available = False
+                return False
+
+    def _should_log_availability(self) -> bool:
+        """Phase 1: Rate limit availability logging."""
+        current_time = time.time()
+        if current_time - self._last_available_log > ERROR_LOG_RATE_LIMIT:
+            self._last_available_log = current_time
+            return True
+        return False
+
+    def get_cached_data_value(self, key: str, default: Any = None) -> Any:
+        """Phase 1: Get value from current data or cached data as fallback."""
+        # Try current data first
+        if self._updater.data and key in self._updater.data:
+            # Update cache with fresh data
+            self._cached_data = self._updater.data.copy()
+            self._cached_data_time = time.time()
+            return self._updater.data[key]
         
-        return current_available
+        # Fall back to cached data if recent enough
+        if (self._cached_data and key in self._cached_data and 
+            time.time() - self._cached_data_time < STATE_CACHE_TTL):
+            return self._cached_data[key]
+        
+        return default
 
     @property
     def device_info(self) -> dict[str, Any]:
         """Return device information."""
         try:
-            return get_device_info(self._updater.host, self._updater.data, self._device_number)
+            # Phase 1: Use cached data if main data unavailable
+            data_source = self._updater.data
+            if not data_source and self._cached_data:
+                data_source = self._cached_data
+                
+            return get_device_info(self._updater.host, data_source or {}, self._device_number)
         except Exception as err:
             # Gracefully handle device info errors when offline
-            _LOGGER.debug("Error getting device info for %s: %s", self.unique_id, err)
+            if self._should_log_availability():
+                _LOGGER.debug("Error getting device info for %s: %s", self.unique_id, err)
             # Return minimal device info when offline
             device_suffix = "" if self._device_number == 1 else f" {self._device_number}"
             return {
@@ -120,6 +174,11 @@ class BaseEveusEntity(RestoreEntity, Entity):
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
         try:
+            # Phase 1: Update cache when we get fresh data
+            if self._updater.data:
+                self._cached_data = self._updater.data.copy()
+                self._cached_data_time = time.time()
+                
             self.async_write_ha_state()
         except Exception as err:
             # Gracefully handle state write errors (device might be offline)
@@ -130,7 +189,7 @@ class BaseEveusEntity(RestoreEntity, Entity):
         start_time = time.time()
         
         while time.time() - start_time < timeout:
-            if self._updater.available and self._updater.data:
+            if self._updater.available and (self._updater.data or self._cached_data):
                 # Give a bit more time for data to stabilize
                 await asyncio.sleep(2)
                 return True
@@ -148,7 +207,6 @@ class EveusSensorBase(BaseEveusEntity, SensorEntity):
         self._attr_native_value = None
         self._last_valid_value = None
         self._last_error_log = 0
-        self._error_log_interval = 300  # Log errors max every 5 minutes
 
     @property
     def native_value(self) -> Any:
@@ -159,9 +217,9 @@ class EveusSensorBase(BaseEveusEntity, SensorEntity):
                 self._last_valid_value = value
             return value
         except Exception as err:
-            # Log errors occasionally, return last known value
+            # Phase 1: Rate limit error logs
             current_time = time.time()
-            if current_time - self._last_error_log > self._error_log_interval:
+            if current_time - self._last_error_log > ERROR_LOG_RATE_LIMIT:
                 self._last_error_log = current_time
                 _LOGGER.debug("Error getting sensor value for %s: %s", self.unique_id, err)
             return self._last_valid_value
