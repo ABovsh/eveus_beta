@@ -1,4 +1,4 @@
-"""Support for Eveus switches with proper state persistence."""
+"""Support for Eveus switches with proper state persistence and safety."""
 from __future__ import annotations
 
 import logging
@@ -12,14 +12,14 @@ from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import EntityCategory
 
-from .const import DOMAIN
+from .const import DOMAIN, CONTROL_GRACE_PERIOD
 from .common import BaseEveusEntity
 from .utils import get_safe_value
 
 _LOGGER = logging.getLogger(__name__)
 
 class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
-    """Base switch entity for Eveus with proper state persistence."""
+    """Base switch entity for Eveus with safety-first design - no persistent cache."""
 
     _attr_entity_category = EntityCategory.CONFIG
     _command: str = None
@@ -30,41 +30,68 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
         super().__init__(updater, device_number)
         self._command_lock = asyncio.Lock()
         
-        # State management for persistence
-        self._intended_state: Optional[bool] = None  # What user wants
-        self._device_state: Optional[bool] = None    # What device reports
-        self._pending_command: Optional[bool] = None # Command in progress
+        # State management - NO persistent intended state for safety
+        self._pending_command: Optional[bool] = None  # Command in progress
+        self._last_device_state: Optional[bool] = None  # Last known device state
         self._last_command_time = 0
-        self._restore_attempted = False
+        self._last_successful_read = 0
+        
+    @property
+    def available(self) -> bool:
+        """Control entities use shorter grace period for safety."""
+        if not self._updater.available:
+            # Device offline - check how long
+            current_time = time.time()
+            if self._unavailable_since is None:
+                self._unavailable_since = current_time
+                return True  # Brief grace period starts
+            
+            # Use CONTROL_GRACE_PERIOD (30s) instead of regular grace period
+            unavailable_duration = current_time - self._unavailable_since
+            if unavailable_duration < CONTROL_GRACE_PERIOD:
+                return True  # Still in short grace period
+            else:
+                # Grace period expired - mark unavailable
+                if self._last_known_available and self._should_log_availability():
+                    _LOGGER.info("Switch %s unavailable (device offline %.0fs)", 
+                               self.unique_id, unavailable_duration)
+                self._last_known_available = False
+                return False
+        
+        # Device is available
+        if self._unavailable_since is not None:
+            if self._should_log_availability():
+                _LOGGER.debug("Switch %s connection restored", self.unique_id)
+            self._unavailable_since = None
+        self._last_known_available = True
+        return True
 
     @property
     def is_on(self) -> bool:
-        """Return true if the switch is on - prioritize intended state."""
-        # Priority: pending command > intended state > device state > cached fallback
+        """Return true if switch is on - ONLY from device, no persistent cache."""
+        # Priority 1: Command in progress
         if self._pending_command is not None:
             return self._pending_command
-        if self._intended_state is not None:
-            return self._intended_state
-        if self._device_state is not None:
-            return self._device_state
         
-        # SAFE: Only use cached data when live data is completely unavailable
-        if self._updater.data and self._state_key in self._updater.data:
-            # Fresh data available - use it even if it's 0 (OFF)
-            device_value = get_safe_value(self._updater.data, self._state_key, int, 0)
-            return bool(device_value)
-        else:
-            # No fresh data - fallback to cached data only as last resort
-            cached_value = self.get_cached_data_value(self._state_key, 0)
-            return bool(cached_value)
-
-    @property
-    def available(self) -> bool:
-        """Return if entity is available."""
-        return super().available
+        # Priority 2: Current device state (NEVER use old cache for safety)
+        if self._updater.available and self._updater.data:
+            if self._state_key in self._updater.data:
+                device_value = get_safe_value(self._updater.data, self._state_key, int, 0)
+                self._last_device_state = bool(device_value)
+                self._last_successful_read = time.time()
+                return self._last_device_state
+        
+        # Priority 3: Recent device state (within grace period only)
+        if self._last_device_state is not None:
+            time_since_read = time.time() - self._last_successful_read
+            if time_since_read < CONTROL_GRACE_PERIOD:
+                return self._last_device_state
+        
+        # Default: OFF when unavailable (safer than showing stale ON state)
+        return False
 
     async def _async_send_command(self, command_value: int) -> bool:
-        """Send command to device and track state."""
+        """Send command to device."""
         async with self._command_lock:
             # Set pending state
             self._pending_command = bool(command_value)
@@ -75,11 +102,8 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
                 success = await self._updater.send_command(self._command, command_value)
                 
                 if success:
-                    # Command succeeded - update intended state
-                    self._intended_state = bool(command_value)
                     _LOGGER.debug("Successfully set %s to %s", self.name, "on" if command_value else "off")
                 else:
-                    # Command failed - keep previous intended state
                     _LOGGER.warning("Failed to set %s to %s", self.name, "on" if command_value else "off")
                 
                 return success
@@ -91,14 +115,14 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
                 self.async_write_ha_state()
 
     async def _async_restore_state(self, state: State) -> None:
-        """Restore previous intended state."""
+        """Restore previous state - apply when device available."""
         try:
             if state and state.state in ("on", "off"):
                 restored_state = state.state == "on"
-                self._intended_state = restored_state
-                _LOGGER.debug("Restored %s intended state to %s", self.name, state.state)
+                _LOGGER.debug("Will attempt to restore %s to %s when device available", 
+                            self.name, state.state)
                 
-                # Try to apply the restored state when device becomes available
+                # Try to apply restored state when device is ready
                 self.hass.async_create_task(self._apply_restored_state(restored_state))
                 
         except Exception as err:
@@ -106,40 +130,35 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
 
     async def _apply_restored_state(self, target_state: bool) -> None:
         """Apply restored state when device becomes available."""
-        # Wait a bit for device to be ready
+        # Wait for device to be ready
         await asyncio.sleep(5)
         
-        # Check if we should apply the restored state
-        if not self._restore_attempted and self._intended_state is not None:
-            self._restore_attempted = True
+        # Only apply if device is available and we can verify current state
+        if not self._updater.available or not self._updater.data:
+            _LOGGER.debug("Device not available, skipping state restoration for %s", self.name)
+            return
+        
+        if self._state_key not in self._updater.data:
+            return
             
-            # SAFE: Check device state with proper priority
-            current_device_state = None
-            if self._updater.data and self._state_key in self._updater.data:
-                current_device_state = bool(get_safe_value(self._updater.data, self._state_key, int, 0))
-            elif self._cached_data and self._state_key in self._cached_data:
-                current_device_state = bool(self.get_cached_data_value(self._state_key, 0))
-            
-            if current_device_state is None or current_device_state != self._intended_state:
-                _LOGGER.info("Applying restored state for %s: %s", self.name, "on" if self._intended_state else "off")
-                await self._async_send_command(1 if self._intended_state else 0)
+        # Get current device state
+        current_device_state = bool(get_safe_value(self._updater.data, self._state_key, int, 0))
+        
+        # Only apply if different from device state
+        if current_device_state != target_state:
+            _LOGGER.info("Applying restored state for %s: %s", self.name, "on" if target_state else "off")
+            await self._async_send_command(1 if target_state else 0)
 
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
-        # SAFE: Only use fresh data when available, never override with cached
-        if self._updater.data and self._state_key in self._updater.data:
-            device_data_value = get_safe_value(self._updater.data, self._state_key, int, 0)
-            new_device_state = bool(device_data_value)
-            
-            # Only update if device state actually changed
-            if self._device_state != new_device_state:
-                self._device_state = new_device_state
-                
-                # If no command is pending and no intended state is set, sync with device
-                if self._pending_command is None and self._intended_state is None:
-                    self._intended_state = new_device_state
-                
+        # Update last device state from fresh data only
+        if self._updater.available and self._updater.data:
+            if self._state_key in self._updater.data:
+                device_value = get_safe_value(self._updater.data, self._state_key, int, 0)
+                self._last_device_state = bool(device_value)
+                self._last_successful_read = time.time()
+        
         self.async_write_ha_state()
 
 
@@ -199,7 +218,7 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
     async def _disable_safe_mode(self) -> None:
         """Disable safe mode after first successful update."""
         await self._updater.async_start_updates()
-        await asyncio.sleep(5)  # Give time for first update
+        await asyncio.sleep(5)
         self._safe_mode = False
 
     @property
@@ -207,28 +226,26 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
         """Return True if counter has a value (special logic for reset switch)."""
         if self._safe_mode:
             return False
+        
+        # For reset switch, state represents counter value
+        if not self._updater.available or not self._updater.data:
+            return False
             
-        # SAFE: Check counter value with proper priority (never cached for reset switch)
-        if self._updater.data and self._state_key in self._updater.data:
+        if self._state_key in self._updater.data:
             value = get_safe_value(self._updater.data, self._state_key, float, 0)
-        elif self._cached_data and self._state_key in self._cached_data:
-            value = self.get_cached_data_value(self._state_key, 0)
-        else:
-            value = 0
+            return value > 0
             
-        return value > 0
+        return False
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """No action needed for turn_on - switch state represents counter status."""
-        # Do nothing on turn_on as it's just a representation of counter status
+        """No action for turn_on - switch represents counter status."""
         pass
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Perform reset command whenever switch is turned off."""
+        """Perform reset when turned off."""
         if self._safe_mode:
             return
 
-        # Always send the reset command when turned off
         success = await self._updater.send_command(self._command, 0)
         if success:
             self._last_reset_time = time.time()
@@ -237,8 +254,7 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
             _LOGGER.warning("Failed to reset counter A")
 
     async def _async_restore_state(self, state: State) -> None:
-        """No state restoration for reset switch - state depends on counter value."""
-        # Reset switch state is determined by counter value, not user setting
+        """No state restoration for reset switch."""
         pass
 
     @callback
@@ -255,7 +271,7 @@ async def async_setup_entry(
     """Set up Eveus switches."""
     data = hass.data[DOMAIN][entry.entry_id]
     updater = data["updater"]
-    device_number = data.get("device_number", 1)  # Default to 1 for backward compatibility
+    device_number = data.get("device_number", 1)
 
     switches = [
         EveusStopChargingSwitch(updater, device_number),
