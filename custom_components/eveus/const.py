@@ -14,11 +14,12 @@ UPDATE_TIMEOUT: Final[int] = 20
 COMMAND_TIMEOUT: Final[int] = 25
 ERROR_COOLDOWN: Final[int] = 300  # 5 minutes
 
-# Availability and resilience - differentiate control vs monitoring
-AVAILABILITY_GRACE_PERIOD: Final[int] = 90        # 1.5 minutes for sensors before marking unavailable
+# Availability and resilience - optimized for WiFi connections
+# WiFi disconnects are typically brief, so we use shorter timeouts
+AVAILABILITY_GRACE_PERIOD: Final[int] = 60        # 1 minute for sensors (handles brief WiFi drops)
 CONTROL_GRACE_PERIOD: Final[int] = 30             # 30 seconds for switches/numbers - safety first!
 ERROR_LOG_RATE_LIMIT: Final[int] = 300            # Log errors max every 5 minutes
-STATE_CACHE_TTL: Final[int] = 180                 # Cache sensor state for 3 minutes during outages
+STATE_CACHE_TTL: Final[int] = 60                  # Cache sensor state for 1 minute (WiFi reconnect window)
 CONTROL_CACHE_TTL: Final[int] = 0                 # NO caching for control entities - safety!
 
 # Current limits
