@@ -1,4 +1,4 @@
-"""Optimized network handling with reduced noise for offline devices."""
+"""Optimized network handling with silent offline mode - no noise when charger is turned off."""
 import logging
 import asyncio
 import time
@@ -19,8 +19,8 @@ from .const import (
     UPDATE_TIMEOUT,
     ERROR_COOLDOWN,
     COMMAND_TIMEOUT,
-    ERROR_LOG_RATE_LIMIT,  # Phase 1
-    STATE_CACHE_TTL,       # Phase 1
+    ERROR_LOG_RATE_LIMIT,
+    STATE_CACHE_TTL,
 )
 from .utils import get_safe_value
 from .common_command import CommandManager
@@ -33,7 +33,7 @@ class ConnectionState(Enum):
     CONNECTING = "connecting"
     DISCONNECTED = "disconnected"
     ERROR = "error"
-    OFFLINE = "offline"  # New state for expected offline condition
+    OFFLINE = "offline"
 
 @dataclass
 class NetworkMetrics:
@@ -61,10 +61,10 @@ class NetworkMetrics:
     def is_likely_offline(self) -> bool:
         """Check if device is likely offline (not temporary network issue)."""
         return (self.consecutive_failures > 10 and 
-                time.time() - self.last_success_time > 600)  # 10 minutes
+                time.time() - self.last_success_time > 600)
 
 class NetworkManager:
-    """Memory-optimized network manager with quiet offline handling."""
+    """Memory-optimized network manager with silent offline handling."""
     
     def __init__(self, host: str, window_size: int = 20) -> None:
         """Initialize optimized network manager."""
@@ -76,15 +76,17 @@ class NetworkManager:
         self._latency_window = deque(maxlen=10)
         
         # Minimal error tracking
-        self._recent_errors = deque(maxlen=3)  # Only keep 3 most recent errors
+        self._recent_errors = deque(maxlen=3)
         
         # Connection state
         self._state = ConnectionState.DISCONNECTED
         self._cached_state: Optional[Dict[str, Any]] = None
         self._cached_state_time: float = 0
         
-        # Phase 1: Rate limited logging
+        # Silent mode tracking
         self._last_offline_log = 0
+        self._silent_mode = False
+        self._offline_announced = False
         
     @property
     def connection_quality(self) -> Dict[str, Any]:
@@ -104,7 +106,7 @@ class NetworkManager:
         }
     
     def update_metrics(self, response_time: float, success: bool, error_type: str = None) -> None:
-        """Update metrics efficiently with offline detection."""
+        """Update metrics efficiently with silent offline detection."""
         self._metrics.total_count += 1
         
         if success:
@@ -114,6 +116,8 @@ class NetworkManager:
             self._metrics.is_expected_offline = False
             self._latency_window.append(response_time)
             self._state = ConnectionState.CONNECTED
+            self._silent_mode = False
+            self._offline_announced = False
             
             # Update average latency efficiently
             if self._latency_window:
@@ -123,6 +127,11 @@ class NetworkManager:
             self._metrics.last_error_type = error_type
             self._metrics.last_error_time = time.time()
             
+            # Enter silent mode after device is clearly offline
+            if self._metrics.consecutive_failures > 20:
+                self._silent_mode = True
+                self._metrics.is_expected_offline = True
+            
             # Determine if device is likely offline vs temporary error
             if self._metrics.is_likely_offline:
                 self._state = ConnectionState.OFFLINE
@@ -130,8 +139,8 @@ class NetworkManager:
             else:
                 self._state = ConnectionState.ERROR
             
-            # Only store essential error info for non-offline states
-            if error_type and not self._metrics.is_expected_offline:
+            # Only store essential error info when not in silent mode
+            if error_type and not self._silent_mode:
                 self._recent_errors.append({
                     'type': error_type,
                     'time': time.time()
@@ -145,20 +154,28 @@ class NetworkManager:
     def get_cached_state(self) -> Optional[Dict[str, Any]]:
         """Get cached state if still valid."""
         if (self._cached_state and 
-            time.time() - self._cached_state_time < STATE_CACHE_TTL):  # Phase 1: Use constant
+            time.time() - self._cached_state_time < STATE_CACHE_TTL):
             return self._cached_state
         return None
     
     def should_log_offline(self) -> bool:
-        """Phase 1: Check if we should log offline status (rate limited)."""
+        """Check if we should log offline status (rate limited and respects silent mode)."""
+        if self._silent_mode:
+            return False
+            
         current_time = time.time()
         if current_time - self._last_offline_log > ERROR_LOG_RATE_LIMIT:
             self._last_offline_log = current_time
             return True
         return False
+    
+    def is_silent_mode(self) -> bool:
+        """Check if in silent mode (device is offline for extended period)."""
+        return self._silent_mode
+
 
 class EveusUpdater:
-    """High-performance updater with quiet offline handling."""
+    """High-performance updater with silent offline handling."""
 
     def __init__(self, host: str, username: str, password: str, hass: HomeAssistant) -> None:
         """Initialize optimized updater."""
@@ -193,7 +210,7 @@ class EveusUpdater:
         self._update_count = 0
         self._last_significant_change = 0
         
-        # Phase 1: Rate limited logging
+        # Rate limited logging
         self._last_availability_log = 0
 
     @property
@@ -222,7 +239,6 @@ class EveusUpdater:
             if self._session and not self._session.closed:
                 await self._session.close()
             
-            # Phase 1: Enhanced session settings for better resilience
             timeout = aiohttp.ClientTimeout(total=UPDATE_TIMEOUT, connect=10)
             connector = aiohttp.TCPConnector(
                 limit=10,
@@ -230,7 +246,7 @@ class EveusUpdater:
                 use_dns_cache=True,
                 keepalive_timeout=60,
                 enable_cleanup_closed=True,
-                force_close=False,  # Better for connection reuse
+                force_close=False,
                 limit_per_host=2
             )
             
@@ -258,7 +274,7 @@ class EveusUpdater:
             self._update_callbacks.remove(callback)
 
     def notify_entities(self) -> None:
-        """Notify entities of updates (optimized and quiet)."""
+        """Notify entities of updates (optimized and silent)."""
         # Only notify if there are significant changes
         current_time = time.time()
         
@@ -278,7 +294,7 @@ class EveusUpdater:
                     try:
                         entity.async_write_ha_state()
                     except Exception:
-                        # Silently ignore entity update errors when likely offline
+                        # Silently ignore entity update errors
                         pass
             
             # Execute callbacks (suppress exceptions to reduce noise)
@@ -286,7 +302,7 @@ class EveusUpdater:
                 try:
                     callback()
                 except Exception:
-                    # Silently ignore callback errors when likely offline
+                    # Silently ignore callback errors
                     pass
 
     async def send_command(self, command: str, value: Any) -> bool:
@@ -294,7 +310,7 @@ class EveusUpdater:
         return await self._command_manager.send_command(command, value)
 
     async def _update(self) -> None:
-        """Optimized update method with quiet offline handling."""
+        """Optimized update method with silent offline handling."""
         start_time = time.time()
         
         try:
@@ -323,18 +339,19 @@ class EveusUpdater:
                     self._network.update_metrics(response_time, True)
                     self._network.cache_state(new_data)
                     
-                    # Update availability (with quiet logging)
+                    # Update availability (only log when coming back online)
                     if not self._available:
                         self._available = True
-                        if self._should_log_availability():
+                        # Only log if not in silent mode
+                        if not self._network.is_silent_mode():
                             _LOGGER.info("Connection restored to %s", self.host)
                     
                     # Notify entities of changes
                     self.notify_entities()
                     
                 except (json.JSONDecodeError, ValueError) as err:
-                    # Phase 1: Rate limited error logging
-                    if self._should_log_parsing_error():
+                    # Silent handling in offline mode
+                    if not self._network.is_silent_mode():
                         _LOGGER.debug("Error parsing response from %s: %s", self.host, err)
                     self._network.update_metrics(time.time() - start_time, False, "ParseError")
                 
@@ -348,14 +365,16 @@ class EveusUpdater:
             self._handle_update_error(err, "UnknownError", start_time)
 
     def _handle_update_error(self, error: Exception, error_type: str, start_time: float) -> None:
-        """Handle update errors with quiet offline detection."""
+        """Handle update errors with silent offline detection."""
         response_time = time.time() - start_time
         self._network.update_metrics(response_time, False, error_type)
         
-        # Phase 1: Try to use cached state during temporary issues
+        # Try to use cached state during temporary issues
         cached_state = self._network.get_cached_state()
         if cached_state and cached_state != self._data:
-            _LOGGER.debug("Using cached state during %s for %s", error_type, self.host)
+            # Only log cache usage if not in silent mode
+            if not self._network.is_silent_mode():
+                _LOGGER.debug("Using cached state during %s for %s", error_type, self.host)
             self._previous_data = self._data.copy()
             self._data = cached_state
             self.notify_entities()
@@ -364,27 +383,25 @@ class EveusUpdater:
             if self._available:
                 self._available = False
                 
-                # Phase 1: Rate limited availability logging
+                # Announce offline status only once, then go silent
                 if self._network._metrics.is_likely_offline:
-                    if self._network.should_log_offline():
-                        _LOGGER.warning("Device %s appears to be offline", self.host)
+                    if not self._network._offline_announced:
+                        _LOGGER.info("Device %s appears to be offline (turned off)", self.host)
+                        self._network._offline_announced = True
                 else:
-                    if self._should_log_availability():
+                    # Only log temporary issues if not in silent mode
+                    if not self._network.is_silent_mode() and self._should_log_availability():
                         _LOGGER.debug("Temporary connection issue with %s: %s", self.host, error_type)
                 
                 self.notify_entities()
 
     def _should_log_availability(self) -> bool:
-        """Phase 1: Rate limit availability change logging."""
+        """Rate limit availability change logging."""
         current_time = time.time()
         if current_time - self._last_availability_log > ERROR_LOG_RATE_LIMIT:
             self._last_availability_log = current_time
             return True
         return False
-
-    def _should_log_parsing_error(self) -> bool:
-        """Phase 1: Rate limit parsing error logging."""
-        return self._should_log_availability()  # Use same rate limiting
 
     async def async_start_updates(self) -> None:
         """Start optimized update loop."""
@@ -395,16 +412,14 @@ class EveusUpdater:
             _LOGGER.debug("Started optimized update loop for %s", self.host)
 
     async def _update_loop(self) -> None:
-        """Optimized update loop with quiet offline handling."""
+        """Optimized update loop with silent offline handling."""
         consecutive_failures = 0
         max_failures = 5
-        quiet_failures = 0
         
         while not self._shutdown_event.is_set():
             try:
                 await self._update()
                 consecutive_failures = 0
-                quiet_failures = 0
                 
                 # Adaptive polling interval
                 is_charging = get_safe_value(self._data, "state", int) == 4
@@ -422,34 +437,28 @@ class EveusUpdater:
             except Exception as err:
                 consecutive_failures += 1
                 
-                # Phase 1: Enhanced logging during failures with rate limiting
-                if consecutive_failures <= 3:
-                    if self._should_log_availability():
-                        _LOGGER.debug("Update loop error %d/%d for %s: %s", 
-                                    consecutive_failures, max_failures, self.host, err)
-                elif consecutive_failures == 10:
-                    if self._should_log_availability():
-                        _LOGGER.warning("Multiple update failures for %s, device may be offline", self.host)
-                elif consecutive_failures % 50 == 0:  # Log every 50th failure
-                    if self._should_log_availability():
-                        _LOGGER.debug("Device %s still unreachable (%d attempts)", self.host, consecutive_failures)
+                # Silent logging when device is offline
+                if not self._network.is_silent_mode():
+                    if consecutive_failures <= 3:
+                        if self._should_log_availability():
+                            _LOGGER.debug("Update loop error %d/%d for %s: %s", 
+                                        consecutive_failures, max_failures, self.host, err)
+                    elif consecutive_failures == 10:
+                        _LOGGER.info("Device %s appears to be offline after multiple failures", self.host)
                 
-                # Exponential backoff with jitter (longer delays when offline)
+                # Exponential backoff with longer delays when offline
                 if self._network._metrics.is_likely_offline:
                     backoff = min(RETRY_DELAY * 4, 300)  # Longer delays when offline
                 else:
                     backoff = min(RETRY_DELAY * (2 ** (consecutive_failures - 1)), 60)
                 
-                jitter = backoff * 0.1  # 10% jitter
+                jitter = backoff * 0.1
                 delay = backoff + (jitter * (0.5 - asyncio.get_event_loop().time() % 1))
                 
                 await asyncio.sleep(delay)
                 
-                # Phase 1: Reset connection after too many failures (but quietly)
+                # Reset connection after too many failures (silently)
                 if consecutive_failures >= max_failures:
-                    if self._should_log_availability():
-                        _LOGGER.debug("Resetting connection for %s after %d failures", 
-                                    self.host, max_failures)
                     if self._session and not self._session.closed:
                         await self._session.close()
                         self._session = None
