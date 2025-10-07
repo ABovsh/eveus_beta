@@ -1,4 +1,4 @@
-"""Support for Eveus number entities with proper state persistence and safety."""
+"""Support for Eveus number entities with optimistic UI and safety."""
 from __future__ import annotations
 
 import logging
@@ -34,8 +34,11 @@ from .utils import get_safe_value
 
 _LOGGER = logging.getLogger(__name__)
 
+# How long to trust user's command before requiring device confirmation
+OPTIMISTIC_VALUE_TTL = 120  # 2 minutes - enough time for device to respond
+
 class EveusNumberEntity(BaseEveusEntity, NumberEntity):
-    """Base number entity for Eveus with safety-first design - no persistent cache."""
+    """Base number entity with responsive UI and safety."""
     
     _attr_has_entity_name = True
     _attr_should_poll = False
@@ -44,9 +47,11 @@ class EveusNumberEntity(BaseEveusEntity, NumberEntity):
         """Initialize the entity."""
         super().__init__(updater, device_number)
         
-        # State management - NO persistent intended value for safety
-        self._pending_value: Optional[float] = None   # Value being set
-        self._last_device_value: Optional[float] = None  # Last known device value
+        # State management for responsive UI
+        self._pending_value: Optional[float] = None     # Value being set
+        self._optimistic_value: Optional[float] = None  # What user just set (short-term)
+        self._optimistic_value_time: float = 0          # When optimistic value was set
+        self._last_device_value: Optional[float] = None # Last known device value
         self._last_command_time = 0
         self._last_successful_read = 0
         
@@ -65,11 +70,12 @@ class EveusNumberEntity(BaseEveusEntity, NumberEntity):
             if unavailable_duration < CONTROL_GRACE_PERIOD:
                 return True  # Still in short grace period
             else:
-                # Grace period expired - mark unavailable
+                # Grace period expired - mark unavailable and clear optimistic value
                 if self._last_known_available and self._should_log_availability():
                     _LOGGER.info("Number %s unavailable (device offline %.0fs)", 
                                self.unique_id, unavailable_duration)
                 self._last_known_available = False
+                self._optimistic_value = None  # Clear optimistic value when offline
                 return False
         
         # Device is available
@@ -87,7 +93,7 @@ class EveusNumberEntity(BaseEveusEntity, NumberEntity):
 
 
 class EveusCurrentNumber(EveusNumberEntity):
-    """Representation of Eveus current control with safety-first design."""
+    """Representation of Eveus current control with responsive UI."""
 
     ENTITY_NAME = "Charging Current"
     _attr_native_step = 1.0
@@ -110,23 +116,43 @@ class EveusCurrentNumber(EveusNumberEntity):
 
     @property
     def native_value(self) -> float | None:
-        """Return current value - ONLY from device, no persistent cache."""
-        # Priority 1: Command in progress
+        """Return current value with optimistic UI for responsiveness."""
+        current_time = time.time()
+        
+        # Priority 1: Command in progress (immediate feedback)
         if self._pending_value is not None:
             return self._pending_value
         
-        # Priority 2: Current device value (NEVER use old cache for safety)
+        # Priority 2: Recent optimistic value (user just set it, trust for 2 minutes)
+        if self._optimistic_value is not None:
+            time_since_set = current_time - self._optimistic_value_time
+            if time_since_set < OPTIMISTIC_VALUE_TTL:
+                # Still within optimistic window - show what user set
+                return self._optimistic_value
+            else:
+                # Optimistic value expired - clear it
+                self._optimistic_value = None
+        
+        # Priority 3: Current device value (the truth)
         if self._updater.available and self._updater.data:
             if self._command in self._updater.data:
                 device_value = get_safe_value(self._updater.data, self._command, float)
                 if device_value is not None:
-                    self._last_device_value = float(device_value)
-                    self._last_successful_read = time.time()
-                    return self._last_device_value
+                    new_device_value = float(device_value)
+                    self._last_device_value = new_device_value
+                    self._last_successful_read = current_time
+                    
+                    # If device value differs from optimistic, device value wins
+                    if self._optimistic_value is not None and abs(self._optimistic_value - new_device_value) > 0.5:
+                        _LOGGER.debug("Device value (%.1f) differs from optimistic (%.1f), clearing optimistic",
+                                    new_device_value, self._optimistic_value)
+                        self._optimistic_value = None
+                    
+                    return new_device_value
         
-        # Priority 3: Recent device value (within grace period only)
+        # Priority 4: Recent device value (within grace period)
         if self._last_device_value is not None:
-            time_since_read = time.time() - self._last_successful_read
+            time_since_read = current_time - self._last_successful_read
             if time_since_read < CONTROL_GRACE_PERIOD:
                 return self._last_device_value
         
@@ -134,7 +160,7 @@ class EveusCurrentNumber(EveusNumberEntity):
         return None
 
     async def async_set_native_value(self, value: float) -> None:
-        """Set new current value."""
+        """Set new current value with optimistic UI."""
         async with self._command_lock:
             try:
                 # Clamp value to valid range
@@ -142,7 +168,7 @@ class EveusCurrentNumber(EveusNumberEntity):
                                   min(self._attr_native_max_value, value))
                 int_value = int(clamped_value)
                 
-                # Set pending value
+                # Set pending value for immediate feedback
                 self._pending_value = float(int_value)
                 self.async_write_ha_state()
                 
@@ -150,8 +176,13 @@ class EveusCurrentNumber(EveusNumberEntity):
                 success = await self._updater.send_command(self._command, int_value)
                 
                 if success:
-                    _LOGGER.debug("Successfully set %s to %dA", self.name, int_value)
+                    # Command succeeded - set optimistic value (trust for 2 minutes)
+                    self._optimistic_value = float(int_value)
+                    self._optimistic_value_time = time.time()
+                    _LOGGER.debug("Successfully set %s to %dA (optimistic for %ds)", 
+                                self.name, int_value, OPTIMISTIC_VALUE_TTL)
                 else:
+                    # Command failed - don't set optimistic value
                     _LOGGER.warning("Failed to set %s to %dA", self.name, int_value)
                     
             except Exception as err:
@@ -207,14 +238,31 @@ class EveusCurrentNumber(EveusNumberEntity):
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator."""
-        # Update last device value from fresh data only
+        """Handle updated data - reconcile with device value."""
+        current_time = time.time()
+        
+        # Update last device value from fresh data
         if self._updater.available and self._updater.data:
             if self._command in self._updater.data:
                 device_value = get_safe_value(self._updater.data, self._command, float)
                 if device_value is not None:
-                    self._last_device_value = float(device_value)
-                    self._last_successful_read = time.time()
+                    new_device_value = float(device_value)
+                    self._last_device_value = new_device_value
+                    self._last_successful_read = current_time
+                    
+                    # Reconcile optimistic value with device value
+                    if self._optimistic_value is not None:
+                        if abs(self._optimistic_value - new_device_value) < 0.5:
+                            # Device confirmed our optimistic value - can clear it now
+                            _LOGGER.debug("Device confirmed optimistic value for %s", self.name)
+                            self._optimistic_value = None
+                        else:
+                            # Device value differs - check how long we've been waiting
+                            time_since_set = current_time - self._optimistic_value_time
+                            if time_since_set > 10:  # Give device 10 seconds to respond
+                                _LOGGER.debug("Device value differs from optimistic after %ds for %s, trusting device",
+                                            time_since_set, self.name)
+                                self._optimistic_value = None
         
         self.async_write_ha_state()
 
