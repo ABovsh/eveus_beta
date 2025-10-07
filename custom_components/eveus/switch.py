@@ -1,4 +1,4 @@
-"""Support for Eveus switches with proper state persistence and safety."""
+"""Support for Eveus switches with optimistic UI and safety."""
 from __future__ import annotations
 
 import logging
@@ -18,8 +18,11 @@ from .utils import get_safe_value
 
 _LOGGER = logging.getLogger(__name__)
 
+# How long to trust user's command before requiring device confirmation
+OPTIMISTIC_STATE_TTL = 120  # 2 minutes - enough time for device to respond
+
 class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
-    """Base switch entity for Eveus with safety-first design - no persistent cache."""
+    """Base switch entity with responsive UI and safety."""
 
     _attr_entity_category = EntityCategory.CONFIG
     _command: str = None
@@ -30,8 +33,10 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
         super().__init__(updater, device_number)
         self._command_lock = asyncio.Lock()
         
-        # State management - NO persistent intended state for safety
+        # State management for responsive UI
         self._pending_command: Optional[bool] = None  # Command in progress
+        self._optimistic_state: Optional[bool] = None  # What user just set (short-term)
+        self._optimistic_state_time: float = 0  # When optimistic state was set
         self._last_device_state: Optional[bool] = None  # Last known device state
         self._last_command_time = 0
         self._last_successful_read = 0
@@ -51,11 +56,12 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
             if unavailable_duration < CONTROL_GRACE_PERIOD:
                 return True  # Still in short grace period
             else:
-                # Grace period expired - mark unavailable
+                # Grace period expired - mark unavailable and clear optimistic state
                 if self._last_known_available and self._should_log_availability():
                     _LOGGER.info("Switch %s unavailable (device offline %.0fs)", 
                                self.unique_id, unavailable_duration)
                 self._last_known_available = False
+                self._optimistic_state = None  # Clear optimistic state when offline
                 return False
         
         # Device is available
@@ -68,32 +74,52 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
 
     @property
     def is_on(self) -> bool:
-        """Return true if switch is on - ONLY from device, no persistent cache."""
-        # Priority 1: Command in progress
+        """Return switch state with optimistic UI for responsiveness."""
+        current_time = time.time()
+        
+        # Priority 1: Command in progress (immediate feedback)
         if self._pending_command is not None:
             return self._pending_command
         
-        # Priority 2: Current device state (NEVER use old cache for safety)
+        # Priority 2: Recent optimistic state (user just set it, trust for 2 minutes)
+        if self._optimistic_state is not None:
+            time_since_set = current_time - self._optimistic_state_time
+            if time_since_set < OPTIMISTIC_STATE_TTL:
+                # Still within optimistic window - show what user set
+                return self._optimistic_state
+            else:
+                # Optimistic state expired - clear it
+                self._optimistic_state = None
+        
+        # Priority 3: Current device state (the truth)
         if self._updater.available and self._updater.data:
             if self._state_key in self._updater.data:
                 device_value = get_safe_value(self._updater.data, self._state_key, int, 0)
-                self._last_device_state = bool(device_value)
-                self._last_successful_read = time.time()
-                return self._last_device_state
+                new_device_state = bool(device_value)
+                self._last_device_state = new_device_state
+                self._last_successful_read = current_time
+                
+                # If device state differs from optimistic, device state wins
+                if self._optimistic_state is not None and self._optimistic_state != new_device_state:
+                    _LOGGER.debug("Device state (%s) differs from optimistic (%s), clearing optimistic",
+                                new_device_state, self._optimistic_state)
+                    self._optimistic_state = None
+                
+                return new_device_state
         
-        # Priority 3: Recent device state (within grace period only)
+        # Priority 4: Recent device state (within grace period)
         if self._last_device_state is not None:
-            time_since_read = time.time() - self._last_successful_read
+            time_since_read = current_time - self._last_successful_read
             if time_since_read < CONTROL_GRACE_PERIOD:
                 return self._last_device_state
         
-        # Default: OFF when unavailable (safer than showing stale ON state)
+        # Default: OFF when unavailable (safer)
         return False
 
     async def _async_send_command(self, command_value: int) -> bool:
-        """Send command to device."""
+        """Send command with optimistic state for responsive UI."""
         async with self._command_lock:
-            # Set pending state
+            # Set pending state for immediate feedback
             self._pending_command = bool(command_value)
             self.async_write_ha_state()
             
@@ -102,8 +128,13 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
                 success = await self._updater.send_command(self._command, command_value)
                 
                 if success:
-                    _LOGGER.debug("Successfully set %s to %s", self.name, "on" if command_value else "off")
+                    # Command succeeded - set optimistic state (trust for 2 minutes)
+                    self._optimistic_state = bool(command_value)
+                    self._optimistic_state_time = time.time()
+                    _LOGGER.debug("Successfully set %s to %s (optimistic for %ds)", 
+                                self.name, "on" if command_value else "off", OPTIMISTIC_STATE_TTL)
                 else:
+                    # Command failed - don't set optimistic state
                     _LOGGER.warning("Failed to set %s to %s", self.name, "on" if command_value else "off")
                 
                 return success
@@ -151,13 +182,30 @@ class BaseSwitchEntity(BaseEveusEntity, SwitchEntity):
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator."""
-        # Update last device state from fresh data only
+        """Handle updated data - reconcile with device state."""
+        current_time = time.time()
+        
+        # Update last device state from fresh data
         if self._updater.available and self._updater.data:
             if self._state_key in self._updater.data:
                 device_value = get_safe_value(self._updater.data, self._state_key, int, 0)
-                self._last_device_state = bool(device_value)
-                self._last_successful_read = time.time()
+                new_device_state = bool(device_value)
+                self._last_device_state = new_device_state
+                self._last_successful_read = current_time
+                
+                # Reconcile optimistic state with device state
+                if self._optimistic_state is not None:
+                    if self._optimistic_state == new_device_state:
+                        # Device confirmed our optimistic state - can clear it now
+                        _LOGGER.debug("Device confirmed optimistic state for %s", self.name)
+                        self._optimistic_state = None
+                    else:
+                        # Device state differs - check how long we've been waiting
+                        time_since_set = current_time - self._optimistic_state_time
+                        if time_since_set > 10:  # Give device 10 seconds to respond
+                            _LOGGER.debug("Device state differs from optimistic after %ds for %s, trusting device",
+                                        time_since_set, self.name)
+                            self._optimistic_state = None
         
         self.async_write_ha_state()
 
@@ -227,7 +275,7 @@ class EveusResetCounterASwitch(BaseSwitchEntity):
         if self._safe_mode:
             return False
         
-        # For reset switch, state represents counter value
+        # For reset switch, state represents counter value (not optimistic)
         if not self._updater.available or not self._updater.data:
             return False
             
