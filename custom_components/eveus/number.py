@@ -1,4 +1,4 @@
-"""Support for Eveus number entities with proper state persistence."""
+"""Support for Eveus number entities with proper state persistence and safety."""
 from __future__ import annotations
 
 import logging
@@ -27,6 +27,7 @@ from .const import (
     MODEL_MAX_CURRENT,
     MIN_CURRENT,
     CONF_MODEL,
+    CONTROL_GRACE_PERIOD,
 )
 from .common import BaseEveusEntity
 from .utils import get_safe_value
@@ -34,7 +35,7 @@ from .utils import get_safe_value
 _LOGGER = logging.getLogger(__name__)
 
 class EveusNumberEntity(BaseEveusEntity, NumberEntity):
-    """Base number entity for Eveus with proper state persistence."""
+    """Base number entity for Eveus with safety-first design - no persistent cache."""
     
     _attr_has_entity_name = True
     _attr_should_poll = False
@@ -43,17 +44,42 @@ class EveusNumberEntity(BaseEveusEntity, NumberEntity):
         """Initialize the entity."""
         super().__init__(updater, device_number)
         
-        # State management for persistence
-        self._intended_value: Optional[float] = None  # What user set
-        self._device_value: Optional[float] = None    # What device reports  
+        # State management - NO persistent intended value for safety
         self._pending_value: Optional[float] = None   # Value being set
+        self._last_device_value: Optional[float] = None  # Last known device value
         self._last_command_time = 0
-        self._restore_attempted = False
+        self._last_successful_read = 0
         
-    async def async_added_to_hass(self) -> None:
-        """Handle entity which will be added."""
-        await super().async_added_to_hass()
+    @property
+    def available(self) -> bool:
+        """Control entities use shorter grace period for safety."""
+        if not self._updater.available:
+            # Device offline - check how long
+            current_time = time.time()
+            if self._unavailable_since is None:
+                self._unavailable_since = current_time
+                return True  # Brief grace period starts
+            
+            # Use CONTROL_GRACE_PERIOD (30s) instead of regular grace period
+            unavailable_duration = current_time - self._unavailable_since
+            if unavailable_duration < CONTROL_GRACE_PERIOD:
+                return True  # Still in short grace period
+            else:
+                # Grace period expired - mark unavailable
+                if self._last_known_available and self._should_log_availability():
+                    _LOGGER.info("Number %s unavailable (device offline %.0fs)", 
+                               self.unique_id, unavailable_duration)
+                self._last_known_available = False
+                return False
         
+        # Device is available
+        if self._unavailable_since is not None:
+            if self._should_log_availability():
+                _LOGGER.debug("Number %s connection restored", self.unique_id)
+            self._unavailable_since = None
+        self._last_known_available = True
+        return True
+    
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
@@ -61,7 +87,7 @@ class EveusNumberEntity(BaseEveusEntity, NumberEntity):
 
 
 class EveusCurrentNumber(EveusNumberEntity):
-    """Representation of Eveus current control with state persistence."""
+    """Representation of Eveus current control with safety-first design."""
 
     ENTITY_NAME = "Charging Current"
     _attr_native_step = 1.0
@@ -84,33 +110,31 @@ class EveusCurrentNumber(EveusNumberEntity):
 
     @property
     def native_value(self) -> float | None:
-        """Return the current value - prioritize intended value."""
-        # Priority: pending value > intended value > device value > cached fallback
+        """Return current value - ONLY from device, no persistent cache."""
+        # Priority 1: Command in progress
         if self._pending_value is not None:
             return self._pending_value
-        if self._intended_value is not None:
-            return self._intended_value
-        if self._device_value is not None:
-            return self._device_value
-            
-        # SAFE: Only use cached data when live data is completely unavailable
-        if self._updater.data and self._command in self._updater.data:
-            # Fresh data available - use it (even if it's different from expected)
-            device_value = get_safe_value(self._updater.data, self._command)
-            if device_value is not None:
-                self._device_value = float(device_value)
-                return self._device_value
-        else:
-            # No fresh data - fallback to cached data only as last resort
-            cached_value = self.get_cached_data_value(self._command)
-            if cached_value is not None:
-                self._device_value = float(cached_value)
-                return self._device_value
-            
+        
+        # Priority 2: Current device value (NEVER use old cache for safety)
+        if self._updater.available and self._updater.data:
+            if self._command in self._updater.data:
+                device_value = get_safe_value(self._updater.data, self._command, float)
+                if device_value is not None:
+                    self._last_device_value = float(device_value)
+                    self._last_successful_read = time.time()
+                    return self._last_device_value
+        
+        # Priority 3: Recent device value (within grace period only)
+        if self._last_device_value is not None:
+            time_since_read = time.time() - self._last_successful_read
+            if time_since_read < CONTROL_GRACE_PERIOD:
+                return self._last_device_value
+        
+        # No valid value available
         return None
 
     async def async_set_native_value(self, value: float) -> None:
-        """Set new current value with proper state tracking."""
+        """Set new current value."""
         async with self._command_lock:
             try:
                 # Clamp value to valid range
@@ -126,11 +150,8 @@ class EveusCurrentNumber(EveusNumberEntity):
                 success = await self._updater.send_command(self._command, int_value)
                 
                 if success:
-                    # Command succeeded - update intended value
-                    self._intended_value = float(int_value)
                     _LOGGER.debug("Successfully set %s to %dA", self.name, int_value)
                 else:
-                    # Command failed - keep previous intended value
                     _LOGGER.warning("Failed to set %s to %dA", self.name, int_value)
                     
             except Exception as err:
@@ -142,15 +163,15 @@ class EveusCurrentNumber(EveusNumberEntity):
                 self.async_write_ha_state()
 
     async def _async_restore_state(self, state: State) -> None:
-        """Restore previous intended value."""
+        """Restore previous value - apply when device available."""
         try:
             if state and state.state not in (None, 'unknown', 'unavailable'):
                 restored_value = float(state.state)
                 
                 # Validate restored value is in range
                 if self._attr_native_min_value <= restored_value <= self._attr_native_max_value:
-                    self._intended_value = restored_value
-                    _LOGGER.debug("Restored %s intended value to %.1fA", self.name, restored_value)
+                    _LOGGER.debug("Will attempt to restore %s to %.1fA when device available", 
+                                self.name, restored_value)
                     
                     # Try to apply the restored value when device becomes available
                     self.hass.async_create_task(self._apply_restored_value(restored_value))
@@ -164,45 +185,37 @@ class EveusCurrentNumber(EveusNumberEntity):
 
     async def _apply_restored_value(self, target_value: float) -> None:
         """Apply restored value when device becomes available."""
-        # Wait a bit for device to be ready
+        # Wait for device to be ready
         await asyncio.sleep(5)
         
-        # Check if we should apply the restored value
-        if not self._restore_attempted and self._intended_value is not None:
-            self._restore_attempted = True
+        # Only apply if device is available and we can verify current value
+        if not self._updater.available or not self._updater.data:
+            _LOGGER.debug("Device not available, skipping value restoration for %s", self.name)
+            return
+        
+        if self._command not in self._updater.data:
+            return
             
-            # SAFE: Check device value with proper priority
-            current_device_value = None
-            if self._updater.data and self._command in self._updater.data:
-                current_device_value = get_safe_value(self._updater.data, self._command, float)
-            elif self._cached_data and self._command in self._cached_data:
-                current_device_value = self.get_cached_data_value(self._command, float)
-            
-            if (current_device_value is None or 
-                abs(current_device_value - self._intended_value) > 0.5):
-                _LOGGER.info("Applying restored current value for %s: %.1fA", 
-                           self.name, self._intended_value)
-                await self.async_set_native_value(self._intended_value)
+        # Get current device value
+        current_device_value = get_safe_value(self._updater.data, self._command, float)
+        
+        # Only apply if different from device value (with tolerance)
+        if current_device_value is None or abs(current_device_value - target_value) > 0.5:
+            _LOGGER.info("Applying restored current value for %s: %.1fA", 
+                       self.name, target_value)
+            await self.async_set_native_value(target_value)
 
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
-        # SAFE: Only use fresh data when available, never override with cached
-        if self._updater.data and self._command in self._updater.data:
-            device_data_value = get_safe_value(self._updater.data, self._command, float)
-            
-            if device_data_value is not None:
-                new_device_value = float(device_data_value)
-                
-                # Only update if device value actually changed significantly
-                if (self._device_value is None or 
-                    abs(self._device_value - new_device_value) > 0.5):
-                    self._device_value = new_device_value
-                    
-                    # If no command is pending and no intended value is set, sync with device
-                    if self._pending_value is None and self._intended_value is None:
-                        self._intended_value = new_device_value
-                
+        # Update last device value from fresh data only
+        if self._updater.available and self._updater.data:
+            if self._command in self._updater.data:
+                device_value = get_safe_value(self._updater.data, self._command, float)
+                if device_value is not None:
+                    self._last_device_value = float(device_value)
+                    self._last_successful_read = time.time()
+        
         self.async_write_ha_state()
 
 
@@ -214,7 +227,7 @@ async def async_setup_entry(
     """Set up the Eveus number entities."""
     data = hass.data[DOMAIN][entry.entry_id]
     updater = data.get("updater")
-    device_number = data.get("device_number", 1)  # Default to 1 for backward compatibility
+    device_number = data.get("device_number", 1)
     
     if not updater:
         _LOGGER.error("No updater found in data")
