@@ -14,10 +14,12 @@ UPDATE_TIMEOUT: Final[int] = 20
 COMMAND_TIMEOUT: Final[int] = 25
 ERROR_COOLDOWN: Final[int] = 300  # 5 minutes
 
-# Phase 1: Availability and resilience improvements
-AVAILABILITY_GRACE_PERIOD: Final[int] = 120  # 2 minutes before marking unavailable
-ERROR_LOG_RATE_LIMIT: Final[int] = 300       # Log errors max every 5 minutes
-STATE_CACHE_TTL: Final[int] = 180            # Cache state for 3 minutes during outages
+# Availability and resilience - differentiate control vs monitoring
+AVAILABILITY_GRACE_PERIOD: Final[int] = 90        # 1.5 minutes for sensors before marking unavailable
+CONTROL_GRACE_PERIOD: Final[int] = 30             # 30 seconds for switches/numbers - safety first!
+ERROR_LOG_RATE_LIMIT: Final[int] = 300            # Log errors max every 5 minutes
+STATE_CACHE_TTL: Final[int] = 180                 # Cache sensor state for 3 minutes during outages
+CONTROL_CACHE_TTL: Final[int] = 0                 # NO caching for control entities - safety!
 
 # Current limits
 MIN_CURRENT: Final[int] = 7
