@@ -22,6 +22,7 @@ from .const import (
     DOMAIN,
     MODEL_16A,
     MODEL_32A,
+    MODEL_48A,
     CONF_MODEL,
     MODELS,
     MIN_CURRENT,
