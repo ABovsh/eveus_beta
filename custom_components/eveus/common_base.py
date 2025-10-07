@@ -1,726 +1,240 @@
-"""Sensor definitions and factory for Eveus integration with stable offline handling."""
-from __future__ import annotations
-
+"""Base entity classes for Eveus integration with enhanced state persistence."""
 import logging
 import time
-from typing import Any, Callable, Dict, List, Optional, Type, Union
-from datetime import datetime
-from functools import lru_cache, partial
-from dataclasses import dataclass
-from enum import Enum
+import asyncio
+from typing import Any, Optional
 
-from homeassistant.components.sensor import (
-    SensorDeviceClass,
-    SensorStateClass,
-)
-from homeassistant.const import (
-    UnitOfElectricCurrent,
-    UnitOfElectricPotential,
-    UnitOfEnergy,
-    UnitOfPower,
-    UnitOfTemperature,
-)
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.entity import Entity
+from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.components.sensor import SensorEntity
 from homeassistant.helpers.entity import EntityCategory
-from homeassistant.core import HomeAssistant, callback, Event
-from homeassistant.helpers.event import async_track_state_change_event
-import pytz
 
-from .common import EveusSensorBase
-from .const import (
-    get_charging_state,
-    get_error_state,
-    get_normal_substate,
-    RATE_STATES,
-    ERROR_LOG_RATE_LIMIT,
-    STATE_CACHE_TTL,  # Use consistent cache TTL from const
-)
-from .utils import (
-    get_safe_value,
-    is_dst,
-    format_duration,
-    calculate_remaining_time,
-    validate_required_values,
-)
+from .utils import get_device_info, get_device_suffix
+from .const import AVAILABILITY_GRACE_PERIOD, ERROR_LOG_RATE_LIMIT, STATE_CACHE_TTL
 
 _LOGGER = logging.getLogger(__name__)
 
-# Phase 1: Global error logging control to reduce noise
-_last_error_logs = {}
+# Type checking imports to avoid circular imports
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .common_network import EveusUpdater
 
-def _should_log_error(function_name: str) -> bool:
-    """Phase 1: Check if we should log errors for a function (rate limited)."""
-    current_time = time.time()
-    last_log = _last_error_logs.get(function_name, 0)
-    if current_time - last_log > ERROR_LOG_RATE_LIMIT:
-        _last_error_logs[function_name] = current_time
-        return True
-    return False
 
-class SensorType(Enum):
-    """Sensor type enumeration for categorization."""
-    MEASUREMENT = "measurement"
-    ENERGY = "energy" 
-    DIAGNOSTIC = "diagnostic"
-    CALCULATED = "calculated"
-    STATE = "state"
+class BaseEveusEntity(RestoreEntity, Entity):
+    """Base implementation for Eveus entities with enhanced state persistence."""
 
-@dataclass(frozen=True)
-class SensorSpec:
-    """Immutable sensor specification for efficient sensor creation."""
-    key: str
-    name: str
-    value_fn: Callable
-    sensor_type: SensorType
-    icon: Optional[str] = None
-    device_class: Optional[str] = None
-    state_class: Optional[str] = None
-    unit: Optional[str] = None
-    precision: Optional[int] = None
-    category: Optional[EntityCategory] = None
-    attributes_fn: Optional[Callable] = None
-    
-    def create_sensor(self, updater, device_number: int = 1) -> 'OptimizedEveusSensor':
-        """Create sensor instance from specification."""
-        return OptimizedEveusSensor(updater, self, device_number)
+    ENTITY_NAME: str = None
+    _attr_has_entity_name = True
+    _attr_should_poll = False
 
-class OptimizedEveusSensor(EveusSensorBase):
-    """High-performance templated sensor with stable offline handling."""
-    
-    def __init__(self, updater, spec: SensorSpec, device_number: int = 1):
-        """Initialize optimized sensor."""
-        self.ENTITY_NAME = spec.name
-        super().__init__(updater, device_number)
+    def __init__(self, updater, device_number: int = 1) -> None:
+        """Initialize the entity."""
+        super().__init__()
+        self._updater = updater
+        self._device_number = device_number
+        self._updater.register_entity(self)
         
-        self._spec = spec
-        self._cached_value = None
-        self._cache_timestamp = 0
-        # Use consistent cache TTL from const.py (60 seconds for WiFi stability)
-        self._cache_ttl = STATE_CACHE_TTL
+        # State persistence tracking
+        self._state_restored = False
+        self._restore_in_progress = False
         
-        # Apply spec attributes efficiently
-        if spec.icon:
-            self._attr_icon = spec.icon
-        if spec.device_class:
-            self._attr_device_class = spec.device_class
-        if spec.state_class:
-            self._attr_state_class = spec.state_class
-        if spec.unit:
-            self._attr_native_unit_of_measurement = spec.unit
-        if spec.precision is not None:
-            self._attr_suggested_display_precision = spec.precision
-        if spec.category:
-            self._attr_entity_category = spec.category
+        # Enhanced availability tracking with grace period (WiFi optimized)
+        self._last_available_log = 0
+        self._last_known_available = True
+        self._unavailable_since = None  # Track when device became unavailable
+        
+        # State caching for brief WiFi outages (60 seconds)
+        self._cached_data = None
+        self._cached_data_time = 0
 
-    def _get_sensor_value(self) -> Any:
-        """Return cached or computed sensor value with stable error handling."""
+        if self.ENTITY_NAME is None:
+            raise NotImplementedError("ENTITY_NAME must be defined in child class")
+
+        self._attr_name = self.ENTITY_NAME
+        
+        # Generate unique ID with device suffix for multi-device support
+        device_suffix = get_device_suffix(device_number)
+        entity_key = self.ENTITY_NAME.lower().replace(' ', '_')
+        self._attr_unique_id = f"eveus{device_suffix}_{entity_key}"
+
+    @property
+    def available(self) -> bool:
+        """Return if entity is available with grace period support (WiFi optimized)."""
+        current_updater_available = self._updater.available
         current_time = time.time()
         
-        # Use cache for non-critical sensors (60 seconds for WiFi stability)
-        if (self._spec.sensor_type != SensorType.CALCULATED and 
-            self._cached_value is not None and 
-            current_time - self._cache_timestamp < self._cache_ttl):
-            return self._cached_value
+        # Device is available - reset unavailable tracking
+        if current_updater_available:
+            if self._unavailable_since is not None:
+                # Log restoration if we should
+                if self._should_log_availability():
+                    _LOGGER.debug("Entity %s connection restored", self.unique_id)
+                self._unavailable_since = None
             
+            self._last_known_available = True
+            return True
+        
+        # Device reports unavailable - check grace period
+        if self._unavailable_since is None:
+            # First time unavailable - start grace period
+            self._unavailable_since = current_time
+            return True  # Still show as available during grace period
+        
+        # Check if grace period has expired (60 seconds for WiFi stability)
+        unavailable_duration = current_time - self._unavailable_since
+        if unavailable_duration < AVAILABILITY_GRACE_PERIOD:
+            # Still in grace period
+            return True
+        else:
+            # Grace period expired - mark as unavailable
+            if self._last_known_available and self._should_log_availability():
+                _LOGGER.info("Entity %s unavailable after grace period (%.0fs)", 
+                           self.unique_id, unavailable_duration)
+            self._last_known_available = False
+            
+            # Clear cached data when grace period expires to ensure entity shows unavailable
+            self._cached_data = None
+            self._cached_data_time = 0
+            
+            return False
+
+    def _should_log_availability(self) -> bool:
+        """Rate limit availability logging."""
+        current_time = time.time()
+        if current_time - self._last_available_log > ERROR_LOG_RATE_LIMIT:
+            self._last_available_log = current_time
+            return True
+        return False
+
+    def get_cached_data_value(self, key: str, default: Any = None) -> Any:
+        """Get value from current data or cached data as fallback (WiFi optimized - 60 seconds)."""
+        # Try current data first
+        if self._updater.data and key in self._updater.data:
+            # Update cache with fresh data
+            self._cached_data = self._updater.data.copy()
+            self._cached_data_time = time.time()
+            return self._updater.data[key]
+        
+        # Fall back to cached data if recent enough (60 seconds for WiFi stability)
+        if (self._cached_data and key in self._cached_data and 
+            time.time() - self._cached_data_time < STATE_CACHE_TTL):
+            return self._cached_data[key]
+        
+        return default
+
+    @property
+    def device_info(self) -> dict[str, Any]:
+        """Return device information."""
         try:
-            value = self._spec.value_fn(self._updater, self.hass)
+            # Use cached data if main data unavailable
+            data_source = self._updater.data
+            if not data_source and self._cached_data:
+                data_source = self._cached_data
+                
+            return get_device_info(self._updater.host, data_source or {}, self._device_number)
+        except Exception as err:
+            # Gracefully handle device info errors when offline
+            if self._should_log_availability():
+                _LOGGER.debug("Error getting device info for %s: %s", self.unique_id, err)
+            # Return minimal device info when offline
+            device_suffix = "" if self._device_number == 1 else f" {self._device_number}"
+            return {
+                "identifiers": {("eveus", f"{self._updater.host}_{self._device_number}")},
+                "name": f"Eveus EV Charger{device_suffix}",
+                "manufacturer": "Eveus",
+                "model": "Eveus EV Charger",
+            }
+
+    async def async_added_to_hass(self) -> None:
+        """Handle entity which will be added with enhanced state restoration."""
+        await super().async_added_to_hass()
+        
+        # Start the updater first
+        try:
+            await self._updater.async_start_updates()
+        except Exception as err:
+            _LOGGER.debug("Could not start updates for %s: %s", self.unique_id, err)
+        
+        # Then handle state restoration with proper timing
+        try:
+            self._restore_in_progress = True
+            state = await self.async_get_last_state()
+            if state:
+                _LOGGER.debug("Restoring state for %s: %s", self.unique_id, state.state)
+                await self._async_restore_state(state)
+                self._state_restored = True
+            else:
+                _LOGGER.debug("No previous state found for %s", self.unique_id)
+        except Exception as err:
+            _LOGGER.debug("Could not restore state for %s: %s", self.unique_id, err)
+        finally:
+            self._restore_in_progress = False
+
+    async def _async_restore_state(self, state) -> None:
+        """Restore previous state - overridden by child classes."""
+        pass
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        try:
+            # Update cache when we get fresh data
+            if self._updater.data:
+                self._cached_data = self._updater.data.copy()
+                self._cached_data_time = time.time()
+                
+            self.async_write_ha_state()
+        except Exception as err:
+            # Gracefully handle state write errors (device might be offline)
+            _LOGGER.debug("Could not write state for %s: %s", self.unique_id, err)
+
+    async def _wait_for_device_ready(self, timeout: int = 30) -> bool:
+        """Wait for device to be ready for commands."""
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            if self._updater.available and (self._updater.data or self._cached_data):
+                # Give a bit more time for data to stabilize
+                await asyncio.sleep(2)
+                return True
+            await asyncio.sleep(1)
             
-            # Cache the value
-            self._cached_value = value
-            self._cache_timestamp = current_time
-            
+        return False
+
+
+class EveusSensorBase(BaseEveusEntity, SensorEntity):
+    """Base sensor entity for Eveus with stable handling."""
+    
+    def __init__(self, updater: "EveusUpdater", device_number: int = 1) -> None:
+        """Initialize the sensor."""
+        super().__init__(updater, device_number)
+        self._attr_native_value = None
+        self._last_valid_value = None
+        self._last_error_log = 0
+
+    @property
+    def native_value(self) -> Any:
+        """Return sensor value with graceful error handling."""
+        try:
+            value = self._get_sensor_value()
+            if value is not None:
+                self._last_valid_value = value
             return value
         except Exception as err:
-            if _should_log_error(f"sensor_{self._spec.key}"):
-                _LOGGER.debug("Error getting value for %s: %s", self.name, err)
-            return self._cached_value  # Return cached value on error
+            # Rate limit error logs
+            current_time = time.time()
+            if current_time - self._last_error_log > ERROR_LOG_RATE_LIMIT:
+                self._last_error_log = current_time
+                _LOGGER.debug("Error getting sensor value for %s: %s", self.unique_id, err)
+            return self._last_valid_value
 
-    @property 
-    def extra_state_attributes(self) -> Dict[str, Any]:
-        """Return cached or computed attributes with stable error handling."""
-        if self._spec.attributes_fn:
-            try:
-                return self._spec.attributes_fn(self._updater, self.hass)
-            except Exception as err:
-                if _should_log_error(f"attributes_{self._spec.key}"):
-                    _LOGGER.debug("Error getting attributes for %s: %s", self.name, err)
-        return {}
+    def _get_sensor_value(self) -> Any:
+        """Get sensor value - to be overridden by subclasses."""
+        return self._attr_native_value
 
-# Phase 1: Enhanced value functions with cached data fallback
-def _get_data_value(updater, key: str, converter=float, default=None):
-    """Phase 1: Helper to get value from current or cached data."""
-    # Try current data first
-    if updater.data and key in updater.data:
-        return get_safe_value(updater.data, key, converter, default)
-    
-    # Try cached data from base entity (60 seconds for WiFi stability)
-    entities = getattr(updater, '_entities', set())
-    for entity in entities:
-        if hasattr(entity, 'get_cached_data_value'):
-            cached_value = entity.get_cached_data_value(key, default)
-            if cached_value is not None:
-                try:
-                    return converter(cached_value)
-                except (ValueError, TypeError):
-                    pass
-                    
-    return default
 
-# Enhanced value functions with stable error handling and caching
-def get_voltage(updater, hass) -> float:
-    """Get voltage with stable error handling and cached fallback."""
-    try:
-        value = _get_data_value(updater, "voltMeas1", float)
-        return round(value, 0) if value is not None else None
-    except Exception as err:
-        if _should_log_error("get_voltage"):
-            _LOGGER.debug("Error getting voltage: %s", err)
-        return None
-
-def get_current(updater, hass) -> float:
-    """Get current with stable error handling and cached fallback."""
-    try:
-        value = _get_data_value(updater, "curMeas1", float)
-        return round(value, 1) if value is not None else None
-    except Exception as err:
-        if _should_log_error("get_current"):
-            _LOGGER.debug("Error getting current: %s", err)
-        return None
-
-def get_power(updater, hass) -> float: 
-    """Get power with stable error handling and cached fallback."""
-    try:
-        value = _get_data_value(updater, "powerMeas", float)
-        return round(value, 1) if value is not None else None
-    except Exception as err:
-        if _should_log_error("get_power"):
-            _LOGGER.debug("Error getting power: %s", err)
-        return None
-
-def get_current_set(updater, hass) -> float:
-    """Get current set with stable error handling and cached fallback."""
-    try:
-        value = _get_data_value(updater, "currentSet", float)
-        return round(value, 0) if value is not None else None
-    except Exception as err:
-        if _should_log_error("get_current_set"):
-            _LOGGER.debug("Error getting current set: %s", err)
-        return None
-
-def get_session_energy(updater, hass) -> float:
-    """Get session energy with stable error handling and cached fallback."""
-    try:
-        value = _get_data_value(updater, "sessionEnergy", float)
-        return round(value, 2) if value is not None else None
-    except Exception as err:
-        if _should_log_error("get_session_energy"):
-            _LOGGER.debug("Error getting session energy: %s", err)
-        return None
-
-def get_total_energy(updater, hass) -> float:
-    """Get total energy with stable error handling and cached fallback."""
-    try:
-        value = _get_data_value(updater, "totalEnergy", float)
-        return round(value, 2) if value is not None else None
-    except Exception as err:
-        if _should_log_error("get_total_energy"):
-            _LOGGER.debug("Error getting total energy: %s", err)
-        return None
-
-def get_counter_a_energy(updater, hass) -> float:
-    """Get counter A energy with stable error handling and cached fallback."""
-    try:
-        value = _get_data_value(updater, "IEM1", float)
-        return round(value, 2) if value is not None else None
-    except Exception as err:
-        if _should_log_error("get_counter_a_energy"):
-            _LOGGER.debug("Error getting counter A energy: %s", err)
-        return None
-
-def get_counter_a_cost(updater, hass) -> float:
-    """Get counter A cost with stable error handling and cached fallback."""
-    try:
-        value = _get_data_value(updater, "IEM1_money", float)
-        return round(value, 2) if value is not None else None
-    except Exception as err:
-        if _should_log_error("get_counter_a_cost"):
-            _LOGGER.debug("Error getting counter A cost: %s", err)
-        return None
-
-def get_counter_b_energy(updater, hass) -> float:
-    """Get counter B energy with stable error handling and cached fallback."""
-    try:
-        value = _get_data_value(updater, "IEM2", float)
-        return round(value, 2) if value is not None else None
-    except Exception as err:
-        if _should_log_error("get_counter_b_energy"):
-            _LOGGER.debug("Error getting counter B energy: %s", err)
-        return None
-
-def get_counter_b_cost(updater, hass) -> float:
-    """Get counter B cost with stable error handling and cached fallback."""
-    try:
-        value = _get_data_value(updater, "IEM2_money", float)
-        return round(value, 2) if value is not None else None
-    except Exception as err:
-        if _should_log_error("get_counter_b_cost"):
-            _LOGGER.debug("Error getting counter B cost: %s", err)
-        return None
-
-def get_box_temperature(updater, hass) -> float:
-    """Get box temperature with stable error handling and cached fallback."""
-    try:
-        value = _get_data_value(updater, "temperature1", float)
-        return round(value, 0) if value is not None else None
-    except Exception as err:
-        if _should_log_error("get_box_temperature"):
-            _LOGGER.debug("Error getting box temperature: %s", err)
-        return None
-
-def get_plug_temperature(updater, hass) -> float:
-    """Get plug temperature with stable error handling and cached fallback."""
-    try:
-        value = _get_data_value(updater, "temperature2", float)
-        return round(value, 0) if value is not None else None
-    except Exception as err:
-        if _should_log_error("get_plug_temperature"):
-            _LOGGER.debug("Error getting plug temperature: %s", err)
-        return None
-
-def get_battery_voltage(updater, hass) -> float:
-    """Get battery voltage with stable error handling and cached fallback."""
-    try:
-        value = _get_data_value(updater, "vBat", float)
-        return round(value, 2) if value is not None else None
-    except Exception as err:
-        if _should_log_error("get_battery_voltage"):
-            _LOGGER.debug("Error getting battery voltage: %s", err)
-        return None
-
-# State functions with stable error handling and cached fallback
-def get_charger_state(updater, hass) -> str:
-    """Get charger state with stable error handling and cached fallback."""
-    try:
-        state_value = _get_data_value(updater, "state", int)
-        return get_charging_state(state_value) if state_value is not None else None
-    except Exception as err:
-        if _should_log_error("get_charger_state"):
-            _LOGGER.debug("Error getting charger state: %s", err)
-        return None
-
-def get_charger_substate(updater, hass) -> str:
-    """Get charger substate with stable error handling and cached fallback."""
-    try:
-        state = _get_data_value(updater, "state", int)
-        substate = _get_data_value(updater, "subState", int)
-        
-        if None in (state, substate):
-            return None
-            
-        if state == 7:  # Error state
-            return get_error_state(substate)
-        return get_normal_substate(substate)
-    except Exception as err:
-        if _should_log_error("get_charger_substate"):
-            _LOGGER.debug("Error getting charger substate: %s", err)
-        return None
-
-def get_ground_status(updater, hass) -> str:
-    """Get ground status with stable error handling and cached fallback."""
-    try:
-        value = _get_data_value(updater, "ground", int)
-        return "Connected" if value == 1 else "Not Connected" if value == 0 else None
-    except Exception as err:
-        if _should_log_error("get_ground_status"):
-            _LOGGER.debug("Error getting ground status: %s", err)
-        return None
-
-# Time and session functions with stable error handling and cached fallback
-def get_session_time(updater, hass) -> str:
-    """Get formatted session time with stable error handling and cached fallback."""
-    try:
-        seconds = _get_data_value(updater, "sessionTime", int)
-        return format_duration(seconds) if seconds is not None else None
-    except Exception as err:
-        if _should_log_error("get_session_time"):
-            _LOGGER.debug("Error getting session time: %s", err)
-        return None
-
-def get_session_time_attrs(updater, hass) -> dict:
-    """Get session time attributes with stable error handling and cached fallback."""
-    try:
-        seconds = _get_data_value(updater, "sessionTime", int)
-        return {"duration_seconds": seconds} if seconds is not None else {}
-    except Exception as err:
-        if _should_log_error("get_session_time_attrs"):
-            _LOGGER.debug("Error getting session time attributes: %s", err)
-        return {}
-
-def get_system_time(updater, hass) -> str:
-    """Get system time with timezone correction, stable error handling and cached fallback."""
-    try:
-        timestamp = _get_data_value(updater, "systemTime", int)
-        if timestamp is None:
-            return None
-            
-        # Get HA timezone
-        ha_timezone = hass.config.time_zone
-        if not ha_timezone:
-            return None
-
-        # Convert with timezone handling
-        dt_utc = datetime.fromtimestamp(timestamp, tz=pytz.UTC)
-        local_tz = pytz.timezone(ha_timezone)
-        
-        # Apply DST correction - pass timestamp
-        offset = 7200  # Base offset
-        if is_dst(ha_timezone, timestamp):
-            offset += 3600
-        
-        corrected_timestamp = timestamp - offset
-        dt_corrected = datetime.fromtimestamp(corrected_timestamp, tz=pytz.UTC)
-        dt_local = dt_corrected.astimezone(local_tz)
-        
-        return dt_local.strftime("%H:%M")
-            
-    except Exception as err:
-        if _should_log_error("get_system_time"):
-            _LOGGER.debug("Error getting system time: %s", err)
-        return None
-
-# Rate and cost functions with stable error handling and cached fallback
-def get_primary_rate_cost(updater, hass) -> float:
-    """Get primary rate cost with stable error handling and cached fallback."""
-    try:
-        value = _get_data_value(updater, "tarif", float)
-        return round(value / 100, 2) if value is not None else None
-    except Exception as err:
-        if _should_log_error("get_primary_rate_cost"):
-            _LOGGER.debug("Error getting primary rate cost: %s", err)
-        return None
-
-def get_active_rate_cost(updater, hass) -> float:
-    """Get active rate cost with stable error handling and cached fallback."""
-    try:
-        active_rate = _get_data_value(updater, "activeTarif", int)
-        if active_rate is None:
-            return None
-
-        # Use mapping for efficiency
-        rate_keys = {0: "tarif", 1: "tarifAValue", 2: "tarifBValue"}
-        key = rate_keys.get(active_rate)
-        if not key:
-            return None
-            
-        value = _get_data_value(updater, key, float)
-        return round(value / 100, 2) if value is not None else None
-    except Exception as err:
-        if _should_log_error("get_active_rate_cost"):
-            _LOGGER.debug("Error getting active rate cost: %s", err)
-        return None
-
-def get_active_rate_attrs(updater, hass) -> dict:
-    """Get active rate attributes with stable error handling and cached fallback."""
-    try:
-        active_rate = _get_data_value(updater, "activeTarif", int)
-        return {"rate_name": RATE_STATES.get(active_rate, "Unknown")} if active_rate is not None else {}
-    except Exception as err:
-        if _should_log_error("get_active_rate_attrs"):
-            _LOGGER.debug("Error getting active rate attributes: %s", err)
-        return {}
-
-def get_rate2_cost(updater, hass) -> float:
-    """Get rate 2 cost with stable error handling and cached fallback."""
-    try:
-        value = _get_data_value(updater, "tarifAValue", float)
-        return round(value / 100, 2) if value is not None else None
-    except Exception as err:
-        if _should_log_error("get_rate2_cost"):
-            _LOGGER.debug("Error getting rate 2 cost: %s", err)
-        return None
-
-def get_rate3_cost(updater, hass) -> float:
-    """Get rate 3 cost with stable error handling and cached fallback."""
-    try:
-        value = _get_data_value(updater, "tarifBValue", float)
-        return round(value / 100, 2) if value is not None else None
-    except Exception as err:
-        if _should_log_error("get_rate3_cost"):
-            _LOGGER.debug("Error getting rate 3 cost: %s", err)
-        return None
-
-def get_rate_status(rate_key: str):
-    """Factory function for rate status sensors with stable error handling and cached fallback."""
-    def _get_rate_status(updater, hass) -> str:
-        try:
-            enabled = _get_data_value(updater, rate_key, int)
-            return "Enabled" if enabled == 1 else "Disabled" if enabled == 0 else None
-        except Exception as err:
-            if _should_log_error(f"get_rate_status_{rate_key}"):
-                _LOGGER.debug("Error getting rate status for %s: %s", rate_key, err)
-            return None
-    return _get_rate_status
-
-# Network quality functions with stable error handling
-def get_connection_quality(updater, hass) -> float:
-    """Get connection quality as numeric value with stable error handling."""
-    try:
-        if hasattr(updater, '_network') and hasattr(updater._network, 'connection_quality'):
-            metrics = updater._network.connection_quality
-            return round(max(0, min(100, metrics.get('success_rate', 0))))
-        return 100  # Default to 100% if no metrics available
-    except Exception as err:
-        if _should_log_error("get_connection_quality"):
-            _LOGGER.debug("Error getting connection quality: %s", err)
-        return 0
-
-def get_connection_attrs(updater, hass) -> dict:
-    """Get optimized connection attributes with stable error handling."""
-    try:
-        if not hasattr(updater, '_network'):
-            return {"status": "Unknown"}
-            
-        metrics = updater._network.connection_quality
-        success_rate = metrics.get('success_rate', 100)
-        
-        # Simplified attributes for better performance
-        return {
-            "connection_quality": f"{round(success_rate)}%",
-            "latency_avg": f"{max(0, metrics.get('latency_avg', 0)):.2f}s",
-            "recent_errors": metrics.get('recent_errors', 0),
-            "status": "Excellent" if success_rate > 95 else 
-                    "Good" if success_rate > 80 else
-                    "Fair" if success_rate > 60 else
-                    "Poor" if success_rate > 30 else "Critical"
-        }
-        
-    except Exception as err:
-        if _should_log_error("get_connection_attrs"):
-            _LOGGER.debug("Error getting connection attributes: %s", err)
-        return {"status": "Error"}
-
-# Sensor specification factory - creates all sensors efficiently
-def create_sensor_specifications() -> List[SensorSpec]:
-    """Create all sensor specifications efficiently using factory pattern."""
-    
-    # Measurement sensors - created programmatically
-    measurements = [
-        ("Voltage", get_voltage, "mdi:flash", SensorDeviceClass.VOLTAGE, UnitOfElectricPotential.VOLT, 0),
-        ("Current", get_current, "mdi:current-ac", SensorDeviceClass.CURRENT, UnitOfElectricCurrent.AMPERE, 1), 
-        ("Power", get_power, "mdi:flash", SensorDeviceClass.POWER, UnitOfPower.WATT, 1),
-        ("Current Set", get_current_set, "mdi:current-ac", SensorDeviceClass.CURRENT, UnitOfElectricCurrent.AMPERE, 0),
-    ]
-    
-    measurement_specs = [
-        SensorSpec(
-            key=name.lower().replace(" ", "_"),
-            name=name,
-            value_fn=fn,
-            sensor_type=SensorType.MEASUREMENT,
-            icon=icon,
-            device_class=device_class,
-            state_class=SensorStateClass.MEASUREMENT,
-            unit=unit,
-            precision=precision
-        ) for name, fn, icon, device_class, unit, precision in measurements
-    ]
-    
-    # Energy sensors - created programmatically
-    energy_sensors = [
-        ("Session Energy", get_session_energy, "mdi:transmission-tower-export", SensorStateClass.TOTAL),
-        ("Total Energy", get_total_energy, "mdi:transmission-tower", SensorStateClass.TOTAL_INCREASING),
-        ("Counter A Energy", get_counter_a_energy, "mdi:counter", SensorStateClass.TOTAL_INCREASING),
-        ("Counter B Energy", get_counter_b_energy, "mdi:counter", SensorStateClass.TOTAL_INCREASING),
-    ]
-    
-    energy_specs = [
-        SensorSpec(
-            key=name.lower().replace(" ", "_"),
-            name=name,
-            value_fn=fn,
-            sensor_type=SensorType.ENERGY,
-            icon=icon,
-            device_class=SensorDeviceClass.ENERGY,
-            state_class=state_class,
-            unit=UnitOfEnergy.KILO_WATT_HOUR,
-            precision=2
-        ) for name, fn, icon, state_class in energy_sensors
-    ]
-    
-    # Diagnostic sensors - create individually for clarity
-    diagnostic_specs = [
-        # Simple diagnostic sensors
-        SensorSpec(
-            key="state",
-            name="State",
-            value_fn=get_charger_state,
-            sensor_type=SensorType.DIAGNOSTIC,
-            icon="mdi:state-machine",
-            category=EntityCategory.DIAGNOSTIC
-        ),
-        SensorSpec(
-            key="substate",
-            name="Substate",
-            value_fn=get_charger_substate,
-            sensor_type=SensorType.DIAGNOSTIC,
-            icon="mdi:information-variant",
-            category=EntityCategory.DIAGNOSTIC
-        ),
-        SensorSpec(
-            key="ground",
-            name="Ground",
-            value_fn=get_ground_status,
-            sensor_type=SensorType.DIAGNOSTIC,
-            icon="mdi:electric-switch",
-            category=EntityCategory.DIAGNOSTIC
-        ),
-        SensorSpec(
-            key="system_time",
-            name="System Time",
-            value_fn=get_system_time,
-            sensor_type=SensorType.DIAGNOSTIC,
-            icon="mdi:clock-outline",
-            category=EntityCategory.DIAGNOSTIC
-        ),
-        # Temperature sensors with device class
-        SensorSpec(
-            key="box_temperature",
-            name="Box Temperature",
-            value_fn=get_box_temperature,
-            sensor_type=SensorType.DIAGNOSTIC,
-            icon="mdi:thermometer",
-            device_class=SensorDeviceClass.TEMPERATURE,
-            state_class=SensorStateClass.MEASUREMENT,
-            unit=UnitOfTemperature.CELSIUS,
-            precision=0,
-            category=EntityCategory.DIAGNOSTIC
-        ),
-        SensorSpec(
-            key="plug_temperature",
-            name="Plug Temperature",
-            value_fn=get_plug_temperature,
-            sensor_type=SensorType.DIAGNOSTIC,
-            icon="mdi:thermometer-high",
-            device_class=SensorDeviceClass.TEMPERATURE,
-            state_class=SensorStateClass.MEASUREMENT,
-            unit=UnitOfTemperature.CELSIUS,
-            precision=0,
-            category=EntityCategory.DIAGNOSTIC
-        ),
-        SensorSpec(
-            key="battery_voltage",
-            name="Battery Voltage",
-            value_fn=get_battery_voltage,
-            sensor_type=SensorType.DIAGNOSTIC,
-            icon="mdi:battery",
-            device_class=SensorDeviceClass.VOLTAGE,
-            state_class=SensorStateClass.MEASUREMENT,
-            unit="V",
-            precision=2,
-            category=EntityCategory.DIAGNOSTIC
-        ),
-    ]
-    
-    # Special sensors with individual specifications
-    special_specs = [
-        SensorSpec(
-            key="session_time",
-            name="Session Time", 
-            value_fn=get_session_time,
-            sensor_type=SensorType.STATE,
-            icon="mdi:timer",
-            attributes_fn=get_session_time_attrs
-        ),
-        SensorSpec(
-            key="counter_a_cost",
-            name="Counter A Cost",
-            value_fn=get_counter_a_cost,
-            sensor_type=SensorType.ENERGY,
-            icon="mdi:currency-uah",
-            state_class=SensorStateClass.TOTAL_INCREASING,
-            unit="₴",
-            precision=2
-        ),
-        SensorSpec(
-            key="counter_b_cost", 
-            name="Counter B Cost",
-            value_fn=get_counter_b_cost,
-            sensor_type=SensorType.ENERGY,
-            icon="mdi:currency-uah",
-            state_class=SensorStateClass.TOTAL_INCREASING,
-            unit="₴",
-            precision=2
-        ),
-        SensorSpec(
-            key="primary_rate_cost",
-            name="Primary Rate Cost",
-            value_fn=get_primary_rate_cost,
-            sensor_type=SensorType.STATE,
-            icon="mdi:currency-uah",
-            state_class=SensorStateClass.MEASUREMENT,
-            unit="₴/kWh",
-            precision=2
-        ),
-        SensorSpec(
-            key="active_rate_cost",
-            name="Active Rate Cost", 
-            value_fn=get_active_rate_cost,
-            sensor_type=SensorType.STATE,
-            icon="mdi:currency-uah",
-            state_class=SensorStateClass.MEASUREMENT,
-            unit="₴/kWh",
-            precision=2,
-            attributes_fn=get_active_rate_attrs
-        ),
-        SensorSpec(
-            key="rate_2_cost",
-            name="Rate 2 Cost",
-            value_fn=get_rate2_cost,
-            sensor_type=SensorType.STATE,
-            icon="mdi:currency-uah",
-            state_class=SensorStateClass.MEASUREMENT,
-            unit="₴/kWh", 
-            precision=2
-        ),
-        SensorSpec(
-            key="rate_3_cost",
-            name="Rate 3 Cost",
-            value_fn=get_rate3_cost,
-            sensor_type=SensorType.STATE,
-            icon="mdi:currency-uah",
-            state_class=SensorStateClass.MEASUREMENT,
-            unit="₴/kWh",
-            precision=2
-        ),
-        SensorSpec(
-            key="rate_2_status",
-            name="Rate 2 Status",
-            value_fn=get_rate_status("tarifAEnable"),
-            sensor_type=SensorType.STATE,
-            icon="mdi:clock-check"
-        ),
-        SensorSpec(
-            key="rate_3_status", 
-            name="Rate 3 Status",
-            value_fn=get_rate_status("tarifBEnable"),
-            sensor_type=SensorType.STATE,
-            icon="mdi:clock-check"
-        ),
-        SensorSpec(
-            key="connection_quality",
-            name="Connection Quality",
-            value_fn=get_connection_quality,
-            sensor_type=SensorType.DIAGNOSTIC,
-            icon="mdi:connection",
-            state_class=SensorStateClass.MEASUREMENT,
-            unit="%",
-            precision=0,
-            category=EntityCategory.DIAGNOSTIC,
-            attributes_fn=get_connection_attrs
-        ),
-    ]
-    
-    return measurement_specs + energy_specs + diagnostic_specs + special_specs
-
-def get_sensor_specifications() -> List[SensorSpec]:
-    """Get all sensor specifications (cached for performance)."""
-    return create_sensor_specifications()
+class EveusDiagnosticSensor(EveusSensorBase):
+    """Base diagnostic sensor with stable handling."""
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:information"
