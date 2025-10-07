@@ -19,13 +19,13 @@ from homeassistant.helpers.entity import EntityCategory
 
 from .common import EveusSensorBase
 from .utils import get_safe_value, calculate_remaining_time, format_duration, get_device_suffix
-from .const import ERROR_LOG_RATE_LIMIT
+from .const import ERROR_LOG_RATE_LIMIT, STATE_CACHE_TTL
 
 _LOGGER = logging.getLogger(__name__)
 
 @dataclass
 class InputEntityCache:
-    """Cache for input entity values with timestamps."""
+    """Cache for input entity values with timestamps (WiFi optimized - 60 seconds)."""
     initial_soc: Optional[float] = None
     battery_capacity: Optional[float] = None
     soc_correction: Optional[float] = None
@@ -33,8 +33,8 @@ class InputEntityCache:
     timestamp: float = 0
     helpers_available: bool = False
     
-    def is_valid(self, ttl: float = 30) -> bool:
-        """Check if cache is still valid."""
+    def is_valid(self, ttl: float = STATE_CACHE_TTL) -> bool:
+        """Check if cache is still valid (uses STATE_CACHE_TTL = 60 seconds)."""
         return time.time() - self.timestamp < ttl
     
     def update(self, **kwargs):
@@ -46,9 +46,10 @@ class InputEntityCache:
 
 
 class CachedSOCCalculator:
-    """High-performance SOC calculator with optional helper support."""
+    """High-performance SOC calculator with optional helper support (WiFi optimized)."""
     
-    def __init__(self, cache_ttl: int = 30):
+    def __init__(self, cache_ttl: int = STATE_CACHE_TTL):
+        """Initialize with WiFi-optimized cache TTL (60 seconds)."""
         self.cache_ttl = cache_ttl
         self._input_cache = InputEntityCache()
         self._soc_kwh_cache: Optional[float] = None
@@ -156,7 +157,7 @@ class CachedSOCCalculator:
         return self._input_cache.helpers_available
 
 
-# Global calculator instance for reuse across sensors
+# Global calculator instance for reuse across sensors (WiFi optimized)
 _soc_calculator = CachedSOCCalculator()
 
 
@@ -510,7 +511,7 @@ class TimeToTargetSocSensor(EveusSensorBase):
 
 
 class InputEntitiesStatusSensor(EveusSensorBase):
-    """Sensor that monitors the status of optional input entities."""
+    """Sensor that monitors the status of optional input entities (WiFi optimized)."""
     
     ENTITY_NAME = "Input Entities Status"
     _attr_icon = "mdi:clipboard-check"
@@ -551,13 +552,14 @@ class InputEntitiesStatusSensor(EveusSensorBase):
         self._missing_entities: Set[str] = set()
         self._invalid_entities: Set[str] = set()
         self._last_check_time = 0
-        self._check_interval = 30  # Check every 30 seconds
+        # Use STATE_CACHE_TTL (60 seconds) for WiFi-optimized checking
+        self._check_interval = STATE_CACHE_TTL
         
     def _get_sensor_value(self) -> str:
         """Get input status with caching."""
         current_time = time.time()
         
-        # Rate limit status checks
+        # Rate limit status checks (60 seconds for WiFi stability)
         if current_time - self._last_check_time > self._check_interval:
             self._check_inputs()
             self._last_check_time = current_time
