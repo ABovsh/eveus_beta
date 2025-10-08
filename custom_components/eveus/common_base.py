@@ -87,15 +87,13 @@ class BaseEveusEntity(RestoreEntity, Entity):
             # Still in grace period
             return True
         else:
-            # CRITICAL FIX: Grace period expired - mark as unavailable
-            # Clear cached data to ensure entity properly shows unavailable
+            # Grace period expired - mark as unavailable
             if self._last_known_available and self._should_log_availability():
                 _LOGGER.info("Entity %s unavailable after grace period (%.0fs)", 
                            self.unique_id, unavailable_duration)
             self._last_known_available = False
             
-            # CRITICAL FIX: Clear cached data when grace period expires
-            # This ensures entity shows unavailable state properly
+            # Clear cached data when grace period expires to ensure entity shows unavailable
             self._cached_data = None
             self._cached_data_time = 0
             
@@ -110,15 +108,7 @@ class BaseEveusEntity(RestoreEntity, Entity):
         return False
 
     def get_cached_data_value(self, key: str, default: Any = None) -> Any:
-        """Get value from current data or cached data as fallback (WiFi optimized - 60 seconds).
-        
-        CRITICAL FIX: Only return cached data if still within grace period.
-        """
-        # CRITICAL FIX: Don't return cached data if device is unavailable
-        # This ensures sensors show as "Unavailable" not stale cached values
-        if not self.available:
-            return default
-        
+        """Get value from current data or cached data as fallback (WiFi optimized - 60 seconds)."""
         # Try current data first
         if self._updater.data and key in self._updater.data:
             # Update cache with fresh data
@@ -127,7 +117,6 @@ class BaseEveusEntity(RestoreEntity, Entity):
             return self._updater.data[key]
         
         # Fall back to cached data if recent enough (60 seconds for WiFi stability)
-        # AND device is still within grace period (checked by self.available above)
         if (self._cached_data and key in self._cached_data and 
             time.time() - self._cached_data_time < STATE_CACHE_TTL):
             return self._cached_data[key]
@@ -190,11 +179,11 @@ class BaseEveusEntity(RestoreEntity, Entity):
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
         try:
-            # CRITICAL FIX: Only update cache when we get fresh data AND device is available
-            if self._updater.available and self._updater.data:
+            # Update cache when we get fresh data
+            if self._updater.data:
                 self._cached_data = self._updater.data.copy()
                 self._cached_data_time = time.time()
-            
+                
             self.async_write_ha_state()
         except Exception as err:
             # Gracefully handle state write errors (device might be offline)
@@ -215,7 +204,10 @@ class BaseEveusEntity(RestoreEntity, Entity):
 
 
 class EveusSensorBase(BaseEveusEntity, SensorEntity):
-    """Base sensor entity for Eveus with stable handling."""
+    """Base sensor entity for Eveus with SIMPLE offline handling.
+    
+    SIMPLE FIX: Sensors have NO grace period. They immediately show as unavailable when offline.
+    """
     
     def __init__(self, updater: "EveusUpdater", device_number: int = 1) -> None:
         """Initialize the sensor."""
@@ -225,14 +217,19 @@ class EveusSensorBase(BaseEveusEntity, SensorEntity):
         self._last_error_log = 0
 
     @property
-    def native_value(self) -> Any:
-        """Return sensor value - None when unavailable to show 'Unavailable' not 'Unknown'.
+    def available(self) -> bool:
+        """SIMPLE FIX: Sensors are immediately unavailable when updater is offline.
         
-        CRITICAL FIX: Always check availability first and return None when unavailable.
-        This ensures HA shows "Unavailable" instead of "Unknown" or stale values.
+        NO grace period for sensors - they should immediately reflect offline state.
+        Grace period is only for control entities (switches, numbers) for safety.
         """
-        # CRITICAL FIX: Check availability first
-        # When unavailable, return None so HA shows "Unavailable" not "Unknown"
+        # SIMPLE: Return updater availability directly - no grace period for sensors
+        return self._updater.available
+
+    @property
+    def native_value(self) -> Any:
+        """Return sensor value - None when unavailable."""
+        # When unavailable, return None so HA shows "Unavailable"
         if not self.available:
             return None
             
@@ -247,9 +244,8 @@ class EveusSensorBase(BaseEveusEntity, SensorEntity):
             if current_time - self._last_error_log > ERROR_LOG_RATE_LIMIT:
                 self._last_error_log = current_time
                 _LOGGER.debug("Error getting sensor value for %s: %s", self.unique_id, err)
-            # CRITICAL FIX: Only return cached value if still available (during grace period)
-            # If unavailable, return None so HA shows "Unavailable"
-            return self._last_valid_value if self.available else None
+            # Return None when there's an error
+            return None
 
     def _get_sensor_value(self) -> Any:
         """Get sensor value - to be overridden by subclasses."""
