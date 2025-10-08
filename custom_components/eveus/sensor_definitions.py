@@ -31,7 +31,7 @@ from .const import (
     get_error_state,
     get_normal_substate,
     RATE_STATES,
-    ERROR_LOG_RATE_LIMIT,  # Phase 1
+    ERROR_LOG_RATE_LIMIT,
 )
 from .utils import (
     get_safe_value,
@@ -110,10 +110,23 @@ class OptimizedEveusSensor(EveusSensorBase):
             self._attr_entity_category = spec.category
 
     def _get_sensor_value(self) -> Any:
-        """Return cached or computed sensor value with stable error handling."""
+        """Return cached or computed sensor value with proper offline handling.
+        
+        CRITICAL FIX: Clear cache and return None when updater is unavailable.
+        This ensures sensors show as 'Unavailable' not 'Unknown' when offline.
+        """
+        # CRITICAL FIX: Check if updater is available first
+        # If updater is unavailable, clear cache and return None
+        # This makes the sensor properly show as "Unavailable" when device is offline
+        if not self._updater.available:
+            # Clear cache when device is offline to prevent stale data
+            self._cached_value = None
+            self._cache_timestamp = 0
+            return None
+        
         current_time = time.time()
         
-        # Use cache for non-critical sensors
+        # Use cache for non-critical sensors only when device is available
         if (self._spec.sensor_type != SensorType.CALCULATED and 
             self._cached_value is not None and 
             current_time - self._cache_timestamp < self._cache_ttl):
@@ -122,21 +135,27 @@ class OptimizedEveusSensor(EveusSensorBase):
         try:
             value = self._spec.value_fn(self._updater, self.hass)
             
-            # Cache the value
-            self._cached_value = value
-            self._cache_timestamp = current_time
+            # Only cache value if updater is available
+            if self._updater.available and value is not None:
+                self._cached_value = value
+                self._cache_timestamp = current_time
             
             return value
         except Exception as err:
             if _should_log_error(f"sensor_{self._spec.key}"):
                 _LOGGER.debug("Error getting value for %s: %s", self.name, err)
-            return self._cached_value  # Return cached value on error
+            # Don't return cached value when there's an error - return None
+            # This helps sensors show as "Unavailable" when device is offline
+            return None
 
     @property 
     def extra_state_attributes(self) -> Dict[str, Any]:
         """Return cached or computed attributes with stable error handling."""
         if self._spec.attributes_fn:
             try:
+                # Don't return attributes when unavailable
+                if not self._updater.available:
+                    return {}
                 return self._spec.attributes_fn(self._updater, self.hass)
             except Exception as err:
                 if _should_log_error(f"attributes_{self._spec.key}"):
@@ -145,12 +164,17 @@ class OptimizedEveusSensor(EveusSensorBase):
 
 # Phase 1: Enhanced value functions with cached data fallback
 def _get_data_value(updater, key: str, converter=float, default=None):
-    """Phase 1: Helper to get value from current or cached data."""
+    """Phase 1: Helper to get value from current or cached data with offline awareness."""
+    # CRITICAL FIX: When updater is unavailable, don't try to get values
+    # This helps sensors show as "Unavailable" instead of "Unknown"
+    if not updater.available:
+        return None
+    
     # Try current data first
     if updater.data and key in updater.data:
         return get_safe_value(updater.data, key, converter, default)
     
-    # Try cached data from base entity
+    # Try cached data from base entity only if updater was recently available
     entities = getattr(updater, '_entities', set())
     for entity in entities:
         if hasattr(entity, 'get_cached_data_value'):
@@ -346,6 +370,8 @@ def get_session_time(updater, hass) -> str:
 def get_session_time_attrs(updater, hass) -> dict:
     """Get session time attributes with stable error handling and cached fallback."""
     try:
+        if not updater.available:
+            return {}
         seconds = _get_data_value(updater, "sessionTime", int)
         return {"duration_seconds": seconds} if seconds is not None else {}
     except Exception as err:
@@ -419,6 +445,8 @@ def get_active_rate_cost(updater, hass) -> float:
 def get_active_rate_attrs(updater, hass) -> dict:
     """Get active rate attributes with stable error handling and cached fallback."""
     try:
+        if not updater.available:
+            return {}
         active_rate = _get_data_value(updater, "activeTarif", int)
         return {"rate_name": RATE_STATES.get(active_rate, "Unknown")} if active_rate is not None else {}
     except Exception as err:
@@ -474,6 +502,9 @@ def get_connection_quality(updater, hass) -> float:
 def get_connection_attrs(updater, hass) -> dict:
     """Get optimized connection attributes with stable error handling."""
     try:
+        if not updater.available:
+            return {}
+            
         if not hasattr(updater, '_network'):
             return {"status": "Unknown"}
             
