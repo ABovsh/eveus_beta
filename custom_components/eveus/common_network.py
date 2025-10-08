@@ -365,23 +365,29 @@ class EveusUpdater:
             self._handle_update_error(err, "UnknownError", start_time)
 
     def _handle_update_error(self, error: Exception, error_type: str, start_time: float) -> None:
-        """Handle update errors with silent offline detection."""
+        """Handle update errors with proper availability marking - CRITICAL FIX."""
         response_time = time.time() - start_time
         self._network.update_metrics(response_time, False, error_type)
         
-        # Try to use cached state during temporary issues
+        # CRITICAL FIX: Always mark as unavailable when there's an error
+        # This ensures entities start their grace period timers correctly
+        was_available = self._available
+        self._available = False
+        
+        # Try to use cached state during temporary issues (but still mark unavailable)
         cached_state = self._network.get_cached_state()
         if cached_state and cached_state != self._data:
-            # Only log cache usage if not in silent mode
-            if not self._network.is_silent_mode():
-                _LOGGER.debug("Using cached state during %s for %s", error_type, self.host)
+            # Use cached data temporarily, but updater is still unavailable
+            if not self._network.is_silent_mode() and was_available:
+                _LOGGER.debug("Using cached state during %s for %s (marked unavailable)", error_type, self.host)
             self._previous_data = self._data.copy()
             self._data = cached_state
             self.notify_entities()
         else:
-            # Mark as unavailable only if no cached state
-            if self._available:
-                self._available = False
+            # No cached state - clear stale data and notify
+            if was_available:
+                # CRITICAL: Clear stale data when no cache available
+                self._data = {}
                 
                 # Announce offline status only once, then go silent
                 if self._network._metrics.is_likely_offline:
