@@ -215,7 +215,12 @@ class EveusSensorBase(BaseEveusEntity, SensorEntity):
 
     @property
     def native_value(self) -> Any:
-        """Return sensor value with graceful error handling."""
+        """Return sensor value - None when unavailable to show 'Unavailable' not 'Unknown'."""
+        # CRITICAL FIX: Check availability first
+        # When unavailable, return None so HA shows "Unavailable" not "Unknown"
+        if not self.available:
+            return None
+            
         try:
             value = self._get_sensor_value()
             if value is not None:
@@ -227,7 +232,8 @@ class EveusSensorBase(BaseEveusEntity, SensorEntity):
             if current_time - self._last_error_log > ERROR_LOG_RATE_LIMIT:
                 self._last_error_log = current_time
                 _LOGGER.debug("Error getting sensor value for %s: %s", self.unique_id, err)
-            return self._last_valid_value
+            # Only return cached value if still available (during grace period)
+            return self._last_valid_value if self.available else None
 
     def _get_sensor_value(self) -> Any:
         """Get sensor value - to be overridden by subclasses."""
