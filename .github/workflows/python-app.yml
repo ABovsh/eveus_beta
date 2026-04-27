@@ -23,13 +23,9 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # Install pytest and async support for your async test functions
-        pip install pytest pytest-asyncio
-        
-        # If your integration has additional external requirements, install them here
-        # pip install -r requirements.txt
+        # homeassistant is added below:
+        pip install pytest pytest-asyncio homeassistant
 
     - name: Run pytest
       run: |
-        # Execute all tests within the tests/ directory
         pytest tests/
