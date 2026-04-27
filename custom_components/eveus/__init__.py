@@ -1,21 +1,18 @@
 """The Eveus integration."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
-import asyncio
-from typing import Any
 
-import aiohttp
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform, CONF_HOST, CONF_USERNAME, CONF_PASSWORD
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady, ConfigEntryAuthFailed
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.typing import ConfigType
 
 from .const import DOMAIN, MODEL_MAX_CURRENT, CONF_MODEL
-from .common import EveusUpdater, EveusConnectionError
+from .common import EveusUpdater
 from .utils import get_next_device_number
 
 _LOGGER = logging.getLogger(__name__)
@@ -28,53 +25,50 @@ PLATFORMS: list[Platform] = [
 
 CONFIG_SCHEMA = vol.Schema({DOMAIN: vol.Schema({})}, extra=vol.ALLOW_EXTRA)
 
-async def async_validate_connection(
-    hass: HomeAssistant, 
-    host: str, 
-    username: str, 
-    password: str
-) -> None:
-    """Validate connection to Eveus device."""
-    session = async_get_clientsession(hass)
-    
-    try:
-        async with session.post(
-            f"http://{host}/main",
-            auth=aiohttp.BasicAuth(username, password),
-            timeout=15
-        ) as response:
-            response.raise_for_status()
-            if response.status == 401:
-                raise ConfigEntryAuthFailed("Invalid authentication")
-            await response.json()  # Validate response format
-            
-    except aiohttp.ClientResponseError as err:
-        if err.status == 401:
-            raise ConfigEntryAuthFailed("Invalid authentication")
-        raise ConfigEntryNotReady(f"Connection error: {err}")
-    except aiohttp.ClientError as err:
-        raise ConfigEntryNotReady(f"Connection error: {err}")
-    except asyncio.TimeoutError:
-        raise ConfigEntryNotReady("Connection timeout")
-    except ValueError as err:
-        raise ConfigEntryNotReady(f"Invalid response format: {err}")
+
+@dataclass
+class EveusRuntimeData:
+    """Runtime data for an Eveus config entry."""
+
+    updater: EveusUpdater
+    device_number: int
+    title: str
+
+
+EveusConfigEntry = ConfigEntry[EveusRuntimeData]
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Eveus component."""
-    hass.data.setdefault(DOMAIN, {})
     return True
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate old config entry data."""
+    new_data = dict(entry.data)
+    host = new_data.get(CONF_HOST)
+    if isinstance(host, str) and host.startswith(("http://", "https://")):
+        from .config_flow import validate_host
+
+        try:
+            new_data[CONF_HOST] = validate_host(host)
+        except vol.Invalid:
+            _LOGGER.warning("Could not normalize stored Eveus host %s", host)
+
+    if new_data != entry.data:
+        hass.config_entries.async_update_entry(entry, data=new_data)
+
+    return True
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: EveusConfigEntry) -> bool:
     """Set up Eveus from a config entry."""
     try:
-        # Extract and validate configuration
         host = entry.data.get(CONF_HOST)
         username = entry.data.get(CONF_USERNAME)
         password = entry.data.get(CONF_PASSWORD)
         model = entry.data.get(CONF_MODEL)
-        
+
         if not host:
             raise ConfigEntryNotReady("No host specified")
         if not username:
@@ -84,103 +78,59 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if model not in MODEL_MAX_CURRENT:
             raise ConfigEntryNotReady("Invalid model specified")
 
-        # Validate connection
-        await async_validate_connection(hass, host, username, password)
-        
-        # Determine device number for multi-device support
         device_number = entry.data.get("device_number")
         if device_number is None:
-            # This is a new device, assign next available number
             device_number = get_next_device_number(hass)
-            
-            # Update config entry with device number for future use
-            new_data = entry.data.copy()
+            new_data = dict(entry.data)
             new_data["device_number"] = device_number
             hass.config_entries.async_update_entry(entry, data=new_data)
-            
             _LOGGER.info("Assigned device number %d to %s", device_number, host)
-        
-        # Initialize data structure
-        hass.data.setdefault(DOMAIN, {})
-        hass.data[DOMAIN][entry.entry_id] = {
-            "title": entry.title,
-            "host": host,
-            "username": username,
-            "password": password,
-            "device_number": device_number,
-            "entities": {},
-        }
-        
-        # Create updater instance
-        try:
-            updater = EveusUpdater(
-                host=host,
-                username=username,
-                password=password,
-                hass=hass,
-            )
-            hass.data[DOMAIN][entry.entry_id]["updater"] = updater
-        except Exception as err:
-            raise ConfigEntryNotReady(f"Failed to initialize updater: {err}")
 
-        # Set up platforms
+        updater = EveusUpdater(
+            host=host,
+            username=username,
+            password=password,
+            hass=hass,
+            config_entry=entry,
+        )
+        entry.runtime_data = EveusRuntimeData(
+            updater=updater,
+            device_number=device_number,
+            title=entry.title,
+        )
+
+        await updater.async_config_entry_first_refresh()
+
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-        
-        # Register update listener
         entry.async_on_unload(entry.add_update_listener(update_listener))
-        
+
         return True
 
-    except ConfigEntryAuthFailed as auth_err:
-        _LOGGER.error("Authentication failed: %s", str(auth_err))
+    except ConfigEntryAuthFailed:
         raise
-    except ConfigEntryNotReady as ready_err:
-        _LOGGER.error("Integration not ready: %s", str(ready_err))
+    except ConfigEntryNotReady:
         raise
-    except EveusConnectionError as conn_err:
-        _LOGGER.error("Connection error: %s", str(conn_err))
-        raise ConfigEntryNotReady(f"Connection error: {str(conn_err)}")
     except Exception as ex:
         _LOGGER.error(
             "Unexpected error setting up Eveus integration: %s",
-            str(ex),
-            exc_info=True
+            ex, exc_info=True,
         )
-        raise ConfigEntryNotReady(f"Unexpected error: {str(ex)}")
+        raise ConfigEntryNotReady(f"Unexpected error: {ex}")
 
 
-async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+async def update_listener(hass: HomeAssistant, entry: EveusConfigEntry) -> None:
     """Handle options update."""
     await hass.config_entries.async_reload(entry.entry_id)
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: EveusConfigEntry) -> bool:
     """Unload a config entry."""
     try:
-        # Get updater instance
-        data = hass.data[DOMAIN].get(entry.entry_id, {})
-        updater = data.get("updater")
-        
-        # Unload platforms
-        unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-        
-        # Shutdown updater if exists
-        if updater:
-            try:
-                await updater.async_shutdown()
-            except Exception as err:
-                _LOGGER.error("Error shutting down updater: %s", err)
-        
-        # Clean up data structure
-        if unload_ok and entry.entry_id in hass.data[DOMAIN]:
-            hass.data[DOMAIN].pop(entry.entry_id)
-        
-        return unload_ok
+        return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     except Exception as ex:
         _LOGGER.error(
-            "Error unloading Eveus integration: %s", 
-            str(ex),
-            exc_info=True
+            "Error unloading Eveus integration: %s",
+            ex, exc_info=True,
         )
         return False
