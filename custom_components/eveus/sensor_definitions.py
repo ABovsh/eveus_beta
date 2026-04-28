@@ -357,10 +357,18 @@ def create_sensor_specifications() -> List[SensorSpec]:
 
     # Measurement sensors
     measurements = [
-        ("Voltage", get_voltage, "mdi:flash", SensorDeviceClass.VOLTAGE, UnitOfElectricPotential.VOLT, 0),
-        ("Current", get_current, "mdi:current-ac", SensorDeviceClass.CURRENT, UnitOfElectricCurrent.AMPERE, 1),
-        ("Power", get_power, "mdi:flash", SensorDeviceClass.POWER, UnitOfPower.WATT, 1),
-        ("Current Set", get_current_set, "mdi:current-ac", SensorDeviceClass.CURRENT, UnitOfElectricCurrent.AMPERE, 0),
+        ("Voltage", get_voltage, "mdi:flash", SensorDeviceClass.VOLTAGE, UnitOfElectricPotential.VOLT, 0, None),
+        ("Current", get_current, "mdi:current-ac", SensorDeviceClass.CURRENT, UnitOfElectricCurrent.AMPERE, 1, None),
+        ("Power", get_power, "mdi:flash", SensorDeviceClass.POWER, UnitOfPower.WATT, 1, None),
+        (
+            "Current Set",
+            get_current_set,
+            "mdi:current-ac",
+            SensorDeviceClass.CURRENT,
+            UnitOfElectricCurrent.AMPERE,
+            0,
+            EntityCategory.DIAGNOSTIC,
+        ),
     ]
 
     measurement_specs = [
@@ -374,8 +382,9 @@ def create_sensor_specifications() -> List[SensorSpec]:
             state_class=SensorStateClass.MEASUREMENT,
             unit=unit,
             precision=precision,
+            category=category,
         )
-        for name, fn, icon, device_class, unit, precision in measurements
+        for name, fn, icon, device_class, unit, precision, category in measurements
     ]
 
     # Energy sensors
@@ -491,11 +500,13 @@ def create_sensor_specifications() -> List[SensorSpec]:
             key="rate_2_status", name="Rate 2 Status",
             value_fn=_make_rate_status_getter("tarifAEnable"),
             sensor_type=SensorType.STATE, icon="mdi:clock-check",
+            category=EntityCategory.DIAGNOSTIC,
         ),
         SensorSpec(
             key="rate_3_status", name="Rate 3 Status",
             value_fn=_make_rate_status_getter("tarifBEnable"),
             sensor_type=SensorType.STATE, icon="mdi:clock-check",
+            category=EntityCategory.DIAGNOSTIC,
         ),
         SensorSpec(
             key="connection_quality", name="Connection Quality",

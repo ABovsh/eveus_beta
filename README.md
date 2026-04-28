@@ -1,10 +1,26 @@
 # Eveus EV Charger Integration for Home Assistant
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
-![Version](https://img.shields.io/badge/version-3.0.3-blue)
+![Version](https://img.shields.io/badge/version-4.0.0-blue)
 ![Stability](https://img.shields.io/badge/stability-stable-green)
 
 Custom integration for monitoring and controlling Eveus EV chargers in Home Assistant. Supports real-time monitoring, smart current control, energy tracking, multi-rate billing, and SOC estimation.
+
+## What's New in v4
+
+### Home Assistant-Native Update Engine
+The integration now uses Home Assistant's `DataUpdateCoordinator` for polling, refreshes, availability, and listener updates. This keeps the same entities and behavior while making the internals more reliable and easier to maintain.
+
+### Safer Setup and Reconfiguration
+Setup now validates that the charger is reachable, authentication works, and the `/main` response looks like an Eveus charger before creating the integration entry. Existing entries can be updated later from **Settings → Devices & Services → Eveus → Reconfigure**.
+
+### Diagnostics and Release Quality
+Added downloadable diagnostics with credentials redacted, expanded unit tests, stricter metadata validation, and a dedicated changelog file for GitHub releases.
+
+### Compatibility
+Entity names and unique IDs are preserved for existing users. Home Assistant 2024.4 or newer is now required.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full release notes.
 
 ## What's New in v3
 
@@ -158,7 +174,6 @@ The tests cover configuration validation, coordinator polling, diagnostics redac
 | Voltage | Current voltage | V |
 | Current | Charging current | A |
 | Power | Charging power | W |
-| Current Set | Configured current limit | A |
 | Session Energy | Energy in current session | kWh |
 | Session Time | Duration of current session | — |
 | Total Energy | Lifetime energy delivered | kWh |
@@ -175,11 +190,13 @@ The tests cover configuration validation, coordinator polling, diagnostics redac
 | State | Charger state (Standby, Connected, Charging, etc.) |
 | Substate | Detailed status / error info |
 | Ground | Ground connection status |
+| Current Set | Configured current limit |
 | Box / Plug Temperature | Internal and plug temperatures |
 | Battery Voltage | Backup battery voltage |
 | System Time | Charger internal clock |
 | Connection Quality | Network reliability percentage |
 | Input Entities Status | Shows which SOC helpers are configured |
+| Rate 2 / 3 Status | Schedule enabled/disabled |
 
 ### Rate Sensors
 
@@ -187,14 +204,13 @@ The tests cover configuration validation, coordinator polling, diagnostics redac
 |--------|-------------|
 | Primary / Active Rate Cost | Current electricity rate |
 | Rate 2 / 3 Cost | Time-based rates |
-| Rate 2 / 3 Status | Schedule enabled/disabled |
 
 ### Controls
 
 | Entity | Description |
 |--------|-------------|
 | Charging Current | Set current limit (slider, model-aware min/max) |
-| Stop Charging | Enable/disable EVSE |
+| Stop Charging | Enable/disable the charger-side stop-charge option |
 | One Charge | Single charge session mode |
 | Reset Counter A | Clear primary energy counter |
 

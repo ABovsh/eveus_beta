@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from homeassistant.helpers.entity import EntityCategory
+
 from custom_components.eveus import sensor_definitions as sensors
 
 
@@ -77,3 +79,10 @@ def test_sensor_specification_factory_exposes_expected_entities() -> None:
     assert "Connection Quality" in names
     assert len(specs) >= 20
 
+
+def test_status_like_entities_are_diagnostic() -> None:
+    specs = {spec.name: spec for spec in sensors.get_sensor_specifications()}
+
+    assert specs["Current Set"].category == EntityCategory.DIAGNOSTIC
+    assert specs["Rate 2 Status"].category == EntityCategory.DIAGNOSTIC
+    assert specs["Rate 3 Status"].category == EntityCategory.DIAGNOSTIC

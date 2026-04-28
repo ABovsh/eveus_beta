@@ -38,8 +38,12 @@
             "charging_current": {
                 "name": "Charging Current",
                 "state_attributes": {
-                    "min": "Minimum Current",
-                    "max": "Maximum Current"
+                    "min": {
+                        "name": "Minimum Current"
+                    },
+                    "max": {
+                        "name": "Maximum Current"
+                    }
                 }
             }
         }
