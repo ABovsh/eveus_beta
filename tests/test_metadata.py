@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from PIL import Image
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -50,3 +52,23 @@ def test_translation_state_attributes_use_dictionary_shape() -> None:
     assert state_attributes["min"] == {"name": "Minimum Current"}
     assert state_attributes["max"] == {"name": "Maximum Current"}
 
+
+def test_brand_images_are_complete_and_sized() -> None:
+    brand_dir = ROOT / "custom_components" / "eveus" / "brand"
+    expected_sizes = {
+        "icon.png": (256, 256),
+        "icon@2x.png": (512, 512),
+        "dark_icon.png": (256, 256),
+        "dark_icon@2x.png": (512, 512),
+        "logo.png": (512, 128),
+        "logo@2x.png": (1024, 256),
+        "dark_logo.png": (512, 128),
+        "dark_logo@2x.png": (1024, 256),
+    }
+
+    for filename, expected_size in expected_sizes.items():
+        path = brand_dir / filename
+        assert path.exists(), filename
+        with Image.open(path) as image:
+            assert image.size == expected_size
+            assert image.mode == "RGBA"

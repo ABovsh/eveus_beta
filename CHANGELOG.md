@@ -2,14 +2,13 @@
 
 ## 4.0.0 - 2026-04-28
 
-Version 4.0.0 is a major internal modernization release. It keeps existing entity names and unique IDs intact, so current users can update without rebuilding dashboards or automations.
+Version 4.0.0 is a major modernization release focused on reliability, setup validation, diagnostics, and Home Assistant compatibility. Existing entity names and unique IDs remain intact, so dashboards and automations can continue working after the update.
 
 ### Added
 
 - Added Home Assistant reconfigure support for updating charger IP address, credentials, and model after setup.
 - Added downloadable diagnostics with sensitive fields redacted.
 - Added a dedicated automated test suite covering config validation, coordinator polling, diagnostics, command payloads, sensor mappings, entity IDs, and utility calculations.
-- Added this changelog for GitHub releases.
 
 ### Changed
 
@@ -29,13 +28,6 @@ Version 4.0.0 is a major internal modernization release. It keeps existing entit
 - Fixed Home Assistant translation validation for number entity state attributes.
 - Fixed the previous behavior where an integration entry could be created for an unreachable or unrelated device.
 - Fixed stale entity update plumbing by letting Home Assistant manage coordinator listeners.
-- Kept the existing `Stop Charging` semantics unchanged: turning it on enables the charger-side stop-charge option.
-
-### Notes for HACS Publishing
-
-- The integration folder must remain `custom_components/eveus` because the manifest domain is `eveus`.
-- HACS repository description and topics are configured in GitHub repository settings, not in this project tree.
-- The HACS brands check requires adding the integration to the Home Assistant brands repository.
 
 ## 3.0.3
 
@@ -46,4 +38,3 @@ Version 4.0.0 is a major internal modernization release. It keeps existing entit
 - Improved offline handling and connection quality reporting.
 - Refactored the codebase while preserving existing functionality.
 - Fixed multiple setup, network, billing, SOC, and translation issues.
-
